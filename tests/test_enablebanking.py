@@ -1,3 +1,4 @@
+import json
 from datetime import date
 from decimal import Decimal as D
 
@@ -24,7 +25,13 @@ def banco_falso(peticiones: list):
         datos = jwt.decode(token, CLAVE.public_key(), algorithms=["RS256"], audience="api.enablebanking.com")
         assert cab["kid"] == "app-123" and datos["iss"] == "enablebanking.com"
         ruta = req.url.path
+        if ruta == "/aspsps":
+            return httpx.Response(200, json={"aspsps": [
+                {"name": "Sabadell Empresas", "country": "ES", "psu_types": ["business"]},
+                {"name": "Sabadell", "country": "ES", "psu_types": ["business", "personal"]},
+                {"name": "Santander", "country": "ES", "psu_types": ["personal"]}]})
         if ruta == "/auth":
+            assert json.loads(req.content)["aspsp"] == {"name": "Sabadell", "country": "ES"}
             return httpx.Response(200, json={"url": "https://banco.example/login", "authorization_id": "a1"})
         if ruta == "/sessions":
             return httpx.Response(200, json={

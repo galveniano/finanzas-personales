@@ -81,7 +81,25 @@ class EnableBankingClient:
             raise EnableBankingError(f"Enable Banking respondió {r.status_code}: {detalle}")
         return r.json()
 
+    def nombre_banco(self, banco: str, pais: str = "ES") -> str:
+        """Nombre exacto del banco en Enable Banking (si no coincide responde 422 "Wrong ASPSP name").
+        Busca en su lista: primero igual, luego que contenga la palabra clave (\"Sabadell\")."""
+        try:
+            lista = self._peticion("GET", "/aspsps", params={"country": pais}).get("aspsps", [])
+        except EnableBankingError:
+            return banco
+        personales = [a for a in lista if "personal" in (a.get("psu_types") or ["personal"])]
+        clave = banco.lower().replace("banco ", "").strip()
+        for candidatos in (
+            [a for a in personales if a.get("name", "").lower() == banco.lower()],
+            [a for a in personales if clave in a.get("name", "").lower()],
+        ):
+            if candidatos:
+                return min(candidatos, key=lambda a: len(a["name"]))["name"]  # el más corto: no "Sabadell Empresas"
+        raise EnableBankingError(f"Enable Banking no tiene ningún banco llamado {banco} en {pais}")
+
     def iniciar(self, banco: str, redirect_url: str, estado: str) -> str:
+        banco = self.nombre_banco(banco)
         valida_hasta = datetime.now(timezone.utc) + timedelta(days=CONSENTIMIENTO_DIAS)
         datos = self._peticion("POST", "/auth", json={
             "access": {"valid_until": valida_hasta.isoformat(timespec="seconds")},
