@@ -5,6 +5,7 @@ import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxi
 import { api } from '../lib/api'
 import { eur, eurK, fecha, hoyISO } from '../lib/format'
 import type { Nominas as Datos } from '../lib/tipos'
+import CalculadoraSueldo from '../components/CalculadoraSueldo'
 import { Boton, Cabecera, Campo, Cargando, Dato, Dialogo, ErrorCarga, Formulario, Importe, Tabla, Tarjeta, Vacio, num, useAccion } from '../components/ui'
 
 export default function Nominas() {
@@ -53,6 +54,8 @@ export default function Nominas() {
           </div>
         </Tarjeta>
       )}
+
+      <CalculadoraSueldo brutoInicial={d.bruto_12_meses} />
 
       <Tarjeta className="mt-4" titulo="Todas las nóminas">
         {d.nominas.length ? (
