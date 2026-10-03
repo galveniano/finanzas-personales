@@ -13,6 +13,7 @@ import Inmuebles from './pages/Inmuebles'
 import Planificacion from './pages/Planificacion'
 import Conexiones from './pages/Conexiones'
 import Hacienda from './pages/Hacienda'
+import Asistente from './pages/Asistente'
 import Acceso from './components/Acceso'
 
 const qc = new QueryClient({ defaultOptions: { queries: { staleTime: 30_000, retry: 1, refetchOnWindowFocus: false } } })
@@ -33,6 +34,7 @@ createRoot(document.getElementById('root')!).render(
               <Route path="inmuebles" element={<Inmuebles />} />
               <Route path="planificacion" element={<Planificacion />} />
               <Route path="conexiones" element={<Conexiones />} />
+              <Route path="asistente" element={<Asistente />} />
             </Route>
           </Routes>
         </HashRouter>

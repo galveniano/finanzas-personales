@@ -5,6 +5,7 @@ import { ExternalLink, RefreshCw } from 'lucide-react'
 import { api } from '../lib/api'
 import { diasHasta, fecha } from '../lib/format'
 import type { EstadoSync, UltimaSync } from '../lib/tipos'
+import DriveImport from '../components/DriveImport'
 import { Boton, Cabecera, Cargando, Etiqueta, ErrorCarga, Tarjeta, useAccion, useAvisos } from '../components/ui'
 
 function Ultima({ u }: { u: UltimaSync | null }) {
@@ -129,6 +130,7 @@ export default function Conexiones() {
       <div className="grid gap-4 lg:grid-cols-2">
         <Sabadell s={data.sabadell} />
         <Indexa s={data.indexa} />
+        <div className="lg:col-span-2"><DriveImport /></div>
       </div>
     </>
   )

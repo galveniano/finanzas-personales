@@ -4,27 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ShieldCheck } from 'lucide-react'
 import { api, esDemo, SESION_CADUCADA } from '../lib/api'
 import type { EstadoAuth } from '../lib/tipos'
-
-// Google Identity Services: https://developers.google.com/identity/gsi/web
-interface Gsi {
-  accounts: { id: {
-    initialize: (o: { client_id: string; callback: (r: { credential: string }) => void; ux_mode?: string }) => void
-    renderButton: (el: HTMLElement, o: Record<string, unknown>) => void
-  } }
-}
-declare global { interface Window { google?: Gsi } }
-
-function cargarGsi(): Promise<Gsi> {
-  return new Promise((ok, mal) => {
-    if (window.google) return ok(window.google)
-    const s = document.createElement('script')
-    s.src = 'https://accounts.google.com/gsi/client'
-    s.async = true
-    s.onload = () => (window.google ? ok(window.google) : mal(new Error('Google no ha cargado')))
-    s.onerror = () => mal(new Error('No se puede cargar el inicio de sesión de Google'))
-    document.head.appendChild(s)
-  })
-}
+import { cargarGsi } from '../lib/google'
 
 function Entrar({ clientId }: { clientId: string | null }) {
   const qc = useQueryClient()

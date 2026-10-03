@@ -31,7 +31,11 @@ def make_engine(url: str | None = None):
     return create_engine(url, pool_pre_ping=True, pool_size=2, max_overflow=2, pool_recycle=300)
 
 
-engine = make_engine()
+try:
+    engine = make_engine()
+    ERROR_CONFIG = ""
+except RuntimeError as e:  # en Vercel sin base de datos: la app arranca y explica qué falta
+    engine, ERROR_CONFIG = None, str(e)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
 
@@ -39,6 +43,8 @@ def init_db(eng=None) -> None:
     from finanzas import models  # noqa: F401  (registra las tablas)
 
     eng = eng or engine
+    if eng is None:
+        return
     Base.metadata.create_all(eng)
     _añadir_columnas_nuevas(eng)
 
@@ -57,6 +63,9 @@ def _añadir_columnas_nuevas(eng) -> None:
 
 
 def get_session():
+    if engine is None:
+        from fastapi import HTTPException
+        raise HTTPException(503, ERROR_CONFIG)
     session = SessionLocal()
     try:
         yield session

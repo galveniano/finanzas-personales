@@ -28,8 +28,9 @@ WEB = Path(__file__).parent / "web"
 @asynccontextmanager
 async def lifespan(_app):
     db.init_db()
-    with db.SessionLocal() as s:
-        sembrar_categorias(s)
+    if db.engine is not None:
+        with db.SessionLocal() as s:
+            sembrar_categorias(s)
     programador = sync.Programador(config.SYNC_HORAS)
     programador.arrancar()
     yield
