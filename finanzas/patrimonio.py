@@ -62,12 +62,16 @@ def calcular(session: Session, a_fecha: date | None = None) -> Patrimonio:
     p = Patrimonio(a_fecha)
 
     for c in session.scalars(select(Cuenta).where(Cuenta.activa)):
+        if c.parte == 0:  # se ve en Cuentas pero no es tuya
+            continue
+        saldo = (c.saldo * c.parte).quantize(Decimal("0.01"))
+        detalle = c.entidad + (f" · tu parte, {c.parte * 100:.0f} %" if c.parte < 1 else "")
         grupo = "Inversiones" if c.tipo == "inversion" else "Liquidez"
         if c.tipo == "tarjeta":
-            if c.saldo < 0:
-                p.pasivos.append(Linea(c.nombre, "Tarjetas", -c.saldo))
+            if saldo < 0:
+                p.pasivos.append(Linea(c.nombre, "Tarjetas", -saldo))
             continue
-        p.activos.append(Linea(c.nombre, grupo, c.saldo, c.entidad))
+        p.activos.append(Linea(c.nombre, grupo, saldo, detalle))
 
     for a in session.scalars(select(Activo)):
         if a.tipo == "inmueble_en_construccion":

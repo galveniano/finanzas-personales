@@ -22,6 +22,8 @@ from finanzas.models import (
 router = APIRouter(prefix="/api", dependencies=[Depends(auth.requiere_sesion)])
 SesionDB = Depends(db.get_session)
 CERO = Decimal("0")
+# Parte tuya de cada cuenta (participacion vacía = 100 %): las cuentas que no son tuyas pesan 0
+PARTE = func.coalesce(Cuenta.participacion, 100) / 100
 
 
 def n(valor) -> float | None:
@@ -44,9 +46,10 @@ def _obtener(s: Session, modelo, id_: int):
 def _gasto_por_mes(s: Session, meses: int = 6) -> list[dict]:
     desde = (date.today().replace(day=1) - timedelta(days=31 * (meses - 1))).replace(day=1)
     filas = s.execute(
-        select(Movimiento.fecha, Movimiento.importe, Categoria.nombre, Categoria.tipo)
+        select(Movimiento.fecha, Movimiento.importe * PARTE, Categoria.nombre, Categoria.tipo)
+        .join(Cuenta, Movimiento.cuenta_id == Cuenta.id)
         .join(Categoria, Movimiento.categoria_id == Categoria.id, isouter=True)
-        .where(Movimiento.fecha >= desde)
+        .where(Movimiento.fecha >= desde, PARTE > 0)
     ).all()
     por_mes: dict[str, dict] = defaultdict(lambda: {"ingresos": CERO, "gastos": CERO})
     for fecha, importe, _cat, tipo in filas:
@@ -64,9 +67,10 @@ def _gasto_por_categoria(s: Session, dias: int = 30) -> list[dict]:
     desde = date.today() - timedelta(days=dias)
     nombre = func.coalesce(Categoria.nombre, "Sin categoría")
     filas = s.execute(
-        select(nombre, func.sum(Movimiento.importe))
+        select(nombre, func.sum(Movimiento.importe * PARTE))
+        .join(Cuenta, Movimiento.cuenta_id == Cuenta.id)
         .join(Categoria, Movimiento.categoria_id == Categoria.id, isouter=True)
-        .where(Movimiento.fecha >= desde, Movimiento.importe < 0,
+        .where(Movimiento.fecha >= desde, Movimiento.importe < 0, PARTE > 0,
                (Categoria.tipo.is_(None)) | (Categoria.tipo != "transferencia"))
         .group_by(nombre)
     ).all()
@@ -121,6 +125,7 @@ class CuentaIn(BaseModel):
 def _cuenta(c: Cuenta) -> dict:
     return {"id": c.id, "nombre": c.nombre, "entidad": c.entidad, "tipo": c.tipo, "iban": c.iban,
             "origen": c.origen, "saldo": n(c.saldo), "saldo_fecha": f(c.saldo_fecha),
+            "participacion": n(c.parte * 100), "saldo_tuyo": n((c.saldo * c.parte).quantize(Decimal("0.01"))),
             "ultima_sincronizacion": c.ultima_sincronizacion.isoformat(timespec="minutes")
             if c.ultima_sincronizacion else None}
 
@@ -165,10 +170,12 @@ def listar_categorias(s: Session = SesionDB):
 
 @router.get("/movimientos")
 def listar_movimientos(cuenta_id: int | None = None, categoria_id: int | None = None, q: str = "",
-                       limite: int = 300, s: Session = SesionDB):
+                       limite: int = 300, solo_tuyas: bool = False, s: Session = SesionDB):
     consulta = select(Movimiento).order_by(Movimiento.fecha.desc(), Movimiento.id.desc()).limit(limite)
     if cuenta_id:
         consulta = consulta.where(Movimiento.cuenta_id == cuenta_id)
+    elif solo_tuyas:  # sin elegir cuenta, fuera las que no son tuyas
+        consulta = consulta.join(Cuenta, Movimiento.cuenta_id == Cuenta.id).where(PARTE > 0)
     if categoria_id == 0:
         consulta = consulta.where(Movimiento.categoria_id.is_(None))
     elif categoria_id:
@@ -178,6 +185,26 @@ def listar_movimientos(cuenta_id: int | None = None, categoria_id: int | None = 
     return [{"id": m.id, "cuenta_id": m.cuenta_id, "cuenta": m.cuenta.nombre, "fecha": f(m.fecha),
              "concepto": m.concepto, "importe": n(m.importe), "saldo": n(m.saldo),
              "categoria_id": m.categoria_id} for m in s.scalars(consulta)]
+
+
+class CuentaPatch(BaseModel):
+    nombre: str | None = None
+    participacion: Decimal | None = None
+
+
+@router.patch("/cuentas/{cuenta_id}")
+def actualizar_cuenta(cuenta_id: int, datos: CuentaPatch, s: Session = SesionDB):
+    c = _obtener(s, Cuenta, cuenta_id)
+    if datos.nombre is not None and datos.nombre.strip():
+        c.nombre = datos.nombre.strip()[:120]
+    if datos.participacion is not None:
+        if not 0 <= datos.participacion <= 100:
+            raise HTTPException(400, "La parte tuya tiene que estar entre 0 y 100 %")
+        c.participacion = datos.participacion
+    s.commit()
+    from finanzas import sync
+    sync.guardar_instantanea(s)  # el patrimonio cambia
+    return _cuenta(c)
 
 
 class MovimientoPatch(BaseModel):
@@ -581,7 +608,7 @@ def ver_planificacion(s: Session = SesionDB):
     inversiones = {i.id: i.nombre for i in s.scalars(select(InversionPrivada))}
     nombres_obj = {o.id: o.nombre for o in objetivos}
     pendiente_12m = sum((p.importe for p in pagos if not p.pagado and p.fecha <= hoy + timedelta(days=365)), CERO)
-    liquidez = sum((c.saldo for c in s.scalars(select(Cuenta).where(Cuenta.activa, Cuenta.tipo.in_(
+    liquidez = sum((c.saldo * c.parte for c in s.scalars(select(Cuenta).where(Cuenta.activa, Cuenta.tipo.in_(
         ["corriente", "ahorro"])))), CERO)
     return {
         "liquidez": n(liquidez), "pendiente_12_meses": n(pendiente_12m),

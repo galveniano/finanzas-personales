@@ -24,7 +24,8 @@ def sincronizar_sabadell(session: Session, cliente=None) -> dict:
     try:
         r = enablebanking.sincronizar(session, cliente)
         return _registrar(session, "sabadell", True,
-                          f"{r['cuentas']} cuentas, {r['movimientos_nuevos']} movimientos nuevos")
+                          f"{r['cuentas']} cuentas, {r['movimientos_nuevos']} movimientos nuevos"
+                          + (". Sigue trayendo el histórico: vuelve a sincronizar" if r.get("historico_pendiente") else ""))
     except Exception as e:  # el error se guarda y se enseña en la app
         session.rollback()
         return _registrar(session, "sabadell", False, str(e))

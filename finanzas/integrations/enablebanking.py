@@ -29,6 +29,9 @@ from finanzas.models import ConexionBancaria, Cuenta, Movimiento
 
 CONSENTIMIENTO_DIAS = 180
 DIAS_PRIMERA_CARGA = 365
+TRAMO_DIAS = 60  # el histórico se trae en tramos de 60 días
+# Vercel corta las peticiones a los 60 s: se deja margen y lo que falte se trae en la siguiente sincronización
+SEGUNDOS_MAXIMOS = 40
 
 
 class EnableBankingError(Exception):
@@ -117,10 +120,12 @@ class EnableBankingClient:
     def saldos(self, uid: str) -> list[dict]:
         return self._peticion("GET", f"/accounts/{uid}/balances").get("balances", [])
 
-    def movimientos(self, uid: str, desde: date) -> list[dict]:
+    def movimientos(self, uid: str, desde: date, hasta: date | None = None) -> list[dict]:
         resultado, clave = [], None
         while True:
             params = {"date_from": desde.isoformat()}
+            if hasta:
+                params["date_to"] = hasta.isoformat()
             if clave:
                 params["continuation_key"] = clave
             datos = self._peticion("GET", f"/accounts/{uid}/transactions", params=params)
@@ -241,38 +246,71 @@ def conexion_activa(session: Session) -> ConexionBancaria | None:
     return con
 
 
-def sincronizar(session: Session, cliente: EnableBankingClient | None = None) -> dict:
+def _guardar_movimientos(session: Session, cuenta: Cuenta, txs: list[dict]) -> int:
+    existentes = set(session.scalars(select(Movimiento.huella).where(Movimiento.cuenta_id == cuenta.id)))
+    nuevos = 0
+    for tx in txs:
+        if tx.get("status") not in (None, "BOOK"):
+            continue  # solo movimientos contabilizados
+        h = _huella(tx)
+        if h in existentes:
+            continue
+        fecha = date.fromisoformat(tx.get("booking_date") or tx.get("transaction_date") or tx["value_date"])
+        concepto = _concepto(tx)
+        saldo_tras = (tx.get("balance_after_transaction") or {}).get("balance_amount", {}).get("amount")
+        session.add(Movimiento(
+            cuenta_id=cuenta.id, fecha=fecha, concepto=concepto, importe=_importe(tx),
+            fecha_valor=date.fromisoformat(tx["value_date"]) if tx.get("value_date") else None,
+            saldo=Decimal(str(saldo_tras)) if saldo_tras is not None else None,
+            huella=h, categoria_id=categorizar(session, concepto),
+        ))
+        existentes.add(h)
+        nuevos += 1
+    return nuevos
+
+
+def sincronizar(session: Session, cliente: EnableBankingClient | None = None,
+                segundos: float = SEGUNDOS_MAXIMOS) -> dict:
+    """Saldos primero; luego los movimientos recientes y, con el tiempo que quede, el histórico hacia atrás
+    por tramos. Cada paso se guarda en cuanto termina, así un corte por tiempo no pierde lo ya traído."""
     con = conexion_activa(session)
     if con is None:
         raise EnableBankingError("No hay conexión con el banco o ha caducado. Vuelve a conectar Sabadell.")
     cliente = cliente or EnableBankingClient()
+    limite = time.monotonic() + segundos
+    hoy = date.today()
     cuentas = session.scalars(select(Cuenta).where(Cuenta.conexion_id == con.id)).all()
-    nuevos = 0
     for cuenta in cuentas:
         saldo = _saldo_principal(cliente.saldos(cuenta.uid_externo))
         if saldo is not None:
-            cuenta.saldo, cuenta.saldo_fecha = saldo, date.today()
-        ultimo = session.scalar(select(Movimiento.fecha).where(Movimiento.cuenta_id == cuenta.id)
-                                .order_by(Movimiento.fecha.desc()).limit(1))
-        desde = (ultimo - timedelta(days=5)) if ultimo else date.today() - timedelta(days=DIAS_PRIMERA_CARGA)
-        existentes = set(session.scalars(select(Movimiento.huella).where(Movimiento.cuenta_id == cuenta.id)))
-        for tx in cliente.movimientos(cuenta.uid_externo, desde):
-            if tx.get("status") not in (None, "BOOK"):
-                continue  # solo movimientos contabilizados
-            h = _huella(tx)
-            if h in existentes:
-                continue
-            fecha = date.fromisoformat(tx.get("booking_date") or tx.get("transaction_date") or tx["value_date"])
-            concepto = _concepto(tx)
-            saldo_tras = (tx.get("balance_after_transaction") or {}).get("balance_amount", {}).get("amount")
-            session.add(Movimiento(
-                cuenta_id=cuenta.id, fecha=fecha, concepto=concepto, importe=_importe(tx),
-                fecha_valor=date.fromisoformat(tx["value_date"]) if tx.get("value_date") else None,
-                saldo=Decimal(str(saldo_tras)) if saldo_tras is not None else None,
-                huella=h, categoria_id=categorizar(session, concepto),
-            ))
-            existentes.add(h)
-            nuevos += 1
+            cuenta.saldo, cuenta.saldo_fecha = saldo, hoy
         cuenta.ultima_sincronizacion = datetime.now()
     session.commit()
-    return {"cuentas": len(cuentas), "movimientos_nuevos": nuevos}
+
+    nuevos = 0
+    for cuenta in cuentas:  # lo reciente
+        if time.monotonic() > limite:
+            break
+        ultimo = session.scalar(select(Movimiento.fecha).where(Movimiento.cuenta_id == cuenta.id)
+                                .order_by(Movimiento.fecha.desc()).limit(1))
+        desde = (ultimo - timedelta(days=5)) if ultimo else hoy - timedelta(days=TRAMO_DIAS)
+        nuevos += _guardar_movimientos(session, cuenta, cliente.movimientos(cuenta.uid_externo, desde))
+        if cuenta.historico_desde is None or cuenta.historico_desde > desde:
+            cuenta.historico_desde = desde
+        session.commit()
+
+    objetivo = hoy - timedelta(days=DIAS_PRIMERA_CARGA)
+    while time.monotonic() < limite:  # el histórico, de tramo en tramo y de cuenta en cuenta
+        pendientes = [c for c in cuentas if c.historico_desde and c.historico_desde > objetivo]
+        if not pendientes:
+            break
+        for cuenta in pendientes:
+            if time.monotonic() > limite:
+                break
+            hasta = cuenta.historico_desde - timedelta(days=1)
+            desde = max(hasta - timedelta(days=TRAMO_DIAS - 1), objetivo)
+            nuevos += _guardar_movimientos(session, cuenta, cliente.movimientos(cuenta.uid_externo, desde, hasta))
+            cuenta.historico_desde = desde
+            session.commit()
+    falta = any(c.historico_desde is None or c.historico_desde > objetivo for c in cuentas)
+    return {"cuentas": len(cuentas), "movimientos_nuevos": nuevos, "historico_pendiente": falta}

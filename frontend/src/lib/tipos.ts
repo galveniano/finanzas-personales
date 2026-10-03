@@ -27,6 +27,7 @@ export interface Resumen {
 export interface Cuenta {
   id: number; nombre: string; entidad: string; tipo: string; iban: string; origen: string
   saldo: number; saldo_fecha: string | null; ultima_sincronizacion: string | null
+  participacion: number; saldo_tuyo: number
 }
 export interface Categoria { id: number; nombre: string; tipo: string; ambito: string }
 export interface Movimiento {

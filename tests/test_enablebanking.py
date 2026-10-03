@@ -77,9 +77,16 @@ def test_flujo_enable_banking(monkeypatch):
     con = eb.completar_autorizacion(s, code, cliente)
     assert con.valida_hasta.date() == date(2027, 4, 1)
 
+    # Sin tiempo (Vercel corta a los 60 s): los saldos se guardan igual y los movimientos quedan para después
+    r = eb.sincronizar(s, cliente, segundos=0)
+    cuenta = s.query(Cuenta).filter_by(nombre="Mi Sabadell").one()
+    assert cuenta.saldo == D("2345.67") and r["movimientos_nuevos"] == 0 and r["historico_pendiente"]
+
     r = sync.sincronizar_sabadell(s, cliente)
     assert r["ok"], r["mensaje"]
-    cuenta = s.query(Cuenta).filter_by(nombre="Mi Sabadell").one()
+    assert "histórico" not in r["mensaje"]  # con tiempo, el año entero
+    tramos = [p.url.params for p in peticiones if p.url.path.endswith("/transactions") and "date_to" in p.url.params]
+    assert tramos and min(date.fromisoformat(p["date_from"]) for p in tramos) <= date.today() - eb.timedelta(days=364)
     assert cuenta.origen == "enable_banking" and cuenta.saldo == D("2345.67")
     movs = s.query(Movimiento).filter_by(cuenta_id=cuenta.id).order_by(Movimiento.fecha).all()
     assert [m.importe for m in movs] == [D("-45.20"), D("2180.40")]  # el pendiente no entra
