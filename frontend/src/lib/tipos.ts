@@ -39,9 +39,9 @@ export interface Trimestre {
   iva_resultado: number; rendimiento_acumulado: number; retenciones_acumuladas: number
   irpf_resultado: number; exento_130: boolean; notas: string[]
   iva_fuente: Fuente; irpf_fuente: Fuente; iva_estimado: number | null; irpf_estimado: number | null
-  ingresos_acumulados: number | null
+  ingresos_acumulados: number | null; base_prevista: number | null
 }
-export type Fuente = 'presentado' | 'estimado'
+export type Fuente = 'presentado' | 'previsto' | 'estimado'
 export interface Factura {
   id: number; numero: string; cliente: string; fecha: string; concepto: string; base: number
   tipo_iva: number; tipo_retencion: number; cuota_iva: number; retencion: number; total: number
@@ -162,4 +162,29 @@ export interface CarteraIndexa {
   total?: number; efectivo?: number | null; invertido?: number; coste?: number | null; plusvalia?: number | null
   rentabilidad_anual?: number | null; rentabilidad_total?: number | null; rentabilidad_dinero?: number | null
   rentabilidad_esperada?: number | null; volatilidad?: number | null; posiciones?: PosicionIndexa[]
+}
+export interface SupuestosPrevision {
+  nomina: { empresa: string; bruto_anual: number; variable_pct: number; mes_variable: number; pagas: number } | null
+  clientes: { nombre: string; tarifa_hora: number; horas_dia: number; dias_mes: number | null; iva: number; retencion: number }[]
+  gastos_autonomo_mes: number; gasto_habitual_mes: number | null; meses_sin_facturar: number[]
+}
+export interface MesPrevision {
+  mes: string; nomina: number; facturado: number; cobros: number; iva: number; retenciones: number; alquiler: number
+  gastos: number; pagos_previstos: number; impuestos: { concepto: string; importe: number; presentado: boolean }[]
+  total_impuestos: number; neto: number; liquidez: number
+}
+export interface RentaPrevista {
+  anio: number; rendimiento_trabajo: number; rendimiento_actividad: number; rendimiento_alquiler: number; base: number
+  cuota: number; retenciones_nomina: number; retenciones_facturas: number; pagos_130: number; resultado: number; tipo_medio: number
+}
+export interface Prevision {
+  supuestos: SupuestosPrevision; gasto_habitual_banco: number | null; liquidez_hoy: number
+  clientes: { nombre: string; tarifa_hora: number; horas_dia: number; dias_mes: number; origen_dias: string }[]
+  meses: MesPrevision[]; anios: RentaPrevista[]
+}
+export interface GastosRecientes {
+  desde: string; meses: number; ingresos_mes: number; gastos_mes: number; ahorro_mes: number; tasa_ahorro: number | null
+  categorias: { categoria: string; mes: number }[]
+  suscripciones: { concepto: string; mes: number; anual: number; ultimo_cargo: string; veces: number }[]
+  suscripciones_mes: number
 }

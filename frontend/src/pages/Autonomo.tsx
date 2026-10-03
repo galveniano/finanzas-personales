@@ -3,7 +3,8 @@ import { useQuery } from '@tanstack/react-query'
 import { Plus, Trash2 } from 'lucide-react'
 import { api } from '../lib/api'
 import { eur, fecha, hoyISO } from '../lib/format'
-import type { Autonomo as Datos, Fuente } from '../lib/tipos'
+import { Link } from 'react-router-dom'
+import type { Autonomo as Datos, Fuente, Prevision } from '../lib/tipos'
 import { Boton, Cabecera, Campo, Cargando, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio, num, opc, useAccion } from '../components/ui'
 
 function BorrarEnDosPasos({ onBorrar }: { onBorrar: () => void }) {
@@ -67,12 +68,12 @@ function FormGasto({ onHecho }: { onHecho: () => void }) {
 
 /** Resultado de un modelo: lo presentado manda; si las facturas dan otra cifra, se enseña debajo. */
 function Modelo({ nombre, valor, fuente, estimado, exento }: { nombre: string; valor: number; fuente: Fuente; estimado: number | null; exento?: boolean }) {
-  const distinto = fuente === 'presentado' && estimado !== null && Math.abs(estimado - valor) >= 1
+  const distinto = fuente !== 'estimado' && estimado !== null && Math.abs(estimado - valor) >= 1
   return (
     <div>
       <div className="flex items-center justify-between gap-2">
         <dt className="flex items-center gap-1.5 text-muted">{nombre}
-          {fuente === 'presentado' ? <Etiqueta tono="bien">Presentado</Etiqueta> : <Etiqueta>Estimado</Etiqueta>}</dt>
+          {fuente === 'presentado' ? <Etiqueta tono="bien">Presentado</Etiqueta> : fuente === 'previsto' ? <Etiqueta tono="acento">Previsto</Etiqueta> : <Etiqueta>Estimado</Etiqueta>}</dt>
         <dd className="font-semibold">{exento ? <Etiqueta tono="bien">Exento</Etiqueta> : <Importe valor={valor} />}</dd>
       </div>
       {distinto && <p className="mt-0.5 text-right text-xs text-muted">Con tus facturas saldría <Importe valor={estimado} /></p>}
@@ -85,6 +86,8 @@ export default function Autonomo() {
   const [anio, setAnio] = useState(actual)
   const [dialogo, setDialogo] = useState<'factura' | 'gasto' | null>(null)
   const { data: d, isLoading, error } = useQuery({ queryKey: ['autonomo', anio], queryFn: () => api.get<Datos>(`/autonomo?anio=${anio}`) })
+  const { data: prev } = useQuery({ queryKey: ['prevision'], queryFn: () => api.get<Prevision>('/prevision') })
+  const renta = prev?.anios.find((r) => r.anio === anio)
   const borrar = useAccion(({ tipo, id }: { tipo: string; id: number }) => api.del(`/autonomo/${tipo}/${id}`), 'Borrado')
   const trimActual = anio === actual ? Math.floor(new Date().getMonth() / 3) + 1 : 0
   const maxCliente = Math.max(1, ...(d?.por_cliente.map((c) => c.base) ?? [1]))
@@ -112,15 +115,31 @@ export default function Autonomo() {
                   <Modelo nombre="IRPF (130)" valor={t.irpf_resultado} fuente={t.irpf_fuente} estimado={t.irpf_estimado} exento={t.exento_130} />
                   {t.ingresos_acumulados !== null
                     ? <div className="flex justify-between gap-2 border-t border-line pt-2 text-xs"><dt className="text-muted">Ingresos acumulados (130)</dt><dd><Importe valor={t.ingresos_acumulados} /></dd></div>
-                    : <div className="flex justify-between gap-2 border-t border-line pt-2 text-xs"><dt className="text-muted">Facturado</dt><dd><Importe valor={t.base} /></dd></div>}
+                    : t.base_prevista !== null
+                      ? <div className="flex justify-between gap-2 border-t border-line pt-2 text-xs"><dt className="text-muted">Facturación prevista</dt><dd><Importe valor={t.base_prevista} /></dd></div>
+                      : <div className="flex justify-between gap-2 border-t border-line pt-2 text-xs"><dt className="text-muted">Facturado</dt><dd><Importe valor={t.base} /></dd></div>}
                   <div className="flex justify-between gap-2 border-t border-line pt-2 text-xs"><dt className="text-muted">Retenciones acumuladas</dt><dd><Importe valor={t.retenciones_acumuladas} /></dd></div>
                 </dl>
               </Tarjeta>
             ))}
           </div>
+          <Tarjeta className="mt-4" titulo={`Renta ${anio} (se paga en junio de ${anio + 1})`}
+            accion={<Link to="/prevision" className="text-xs font-medium text-accent">Ver previsión</Link>}>
+            {renta ? (
+              <div className="flex flex-wrap items-end gap-x-10 gap-y-3">
+                <div>
+                  <p className="text-xs text-muted">{renta.resultado > 0 ? 'Estimas pagar' : 'Estimas que te devuelvan'}</p>
+                  <p className="cifra text-2xl font-semibold"><Importe valor={Math.abs(renta.resultado)} /></p>
+                </div>
+                <p className="max-w-xl text-sm text-muted">Cuota de unos {eur(renta.cuota)} ({String(renta.tipo_medio).replace('.', ',')} % de media) menos lo ya retenido en la nómina
+                  ({eur(renta.retenciones_nomina)}), en tus facturas ({eur(renta.retenciones_facturas)}) y los pagos del 130 ({eur(renta.pagos_130)}).
+                  Cuenta el año entero con tu sueldo, tus clientes y el alquiler.</p>
+              </div>
+            ) : <p className="text-sm text-muted">Pon tu sueldo y tus tarifas en <Link to="/prevision" className="text-accent">Previsión</Link> y aquí verás lo que te tocará pagar.</p>}
+          </Tarjeta>
           {(d.pagado_iva !== 0 || d.pagado_irpf !== 0) && (
             <p className="mt-3 text-sm text-muted">Presentado en Hacienda en {anio}: <Importe valor={d.pagado_iva} /> de IVA y <Importe valor={d.pagado_irpf} /> de IRPF.
-              Lo que aún no has presentado se estima con tus facturas y gastos.</p>)}
+              Lo que aún no has presentado se prevé con tu sueldo, tus tarifas y los días del último mes (en Previsión).</p>)}
           {d.trimestres[3].notas.map((n) => <p key={n} className="mt-3 text-sm text-muted">{n}</p>)}
 
           <div className="mt-6 grid gap-4 lg:grid-cols-3">
