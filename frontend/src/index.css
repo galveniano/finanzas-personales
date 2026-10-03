@@ -1,0 +1,67 @@
+@import "tailwindcss";
+@import "@fontsource-variable/plus-jakarta-sans";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+
+/* Libro de cuentas: fondo frío casi blanco, tinta azul pizarra, acento verde pino.
+   Cifras en mono tabular para que las columnas de euros cuadren. */
+:root {
+  --bg: #f4f6f5;
+  --panel: #ffffff;
+  --panel-2: #eef2f0;
+  --ink: #16211f;
+  --muted: #5d6b67;
+  --line: #dde4e1;
+  --accent: #0e6b5c;
+  --accent-soft: #d9efe9;
+  --pos: #187a43;
+  --neg: #b4312c;
+  --warn: #9a6400;
+  --warn-soft: #fbefd6;
+  --chart-1: #0e6b5c;
+  --chart-2: #3f7fbf;
+  --chart-3: #c48a2c;
+  --chart-4: #8a5cb8;
+  --chart-5: #b4312c;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1514; --panel: #161e1c; --panel-2: #1d2725; --ink: #e4ece9; --muted: #95a39f;
+    --line: #2a3532; --accent: #4cc2a8; --accent-soft: #173a33; --pos: #5fd08d; --neg: #f07a72;
+    --warn: #e2b155; --warn-soft: #3a2f17;
+    --chart-1: #4cc2a8; --chart-2: #74a9e0; --chart-3: #e2b155; --chart-4: #b48fe0; --chart-5: #f07a72;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1514; --panel: #161e1c; --panel-2: #1d2725; --ink: #e4ece9; --muted: #95a39f;
+  --line: #2a3532; --accent: #4cc2a8; --accent-soft: #173a33; --pos: #5fd08d; --neg: #f07a72;
+  --warn: #e2b155; --warn-soft: #3a2f17;
+  --chart-1: #4cc2a8; --chart-2: #74a9e0; --chart-3: #e2b155; --chart-4: #b48fe0; --chart-5: #f07a72;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-panel-2: var(--panel-2);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-pos: var(--pos);
+  --color-neg: var(--neg);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --font-sans: "Plus Jakarta Sans Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+
+html, body, #root { height: 100%; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-sans); -webkit-font-smoothing: antialiased; }
+.cifra { font-family: var(--font-mono); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+h1, h2, h3 { text-wrap: balance; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }

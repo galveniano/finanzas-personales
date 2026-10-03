@@ -56,7 +56,7 @@ def test_importar_no_duplica_y_categoriza():
     r2 = sabadell.importar(s, cuenta, "e.csv", CSV)
     assert (r1.nuevos, r2.nuevos, r2.duplicados) == (3, 0, 3)
     assert cuenta.saldo == D("5255.27")
-    nomina = s.query(Movimiento).filter(Movimiento.concepto.like("NOMINA%")).one()
+    nomina = s.query(Movimiento).filter(Movimiento.cuenta_id == cuenta.id, Movimiento.concepto.like("NOMINA%")).one()
     assert s.get(Categoria, nomina.categoria_id).nombre == "Nómina"
 
 
