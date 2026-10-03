@@ -252,6 +252,22 @@ class Objetivo(Base):
     notas: Mapped[str] = mapped_column(Text, default="")
 
 
+class InversionPrivada(Base):
+    """Fondo de private equity o venture capital (p. ej. vía Concrescenta): te comprometes a un importe
+    que el fondo te va pidiendo en llamadas de capital durante años y luego devuelve en distribuciones.
+    Las llamadas son PagoPrevisto con inversion_id; el NAV (valor actual) lo da la plataforma."""
+    __tablename__ = "inversiones_privadas"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    nombre: Mapped[str] = mapped_column(String(120))
+    gestora: Mapped[str] = mapped_column(String(120), default="")
+    compromiso: Mapped[Decimal] = mapped_column(Dinero, default=Decimal("0"))
+    fecha_compromiso: Mapped[date | None] = mapped_column(Date, nullable=True)
+    nav: Mapped[Decimal] = mapped_column(Dinero, default=Decimal("0"))
+    nav_fecha: Mapped[date | None] = mapped_column(Date, nullable=True)
+    distribuido: Mapped[Decimal] = mapped_column(Dinero, default=Decimal("0"))
+    notas: Mapped[str] = mapped_column(Text, default="")
+
+
 class PagoPrevisto(Base):
     """Pagos futuros conocidos: plazos de la obra nueva, señal de la boda, impuestos..."""
     __tablename__ = "pagos_previstos"
@@ -261,6 +277,8 @@ class PagoPrevisto(Base):
     importe: Mapped[Decimal] = mapped_column(Dinero)
     objetivo_id: Mapped[int | None] = mapped_column(ForeignKey("objetivos.id"), nullable=True)
     activo_id: Mapped[int | None] = mapped_column(ForeignKey("activos.id"), nullable=True)
+    # Llamada de capital de una inversión privada (pagada = desembolsada)
+    inversion_id: Mapped[int | None] = mapped_column(ForeignKey("inversiones_privadas.id"), nullable=True)
     pagado: Mapped[bool] = mapped_column(Boolean, default=False)
 
 

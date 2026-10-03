@@ -26,6 +26,8 @@ HERRAMIENTAS = [
      "parameters": {"type": "object", "properties": {"anio": {"type": "integer"}}, "required": ["anio"]}},
     {"name": "planificacion", "description": "Objetivos de ahorro (boda, viajes...) y pagos previstos.",
      "parameters": {"type": "object", "properties": {}}},
+    {"name": "inversiones", "description": "Inversiones privadas (private equity, p. ej. Concrescenta): compromiso, "
+     "desembolsado, NAV, TVPI y calendario de llamadas de capital.", "parameters": {"type": "object", "properties": {}}},
     {"name": "hacienda", "description": "Modelos presentados a Hacienda (303, 130, renta) con sus importes.",
      "parameters": {"type": "object", "properties": {}}},
     {"name": "calcular_sueldo", "description": "Neto mensual a partir de un bruto anual, o bruto necesario para un neto.",
@@ -46,6 +48,8 @@ def _ejecutar(s: Session, nombre: str, args: dict):
         return api.listar_inmuebles(anio=args["anio"], s=s)
     if nombre == "planificacion":
         return api.ver_planificacion(s=s)
+    if nombre == "inversiones":
+        return api.listar_inversiones(s=s)
     if nombre == "hacienda":
         return api.ver_declaraciones(s=s)
     if nombre == "calcular_sueldo":

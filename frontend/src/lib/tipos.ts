@@ -1,9 +1,13 @@
 export interface Linea { nombre: string; grupo: string; importe: number; detalle: string }
 export interface UltimaSync { fecha: string; ok: boolean; mensaje: string }
 export interface EstadoSync {
-  sabadell: { configurado: boolean; conectado: boolean; valida_hasta: string | null; ultima: UltimaSync | null }
+  sabadell: {
+    configurado: boolean; conectado: boolean; valida_hasta: string | null; ultima: UltimaSync | null
+    url_vuelta?: string; vuelta_automatica?: boolean
+  }
   indexa: { configurado: boolean; ultima: UltimaSync | null }
   cada_horas: number
+  en_vercel?: boolean
 }
 export interface Resumen {
   fecha: string; neto: number; activos: number; pasivos: number
@@ -79,7 +83,7 @@ export interface Objetivo {
 }
 export interface Pago {
   id: number; concepto: string; fecha: string; importe: number; pagado: boolean
-  objetivo: string | null; inmueble: string | null
+  objetivo: string | null; inmueble: string | null; inversion: string | null
 }
 export interface Planificacion {
   liquidez: number; pendiente_12_meses: number; objetivos: Objetivo[]; pagos: Pago[]
@@ -120,4 +124,16 @@ export interface AjustesIA {
     clave: string | null
     origen_clave: 'app' | 'entorno' | null
   }>
+}
+
+export interface Llamada { id: number; fecha: string; importe: number; pagado: boolean }
+export interface InversionPrivada {
+  id: number; nombre: string; gestora: string; compromiso: number; fecha_compromiso: string | null
+  nav: number; nav_fecha: string | null; distribuido: number; desembolsado: number; pendiente: number
+  sin_calendario: number; pct_desembolsado: number | null; tvpi: number | null; resultado: number
+  proxima_llamada: { fecha: string; importe: number } | null; llamadas: Llamada[]; notas: string
+}
+export interface Inversiones {
+  inversiones: InversionPrivada[]
+  totales: { compromiso: number; desembolsado: number; pendiente: number; nav: number; distribuido: number }
 }

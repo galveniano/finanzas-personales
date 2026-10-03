@@ -80,9 +80,13 @@ def estado(session: Session) -> dict:
             "conectado": con is not None,
             "valida_hasta": con.valida_hasta.date().isoformat() if con and con.valida_hasta else None,
             "ultima": ultimo("sabadell"),
+            "url_vuelta": config.ENABLE_BANKING_REDIRECT_URL,
+            # Con la app publicada (https), el banco vuelve directamente a /sabadell/vuelta y se completa solo
+            "vuelta_automatica": not config.ENABLE_BANKING_REDIRECT_URL.startswith("https://localhost"),
         },
         "indexa": {"configurado": bool(config.INDEXA_TOKEN), "ultima": ultimo("indexa")},
         "cada_horas": config.SYNC_HORAS,
+        "en_vercel": config.EN_VERCEL,
     }
 
 

@@ -1,5 +1,6 @@
-const eurFmt = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' })
-const eurCorto = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 })
+// useGrouping 'always': en español Intl no pone el punto de miles en 4 cifras (1234 €); para importes queda raro
+const eurFmt = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR', useGrouping: 'always' })
+const eurCorto = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0, useGrouping: 'always' })
 const compacto = new Intl.NumberFormat('es-ES', { notation: 'compact', maximumFractionDigits: 1 })
 
 export const eur = (v: number | null | undefined) => (v == null ? '—' : eurFmt.format(v))

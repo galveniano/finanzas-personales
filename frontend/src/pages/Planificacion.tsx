@@ -108,7 +108,7 @@ export default function Planificacion() {
                   <span className={`absolute top-1/2 -left-[27px] size-3 -translate-y-1/2 rounded-full border-2 ${p.pagado ? 'border-accent bg-accent' : 'border-line bg-panel'}`} />
                   <div className="min-w-0">
                     <div className={`font-medium ${p.pagado ? 'text-muted line-through' : ''}`}>{p.concepto}</div>
-                    <div className="text-xs text-muted">{fecha(p.fecha, { day: 'numeric', month: 'long', year: 'numeric' })}{(p.inmueble || p.objetivo) && ` · ${p.inmueble ?? p.objetivo}`}</div>
+                    <div className="text-xs text-muted">{fecha(p.fecha, { day: 'numeric', month: 'long', year: 'numeric' })}{(p.inmueble || p.objetivo || p.inversion) && ` · ${p.inmueble ?? p.objetivo ?? p.inversion}`}</div>
                   </div>
                   <div className="flex items-center gap-2">
                     {!p.pagado && <Etiqueta tono={dias < 0 ? 'mal' : dias <= 30 ? 'aviso' : 'neutro'}>{dias < 0 ? 'Vencido' : `${dias} días`}</Etiqueta>}
