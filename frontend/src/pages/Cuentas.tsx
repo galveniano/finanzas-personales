@@ -4,6 +4,7 @@ import { Plus, Search, Upload } from 'lucide-react'
 import { api } from '../lib/api'
 import { eur, fecha } from '../lib/format'
 import type { Categoria, Cuenta, Movimiento } from '../lib/tipos'
+import InversionesPrivadas from '../components/InversionesPrivadas'
 import { Boton, Cabecera, Campo, Cargando, Dialogo, Etiqueta, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio, num, useAccion, useAvisos } from '../components/ui'
 
 const ORIGEN: Record<string, { texto: string; tono: 'acento' | 'neutro' | 'bien' }> = {
@@ -85,6 +86,8 @@ export default function Cuentas() {
           {!cuentas.data?.length && <Vacio>Crea tu cuenta de Sabadell o conéctala en Conexiones.</Vacio>}
         </div>
       )}
+
+      <InversionesPrivadas />
 
       <Tarjeta className="mt-6" titulo="Movimientos">
         <div className="mb-4 grid gap-3 sm:grid-cols-[1fr_1fr_1.4fr]">

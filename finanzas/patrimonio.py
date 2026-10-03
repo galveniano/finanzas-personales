@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from finanzas.hipoteca import saldo_pendiente
-from finanzas.models import Activo, Cuenta, Deuda, PagoPrevisto
+from finanzas.models import Activo, Cuenta, Deuda, InversionPrivada, PagoPrevisto
 
 CERO = Decimal("0")
 
@@ -82,6 +82,10 @@ def calcular(session: Session, a_fecha: date | None = None) -> Patrimonio:
         valor, detalle = valor_activo(a, a_fecha)
         p.activos.append(Linea(a.nombre, "Inmuebles" if a.tipo.startswith("inmueble") else "Otros",
                                valor, detalle))
+
+    for inv in session.scalars(select(InversionPrivada)):
+        detalle = f"NAV a {inv.nav_fecha:%d/%m/%Y}" if inv.nav_fecha else "NAV"
+        p.activos.append(Linea(inv.nombre, "Inversiones", inv.nav, f"{inv.gestora} · {detalle}".lstrip(" ·")))
 
     for d in session.scalars(select(Deuda)):
         p.pasivos.append(Linea(d.nombre, d.tipo.capitalize(), saldo_pendiente(d, a_fecha), d.entidad))

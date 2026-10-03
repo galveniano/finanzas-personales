@@ -16,7 +16,7 @@ from finanzas.importers import aeat, sabadell
 from finanzas.integrations import enablebanking
 from finanzas.models import (
     DocumentoDrive, Activo, CambioRenta, Categoria, Cliente, ContratoAlquiler, Cuenta, Declaracion, Deuda, Factura, GastoAutonomo,
-    GastoInmueble, Instantanea, Movimiento, Nomina, Objetivo, PagoPrevisto, Valoracion,
+    GastoInmueble, Instantanea, InversionPrivada, Movimiento, Nomina, Objetivo, PagoPrevisto, Valoracion,
 )
 
 router = APIRouter(prefix="/api", dependencies=[Depends(auth.requiere_sesion)])
@@ -550,6 +550,7 @@ class PagoIn(BaseModel):
     importe: Decimal
     objetivo_id: int | None = None
     activo_id: int | None = None
+    inversion_id: int | None = None
     pagado: bool = False
 
 
@@ -568,6 +569,7 @@ def ver_planificacion(s: Session = SesionDB):
     objetivos = s.scalars(select(Objetivo).order_by(Objetivo.fecha_objetivo)).all()
     pagos = s.scalars(select(PagoPrevisto).order_by(PagoPrevisto.fecha)).all()
     activos = {a.id: a.nombre for a in s.scalars(select(Activo))}
+    inversiones = {i.id: i.nombre for i in s.scalars(select(InversionPrivada))}
     nombres_obj = {o.id: o.nombre for o in objetivos}
     pendiente_12m = sum((p.importe for p in pagos if not p.pagado and p.fecha <= hoy + timedelta(days=365)), CERO)
     liquidez = sum((c.saldo for c in s.scalars(select(Cuenta).where(Cuenta.activa, Cuenta.tipo.in_(
@@ -581,7 +583,8 @@ def ver_planificacion(s: Session = SesionDB):
                 Decimal("0.01"))) if o.fecha_objetivo and o.fecha_objetivo > hoy else None,
         } for o in objetivos],
         "pagos": [{"id": p.id, "concepto": p.concepto, "fecha": f(p.fecha), "importe": n(p.importe),
-                   "pagado": p.pagado, "objetivo": nombres_obj.get(p.objetivo_id), "inmueble": activos.get(p.activo_id)}
+                   "pagado": p.pagado, "objetivo": nombres_obj.get(p.objetivo_id), "inmueble": activos.get(p.activo_id),
+                   "inversion": inversiones.get(p.inversion_id)}
                   for p in pagos],
         "inmuebles": [{"id": k, "nombre": v} for k, v in activos.items()],
     }
@@ -611,6 +614,119 @@ def crear_pago(datos: PagoIn, s: Session = SesionDB):
 @router.patch("/pagos/{pago_id}")
 def actualizar_pago(pago_id: int, datos: PagoPatch, s: Session = SesionDB):
     _obtener(s, PagoPrevisto, pago_id).pagado = datos.pagado
+    s.commit()
+    return {"ok": True}
+
+
+@router.delete("/pagos/{pago_id}")
+def borrar_pago(pago_id: int, s: Session = SesionDB):
+    s.delete(_obtener(s, PagoPrevisto, pago_id))
+    s.commit()
+    return {"ok": True}
+
+
+# --- Inversión privada (private equity) -----------------------------------------
+
+def _inversion(s: Session, inv: InversionPrivada) -> dict:
+    llamadas = s.scalars(select(PagoPrevisto).where(PagoPrevisto.inversion_id == inv.id)
+                         .order_by(PagoPrevisto.fecha)).all()
+    desembolsado = sum((p.importe for p in llamadas if p.pagado), CERO)
+    previsto = sum((p.importe for p in llamadas if not p.pagado), CERO)
+    proxima = next((p for p in llamadas if not p.pagado), None)
+    return {
+        "id": inv.id, "nombre": inv.nombre, "gestora": inv.gestora, "compromiso": n(inv.compromiso),
+        "fecha_compromiso": f(inv.fecha_compromiso), "nav": n(inv.nav), "nav_fecha": f(inv.nav_fecha),
+        "distribuido": n(inv.distribuido), "desembolsado": n(desembolsado),
+        "pendiente": n(max(inv.compromiso - desembolsado, CERO)),
+        "sin_calendario": n(max(inv.compromiso - desembolsado - previsto, CERO)),
+        "pct_desembolsado": n((desembolsado / inv.compromiso * 100).quantize(Decimal("0.01"))) if inv.compromiso else None,
+        # TVPI: (valor actual + lo ya devuelto) / lo desembolsado
+        "tvpi": n(((inv.nav + inv.distribuido) / desembolsado).quantize(Decimal("0.01"))) if desembolsado else None,
+        "resultado": n(inv.nav + inv.distribuido - desembolsado),
+        "proxima_llamada": {"fecha": f(proxima.fecha), "importe": n(proxima.importe)} if proxima else None,
+        "llamadas": [{"id": p.id, "fecha": f(p.fecha), "importe": n(p.importe), "pagado": p.pagado} for p in llamadas],
+        "notas": inv.notas,
+    }
+
+
+@router.get("/inversiones")
+def listar_inversiones(s: Session = SesionDB):
+    datos = [_inversion(s, i) for i in s.scalars(select(InversionPrivada).order_by(InversionPrivada.id))]
+    total = {k: round(sum(d[k] or 0 for d in datos), 2) for k in ("compromiso", "desembolsado", "pendiente", "nav", "distribuido")}
+    return {"inversiones": datos, "totales": total}
+
+
+class LlamadaIn(BaseModel):
+    fecha: date
+    importe: Decimal
+    pagado: bool = False
+
+
+class InversionIn(BaseModel):
+    nombre: str
+    gestora: str = ""
+    compromiso: Decimal
+    fecha_compromiso: date | None = None
+    nav: Decimal = Decimal("0")
+    nav_fecha: date | None = None
+    distribuido: Decimal = Decimal("0")
+    notas: str = ""
+    llamadas: list[LlamadaIn] = []
+
+
+def _concepto_llamada(inv: InversionPrivada) -> str:
+    return f"Llamada de capital {inv.nombre}"[:160]
+
+
+@router.post("/inversiones")
+def crear_inversion(datos: InversionIn, s: Session = SesionDB):
+    inv = InversionPrivada(**datos.model_dump(exclude={"llamadas"}))
+    inv.nav_fecha = inv.nav_fecha or date.today()
+    s.add(inv)
+    s.flush()
+    for ll in datos.llamadas:
+        s.add(PagoPrevisto(concepto=_concepto_llamada(inv), inversion_id=inv.id, **ll.model_dump()))
+    s.commit()
+    return _inversion(s, inv)
+
+
+class InversionPatch(BaseModel):
+    nombre: str | None = None
+    gestora: str | None = None
+    compromiso: Decimal | None = None
+    nav: Decimal | None = None
+    nav_fecha: date | None = None
+    distribuido: Decimal | None = None
+    notas: str | None = None
+
+
+@router.patch("/inversiones/{inversion_id}")
+def actualizar_inversion(inversion_id: int, datos: InversionPatch, s: Session = SesionDB):
+    inv = _obtener(s, InversionPrivada, inversion_id)
+    cambios = datos.model_dump(exclude_none=True)
+    if "nav" in cambios and "nav_fecha" not in cambios:
+        cambios["nav_fecha"] = date.today()
+    for k, v in cambios.items():
+        setattr(inv, k, v)
+    s.commit()
+    return _inversion(s, inv)
+
+
+@router.post("/inversiones/{inversion_id}/llamadas")
+def crear_llamada(inversion_id: int, datos: LlamadaIn, s: Session = SesionDB):
+    inv = _obtener(s, InversionPrivada, inversion_id)
+    s.add(PagoPrevisto(concepto=_concepto_llamada(inv), inversion_id=inv.id, **datos.model_dump()))
+    s.commit()
+    return _inversion(s, inv)
+
+
+@router.delete("/inversiones/{inversion_id}")
+def borrar_inversion(inversion_id: int, s: Session = SesionDB):
+    inv = _obtener(s, InversionPrivada, inversion_id)
+    for p in s.scalars(select(PagoPrevisto).where(PagoPrevisto.inversion_id == inv.id)):
+        s.delete(p)
+    s.flush()  # primero las llamadas, por la clave foránea
+    s.delete(inv)
     s.commit()
     return {"ok": True}
 

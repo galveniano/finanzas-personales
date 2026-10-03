@@ -1,5 +1,4 @@
 """Aplicación. En local:  uvicorn finanzas.main:app   En Vercel la carga index.py.
-
 Sirve la API JSON en /api y el frontal ya compilado (carpeta finanzas/web).
 """
 import hmac
@@ -7,6 +6,7 @@ import logging
 import warnings
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlencode
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -62,9 +62,9 @@ def vuelta_sabadell(code: str = ""):
             enablebanking.completar_autorizacion(s, code)
             sync.sincronizar_sabadell(s)
             sync.guardar_instantanea(s)
-        except enablebanking.EnableBankingError:
-            pass
-    return RedirectResponse("/#/conexiones")
+        except enablebanking.EnableBankingError as e:
+            return RedirectResponse("/#/conexiones?" + urlencode({"sabadell_error": str(e)[:300]}))
+    return RedirectResponse("/#/conexiones?sabadell=ok")
 
 
 if (WEB / "index.html").exists():

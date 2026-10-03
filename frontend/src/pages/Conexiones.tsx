@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import type { ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ExternalLink, RefreshCw } from 'lucide-react'
@@ -31,12 +32,14 @@ const Codigo = ({ children }: { children: ReactNode }) => (
   <code className="cifra rounded bg-panel-2 px-1.5 py-0.5 text-[13px] break-all">{children}</code>
 )
 
-function Sabadell({ s }: { s: EstadoSync['sabadell'] }) {
+function Sabadell({ s, enVercel }: { s: EstadoSync['sabadell']; enVercel: boolean }) {
   const avisar = useAvisos()
   const [urlBanco, setUrlBanco] = useState<string | null>(null)
   const [vuelta, setVuelta] = useState('')
   const conectar = useAccion(async () => {
     const r = await api.post<{ url: string }>('/sync/sabadell/conectar')
+    // Publicada: el banco vuelve sola a la app. En local hay que pegar la dirección de vuelta.
+    if (s.vuelta_automatica) { window.location.href = r.url; return }
     setUrlBanco(r.url)
     window.open(r.url, '_blank', 'noopener')
   })
@@ -59,7 +62,14 @@ function Sabadell({ s }: { s: EstadoSync['sabadell'] }) {
         Solo lectura: nadie puede mover dinero desde aquí. El permiso dura 180 días y luego se renueva con un clic.
       </p>
 
-      {!s.configurado && (
+      {!s.configurado && (enVercel ? (
+        <ol className="space-y-3 text-sm">
+          <Paso n={1}>Crea una aplicación en <a className="font-medium text-accent" href="https://enablebanking.com/cp/applications" target="_blank" rel="noreferrer">enablebanking.com</a> en <strong>Production</strong>, con la URL de vuelta <Codigo>{s.url_vuelta?.startsWith('https://localhost') ? `${window.location.origin}/sabadell/vuelta` : s.url_vuelta}</Codigo>, y guarda el fichero .pem que descarga.</Paso>
+          <Paso n={2}>En el panel de Enable Banking, pulsa <strong>Activate by linking accounts</strong> y vincula tu cuenta de Sabadell.</Paso>
+          <Paso n={3}>En Vercel, Settings → Environment Variables, añade <Codigo>ENABLE_BANKING_APP_ID</Codigo> (el nombre del .pem sin la extensión), <Codigo>ENABLE_BANKING_KEY</Codigo> (todo el contenido del .pem) y <Codigo>ENABLE_BANKING_REDIRECT_URL</Codigo> (la URL de vuelta).</Paso>
+          <Paso n={4}>Vuelve a desplegar (Deployments → ⋯ → Redeploy) y aquí aparecerá el botón para conectar.</Paso>
+        </ol>
+      ) : (
         <ol className="space-y-3 text-sm">
           <Paso n={1}>Crea una cuenta en <a className="font-medium text-accent" href="https://enablebanking.com/cp/applications" target="_blank" rel="noreferrer">enablebanking.com</a> y registra una aplicación en <strong>Production</strong>.</Paso>
           <Paso n={2}>Como URL de vuelta pon <Codigo>https://localhost:8000/sabadell/vuelta</Codigo>. No hace falta que funcione: luego copiarás la dirección.</Paso>
@@ -67,7 +77,7 @@ function Sabadell({ s }: { s: EstadoSync['sabadell'] }) {
           <Paso n={4}>En el panel de Enable Banking, vincula tus cuentas de Sabadell para activar el modo restringido gratuito.</Paso>
           <Paso n={5}>En el fichero <Codigo>.env</Codigo> rellena <Codigo>ENABLE_BANKING_APP_ID</Codigo> y <Codigo>ENABLE_BANKING_KEY=secretos/tu-clave.pem</Codigo>, y reinicia la app.</Paso>
         </ol>
-      )}
+      ))}
 
       {s.configurado && !urlBanco && (
         <div className="flex flex-wrap gap-2">
@@ -98,7 +108,7 @@ function Sabadell({ s }: { s: EstadoSync['sabadell'] }) {
   )
 }
 
-function Indexa({ s }: { s: EstadoSync['indexa'] }) {
+function Indexa({ s, enVercel }: { s: EstadoSync['indexa']; enVercel: boolean }) {
   const sincronizar = useAccion(() => api.post('/sync/indexa'), 'Indexa actualizado')
   return (
     <Tarjeta titulo="Indexa Capital" accion={<Etiqueta tono={s.configurado ? 'bien' : 'aviso'}>{s.configurado ? 'Conectado' : 'Sin configurar'}</Etiqueta>}>
@@ -110,7 +120,9 @@ function Indexa({ s }: { s: EstadoSync['indexa'] }) {
       ) : (
         <ol className="space-y-3 text-sm">
           <Paso n={1}>En tu área privada de Indexa, entra en Configuración y genera un token de API.</Paso>
-          <Paso n={2}>Pégalo en <Codigo>.env</Codigo> como <Codigo>INDEXA_TOKEN=…</Codigo> y reinicia la app.</Paso>
+          <Paso n={2}>{enVercel
+            ? <>En Vercel, Settings → Environment Variables, añade <Codigo>INDEXA_TOKEN</Codigo> y vuelve a desplegar.</>
+            : <>Pégalo en <Codigo>.env</Codigo> como <Codigo>INDEXA_TOKEN=…</Codigo> y reinicia la app.</>}</Paso>
         </ol>
       )}
       <div className="mt-4"><Ultima u={s.ultima} /></div>
@@ -118,19 +130,33 @@ function Indexa({ s }: { s: EstadoSync['indexa'] }) {
   )
 }
 
+/** Al volver del banco (app publicada) la dirección trae el resultado: se avisa y se limpia. */
+function useVueltaBanco() {
+  const [params, setParams] = useSearchParams()
+  const avisar = useAvisos()
+  const errorBanco = params.get('sabadell_error')
+  const ok = params.get('sabadell')
+  useEffect(() => {
+    if (!errorBanco && !ok) return
+    avisar(errorBanco ? `No se pudo conectar Sabadell: ${errorBanco}` : 'Sabadell conectado', errorBanco ? 'error' : 'ok')
+    setParams({}, { replace: true })
+  }, [errorBanco, ok, avisar, setParams])
+}
+
 export default function Conexiones() {
+  useVueltaBanco()
   const { data, isLoading, error } = useQuery({ queryKey: ['sync'], queryFn: () => api.get<EstadoSync>('/sync') })
   if (isLoading) return <Cargando />
   if (error) return <ErrorCarga error={error} />
   if (!data) return null
   return (
     <>
-      <Cabecera titulo="Conexiones" subtitulo={data.cada_horas > 0
+      <Cabecera titulo="Conexiones" subtitulo={data.en_vercel ? 'Se sincroniza sola cada día de madrugada. También puedes hacerlo ahora con el botón de cada banco.' : data.cada_horas > 0
         ? `Mientras la app está abierta se sincroniza sola al arrancar y cada ${data.cada_horas} horas.`
         : 'La sincronización automática está desactivada (SYNC_HORAS=0).'} />
       <div className="grid gap-4 lg:grid-cols-2">
-        <Sabadell s={data.sabadell} />
-        <Indexa s={data.indexa} />
+        <Sabadell s={data.sabadell} enVercel={!!data.en_vercel} />
+        <Indexa s={data.indexa} enVercel={!!data.en_vercel} />
         <div className="lg:col-span-2"><AjustesIA /></div>
         <div className="lg:col-span-2"><DriveImport /></div>
       </div>
