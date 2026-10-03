@@ -45,5 +45,6 @@ export const api = {
   get: <T,>(ruta: string) => peticion<T>('GET', ruta),
   post: <T = { ok: boolean },>(ruta: string, cuerpo?: unknown) => peticion<T>('POST', ruta, cuerpo),
   patch: <T = { ok: boolean },>(ruta: string, cuerpo?: unknown) => peticion<T>('PATCH', ruta, cuerpo),
+  put: <T = { ok: boolean },>(ruta: string, cuerpo?: unknown) => peticion<T>('PUT', ruta, cuerpo),
   del: <T = { ok: boolean },>(ruta: string) => peticion<T>('DELETE', ruta),
 }

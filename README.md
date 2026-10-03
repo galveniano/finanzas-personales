@@ -83,9 +83,11 @@ vez que se fusiona algo en `main`, Vercel publica la versión nueva sola.
 
 ## Asistente y facturas de Google Drive
 
-Los dos usan Claude a través de la API de Anthropic. Crea una clave en
-[console.anthropic.com](https://console.anthropic.com) (es de pago por uso, aparte de la
-suscripción de Claude) y ponla en `ANTHROPIC_API_KEY`. Pon también `NOMBRE_TITULAR` y
+Los dos usan un modelo de IA: OpenAI por defecto, o Claude (Anthropic) si lo prefieres. La clave se
+pone desde la propia app, en **Conexiones → Asistente (IA)**, y se guarda cifrada en la base de datos
+(con `SESSION_SECRET`). Saca la clave en [platform.openai.com/api-keys](https://platform.openai.com/api-keys);
+es de pago por uso, aparte de cualquier suscripción. También vale ponerla en las variables de entorno
+(`OPENAI_API_KEY` o `ANTHROPIC_API_KEY`). Pon también `NOMBRE_TITULAR` y
 `NIF_TITULAR` para que distinga bien las facturas que emites de las que recibes.
 
 - **Asistente**: responde preguntas sobre tus finanzas con los datos de la app. Solo puede leer.

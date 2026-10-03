@@ -55,9 +55,11 @@ EMAILS_PERMITIDOS = {e.strip().lower() for e in os.environ.get("EMAILS_PERMITIDO
 SESSION_SECRET = os.environ.get("SESSION_SECRET", "")
 AUTH_REQUERIDA = bool(GOOGLE_CLIENT_ID) or EN_VERCEL
 
-# Asistente y lectura de documentos con Claude (API de Anthropic)
+# Asistente y lectura de documentos (OpenAI o Claude). Se puede configurar también desde la app.
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5-5")
+ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "")
 # Tu NIF y nombre, para distinguir las facturas que emites de las que recibes (opcional)
 NIF_TITULAR = os.environ.get("NIF_TITULAR", "").upper().replace(" ", "")
 NOMBRE_TITULAR = os.environ.get("NOMBRE_TITULAR", "")

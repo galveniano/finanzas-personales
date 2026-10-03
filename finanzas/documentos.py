@@ -1,7 +1,7 @@
 """Lee un documento (factura emitida o recibida, justificante de Hacienda) y saca sus datos.
 
 Los justificantes de la AEAT se leen con reglas fijas (importers/aeat.py). Para las facturas se
-usa Claude, porque cada proveedor tiene un formato distinto y las tuyas también varían.
+usa el modelo de IA configurado (OpenAI o Claude), porque cada proveedor tiene un formato distinto y las tuyas también varían.
 """
 import io
 import logging
@@ -15,7 +15,7 @@ logging.getLogger("pypdf").setLevel(logging.ERROR)
 HERRAMIENTA = {
     "name": "registrar_documento",
     "description": "Registra los datos del documento leído.",
-    "input_schema": {
+    "parameters": {
         "type": "object",
         "properties": {
             "tipo": {"type": "string", "enum": ["emitida", "recibida", "otro"],
@@ -67,7 +67,7 @@ def _prompt() -> str:
             "factura aunque alguna línea no cuadre, y apunta la incoherencia en avisos. Importes en euros.")
 
 
-def interpretar(paginas: list[str], nombre: str, transport=None) -> Documento:
+def interpretar(paginas: list[str], nombre: str, cfg: "ia.ConfigIA", transport=None) -> Documento:
     texto = "\n".join(paginas)
     if "Agencia Tributaria" in texto or "Código Seguro de Verificación" in texto:
         try:
@@ -76,10 +76,5 @@ def interpretar(paginas: list[str], nombre: str, transport=None) -> Documento:
             pass
     if not texto.strip():
         return Documento("otro", {"avisos": ["El PDF no tiene texto (¿es una imagen escaneada?)"]})
-    r = ia.mensaje(_prompt(), [{"role": "user", "content": f"Fichero: {nombre}\n\n{texto[:12000]}"}],
-                   tools=[HERRAMIENTA], tool_choice={"type": "tool", "name": "registrar_documento"},
-                   max_tokens=1024, transport=transport)
-    datos = next((b["input"] for b in r.get("content", []) if b.get("type") == "tool_use"), None)
-    if not datos:
-        raise ia.ErrorIA("Claude no ha devuelto los datos del documento")
+    datos = ia.extraer(cfg, _prompt(), f"Fichero: {nombre}\n\n{texto[:12000]}", HERRAMIENTA, transport)
     return Documento(datos.get("tipo", "otro"), datos)

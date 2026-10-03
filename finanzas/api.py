@@ -749,7 +749,8 @@ def listar_documentos_drive(s: Session = SesionDB):
     import json
     orden = {"pendiente": 0, "error": 1, "importado": 2, "ignorado": 3}
     docs = sorted(s.scalars(select(DocumentoDrive)), key=lambda d: (orden.get(d.estado, 9), d.nombre))
-    return {"ia": bool(config.ANTHROPIC_API_KEY), "google_client_id": config.GOOGLE_CLIENT_ID or None,
+    from finanzas import ia
+    return {"ia": ia.disponible(s), "google_client_id": config.GOOGLE_CLIENT_ID or None,
             "documentos": [{"id": d.id, "nombre": d.nombre, "enlace": d.enlace, "tipo": d.tipo, "estado": d.estado,
                             "mensaje": d.mensaje, "datos": json.loads(d.datos or "{}"),
                             "revisado": d.revisado.isoformat(timespec="minutes")} for d in docs]}
@@ -799,5 +800,59 @@ def preguntar_asistente(datos: AsistenteIn, s: Session = SesionDB):
 
 
 @router.get("/asistente/estado")
-def estado_asistente():
-    return {"disponible": bool(config.ANTHROPIC_API_KEY), "modelo": config.ANTHROPIC_MODEL}
+def estado_asistente(s: Session = SesionDB):
+    from finanzas import ia
+    cfg = ia.configuracion(s)
+    return {"disponible": cfg.lista, "proveedor": cfg.proveedor,
+            "proveedor_nombre": ia.PROVEEDORES[cfg.proveedor]["nombre"], "modelo": cfg.modelo}
+
+
+# --- Ajustes del asistente (IA) -------------------------------------------------
+
+def _ajustes_ia(s: Session) -> dict:
+    from finanzas import ajustes, ia
+    cfg = ia.configuracion(s)
+    proveedores = {}
+    for p, info in ia.PROVEEDORES.items():
+        en_app = ajustes.leer(s, f"{p}_api_key")
+        clave = en_app or ia._clave_entorno(p)
+        proveedores[p] = {"nombre": info["nombre"], "modelo_defecto": info["modelo"],
+                          "modelo": ajustes.leer(s, f"{p}_modelo"), "clave": ajustes.oculto(clave),
+                          "origen_clave": "app" if en_app else ("entorno" if clave else None)}
+    return {"proveedor": cfg.proveedor, "modelo": cfg.modelo, "disponible": cfg.lista, "proveedores": proveedores}
+
+
+@router.get("/ajustes/ia")
+def ver_ajustes_ia(s: Session = SesionDB):
+    return _ajustes_ia(s)
+
+
+class AjustesIAIn(BaseModel):
+    proveedor: str
+    clave: str | None = None  # None = no tocar; "" = borrar la guardada en la app
+    modelo: str | None = None
+
+
+@router.put("/ajustes/ia")
+def guardar_ajustes_ia(datos: AjustesIAIn, s: Session = SesionDB):
+    from finanzas import ajustes, ia
+    if datos.proveedor not in ia.PROVEEDORES:
+        raise HTTPException(400, "Proveedor desconocido")
+    ajustes.guardar(s, "ia_proveedor", datos.proveedor)
+    if datos.clave is not None:
+        ajustes.guardar(s, f"{datos.proveedor}_api_key", datos.clave.strip(), secreto=True)
+    if datos.modelo is not None:
+        ajustes.guardar(s, f"{datos.proveedor}_modelo", datos.modelo.strip()[:80])
+    return _ajustes_ia(s)
+
+
+@router.post("/ajustes/ia/probar")
+def probar_ajustes_ia(s: Session = SesionDB):
+    from finanzas import ia
+    cfg = ia.configuracion(s)
+    try:
+        respuesta = ia.probar(cfg)
+    except ia.ErrorIA as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "proveedor": ia.PROVEEDORES[cfg.proveedor]["nombre"], "modelo": cfg.modelo,
+            "respuesta": respuesta[:200]}

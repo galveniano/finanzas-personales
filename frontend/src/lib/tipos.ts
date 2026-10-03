@@ -108,3 +108,16 @@ export interface DocumentoDrive {
 }
 export interface DocumentosDrive { ia: boolean; google_client_id: string | null; documentos: DocumentoDrive[] }
 export interface MensajeChat { role: 'user' | 'assistant'; content: string }
+
+export interface AjustesIA {
+  proveedor: 'openai' | 'anthropic'
+  modelo: string
+  disponible: boolean
+  proveedores: Record<'openai' | 'anthropic', {
+    nombre: string
+    modelo_defecto: string
+    modelo: string
+    clave: string | null
+    origen_clave: 'app' | 'entorno' | null
+  }>
+}

@@ -51,7 +51,7 @@ export default function DriveImport() {
       {!d ? null : !d.google_client_id ? (
         <Vacio>Funciona con la app publicada y el inicio de sesión de Google configurado.</Vacio>
       ) : !d.ia ? (
-        <Vacio>Para leer las facturas hace falta la clave de Claude (<code>ANTHROPIC_API_KEY</code>), la misma que usa el asistente.</Vacio>
+        <Vacio>Para leer las facturas hace falta configurar el asistente: pon tu clave de OpenAI en la tarjeta Asistente (IA) de arriba.</Vacio>
       ) : (
         <Boton onClick={importar} disabled={!!progreso}><FolderSync size={15} className={progreso ? 'animate-pulse' : ''} />{progreso ?? 'Importar de Drive'}</Boton>
       )}

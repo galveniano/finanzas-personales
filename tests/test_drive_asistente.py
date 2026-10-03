@@ -4,8 +4,9 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from finanzas import config, documentos
+from finanzas import config, db, documentos, ia
 from finanzas.main import app
+from finanzas.models import Ajuste
 
 TEXTOS = {
     "f1": "FACTURA Nº 7 Fecha 1/09/2026 Cliente: ACME Consultoría Net 1000 IVA 21% Retención 15%",
@@ -45,7 +46,43 @@ def falso(peticion: httpx.Request) -> httpx.Response:
                 {"type": "tool_use", "id": "t2", "name": "hacienda", "input": {}}]})
         return httpx.Response(200, json={"stop_reason": "end_turn", "content": [
             {"type": "text", "text": "Este año has pagado 312,40 € en el 130."}]})
+    if "api.openai.com" in url:
+        return falso_openai(peticion)
     return httpx.Response(404)
+
+
+def falso_openai(peticion: httpx.Request) -> httpx.Response:
+    assert peticion.headers["authorization"] == "Bearer sk-openai"
+    cuerpo = json.loads(peticion.content)
+    assert all(h["type"] == "function" and "parameters" in h["function"] for h in cuerpo.get("tools", []))
+
+    def llamada(nombre, args):
+        return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "c1", "type": "function", "function": {"name": nombre, "arguments": json.dumps(args)}}]}}]})
+
+    if cuerpo.get("tool_choice", {}).get("function", {}).get("name") == "registrar_documento":
+        texto = cuerpo["messages"][-1]["content"]
+        return llamada("registrar_documento", EXTRAIDO["f1" if "ACME" in texto else "f2"])
+    if cuerpo["messages"][-1]["role"] == "user" and "tools" in cuerpo:
+        return llamada("hacienda", {})
+    respuesta = "OK" if "tools" not in cuerpo else "Este año has pagado 312,40 € en el 130."
+    return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": respuesta}}]})
+
+
+def _limpiar_ajustes():
+    with db.SessionLocal() as s:
+        s.query(Ajuste).delete()
+        s.commit()
+
+
+@pytest.fixture(autouse=True)
+def sin_ajustes(monkeypatch):
+    monkeypatch.setattr(config, "OPENAI_API_KEY", "")
+    monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "")
+    with TestClient(app):
+        _limpiar_ajustes()
+    yield
+    _limpiar_ajustes()
 
 
 @pytest.fixture
@@ -85,8 +122,36 @@ def test_asistente(entorno):
         assert r["consultas"] == ["hacienda"] and "312,40" in r["respuesta"]
 
 
-def test_sin_clave(monkeypatch):
-    monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "")
+def test_sin_clave():
     with TestClient(app) as c:
         assert c.post("/api/asistente", json={"mensajes": [{"role": "user", "content": "hola"}]}).status_code == 400
         assert c.post("/api/drive/importar", json={"access_token": "x"}).status_code == 400
+
+
+def test_openai_desde_la_app(entorno):
+    """Con la clave guardada desde Conexiones, el asistente usa OpenAI aunque haya clave de Anthropic en el entorno."""
+    with TestClient(app) as c:
+        r = c.put("/api/ajustes/ia", json={"proveedor": "openai", "clave": "sk-openai"}).json()
+        assert r["proveedor"] == "openai" and r["disponible"] and r["modelo"] == "gpt-5.4-mini"
+        assert r["proveedores"]["openai"]["clave"] == "…enai" and r["proveedores"]["openai"]["origen_clave"] == "app"
+        assert "sk-openai" not in json.dumps(r)
+        with db.SessionLocal() as s:  # cifrada en la base de datos
+            assert s.get(Ajuste, "openai_api_key").valor.startswith("enc:")
+
+        assert c.post("/api/ajustes/ia/probar").json()["respuesta"] == "OK"
+        r = c.post("/api/asistente", json={"mensajes": [{"role": "user", "content": "¿Cuánto he pagado de 130?"}]}).json()
+        assert r["proveedor"] == "OpenAI" and r["consultas"] == ["hacienda"] and "312,40" in r["respuesta"]
+        assert c.get("/api/asistente/estado").json()["proveedor"] == "openai"
+
+        with db.SessionLocal() as s:  # la lectura de facturas también va por OpenAI
+            cfg = ia.configuracion(s)
+        leido = documentos.interpretar([TEXTOS["f1"]], "f1.pdf", cfg)
+        assert leido.tipo == "emitida" and leido.datos["base"] == 1000
+
+        # Cambiar el modelo y borrar la clave
+        r = c.put("/api/ajustes/ia", json={"proveedor": "openai", "modelo": "gpt-5.4"}).json()
+        assert r["modelo"] == "gpt-5.4" and r["proveedores"]["openai"]["clave"] == "…enai"
+        r = c.put("/api/ajustes/ia", json={"proveedor": "openai", "clave": ""}).json()
+        assert not r["disponible"]
+        assert c.post("/api/ajustes/ia/probar").status_code == 400
+        assert c.put("/api/ajustes/ia", json={"proveedor": "otro"}).status_code == 400

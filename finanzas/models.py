@@ -344,3 +344,10 @@ class DocumentoDrive(Base):
     gasto_id: Mapped[int | None] = mapped_column(ForeignKey("gastos_autonomo.id", ondelete="SET NULL"), nullable=True)
     declaracion_id: Mapped[int | None] = mapped_column(ForeignKey("declaraciones.id", ondelete="SET NULL"), nullable=True)
     revisado: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class Ajuste(Base):
+    """Ajustes que se cambian desde la app (proveedor de IA, claves...). Las claves van cifradas."""
+    __tablename__ = "ajustes"
+    clave: Mapped[str] = mapped_column(String(60), primary_key=True)
+    valor: Mapped[str] = mapped_column(Text, default="")

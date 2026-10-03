@@ -102,9 +102,9 @@ def _crear_declaracion(s: Session, j, contenido: bytes, nombre: str) -> Declarac
     return d
 
 
-def procesar(s: Session, doc: DocumentoDrive, contenido: bytes, transport=None) -> None:
+def procesar(s: Session, doc: DocumentoDrive, contenido: bytes, cfg: ia.ConfigIA, transport=None) -> None:
     try:
-        leido = documentos.interpretar(documentos.texto_pdf(contenido), doc.nombre, transport=transport)
+        leido = documentos.interpretar(documentos.texto_pdf(contenido), doc.nombre, cfg, transport=transport)
     except ia.ErrorIA as e:
         doc.estado, doc.mensaje = "error", str(e)
         return
@@ -132,8 +132,9 @@ def procesar(s: Session, doc: DocumentoDrive, contenido: bytes, transport=None) 
 
 def importar(s: Session, token: str, desde: str = "2024-01-01", transport=None) -> dict:
     """Revisa como mucho POR_LLAMADA ficheros nuevos o cambiados. Devuelve cuántos quedan."""
-    if not ia.disponible():
-        raise ErrorDrive("Para leer facturas hace falta ANTHROPIC_API_KEY (el asistente usa la misma)")
+    cfg = ia.configuracion(s)
+    if not cfg.lista:
+        raise ErrorDrive("Para leer facturas hace falta configurar el asistente (OpenAI o Claude) en Conexiones")
     drive = Drive(token, transport)
     vistos = {d.drive_id: d for d in s.scalars(select(DocumentoDrive))}
     nuevos = [f for f in drive.candidatos(f"{desde}T00:00:00")
@@ -145,7 +146,7 @@ def importar(s: Session, token: str, desde: str = "2024-01-01", transport=None) 
         doc.nombre, doc.modificado, doc.enlace = f["name"][:250], f["modifiedTime"], f.get("webViewLink", "")[:300]
         doc.revisado = datetime.now()
         s.add(doc)
-        procesar(s, doc, drive.descargar(f["id"]), transport)
+        procesar(s, doc, drive.descargar(f["id"]), cfg, transport)
         s.commit()
         hechos.append({"nombre": doc.nombre, "estado": doc.estado, "mensaje": doc.mensaje})
     return {"procesados": hechos, "quedan": max(len(nuevos) - POR_LLAMADA, 0)}
