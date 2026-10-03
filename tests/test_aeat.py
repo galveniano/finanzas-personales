@@ -43,3 +43,18 @@ def test_declaraciones_api():
         d = c.get("/api/declaraciones").json()
         anios = {a["ejercicio"]: a for a in d["por_anio"]}
         assert anios[2025]["pagado"] == 300 and anios[2024]["devuelto"] == 500
+
+
+def test_renta_resultado_y_casillas():
+    from finanzas.importers import aeat as aeat_mod
+    portada = ("INFORMACIÓN DE LA PRESENTACIÓN DE LA DECLARACIÓN\nModelo 100 Ejercicio 2019\n"
+               "Presentación realizada el: 10-06-2020 a las 10:00:00\nExpediente/Referencia (nº registro asignado): 2019ABC\n"
+               "Número de justificante: 1001234567890\nDOMICILIACIÓN DEL IMPORTE A INGRESAR\n")
+    cuerpo = ("Rendimiento neto [(18)-(19)-(20)-(21)]\n30.000,00 0022\nSuma de gastos fiscalmente deducibles.\n5.000,00 0218\n"
+              "Cuota resultante de la autoliquidación [(587)-(588)]\n12.000,00 0595\nPagos fraccionados\n6.000,00 0604\n"
+              "Resultado de la declaración\n-250,50 0670\n")
+    j = aeat_mod.interpretar([portada, cuerpo])
+    assert (j.modelo, j.ejercicio, j.periodo) == ("100", 2019, "0A")
+    assert j.importe == aeat_mod.Decimal("-250.50") and j.resultado == "devolver"
+    assert j.casillas["rendimiento_trabajo"] == 30000 and j.casillas["gastos_actividad"] == 5000
+    assert j.casillas["cuota"] == 12000 and j.casillas["pagos_130"] == 6000

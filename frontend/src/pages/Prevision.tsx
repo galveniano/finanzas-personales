@@ -4,7 +4,7 @@ import { Plus, Settings2 } from 'lucide-react'
 import { Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { api } from '../lib/api'
 import { eur, eurK, fecha } from '../lib/format'
-import type { GastosRecientes, Prevision as Datos, SupuestosPrevision } from '../lib/tipos'
+import type { GastosRecientes, Prevision as Datos, RentaPrevista, SupuestosPrevision } from '../lib/tipos'
 import { Boton, Cabecera, Campo, Cargando, Dato, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio, num, useAccion } from '../components/ui'
 
 const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
@@ -69,7 +69,7 @@ function FormSupuestos({ s, habitualBanco, cerrar }: { s: SupuestosPrevision; ha
 
       <h3 className="mt-2 text-sm font-semibold sm:col-span-2">Gastos</h3>
       <Campo etiqueta="Gastos deducibles como autónomo (€/mes)" name="gastos_autonomo_mes" inputMode="decimal"
-        defaultValue={s.gastos_autonomo_mes} ayuda="Cuota de autónomos, gestoría, software… Solo para calcular el 130 y la renta." />
+        defaultValue={s.gastos_autonomo_mes} ayuda="Cuota de autónomos, gestoría, software… Solo para calcular el 130 y la renta. Con 0 se usa la cuota de autónomos que aparezca en el banco." />
       <Campo etiqueta="Gasto habitual (€/mes)" name="gasto_habitual_mes" inputMode="decimal" defaultValue={s.gasto_habitual_mes ?? ''}
         placeholder={habitualBanco ? `${Math.round(habitualBanco)} según el banco` : ''}
         ayuda="Lo que sale de tus cuentas cada mes. Vacío: la media de los últimos 3 meses del banco." />
@@ -114,6 +114,78 @@ function ComoGastas({ g }: { g: GastosRecientes }) {
         ) : <Vacio>Aparecerán los cargos que se repiten cada mes (Netflix, gimnasio, seguros…).</Vacio>}
       </Tarjeta>
     </div>
+  )
+}
+
+function RentaPresentada({ r }: { r: NonNullable<Datos['renta_presentada']> }) {
+  const c = r.casillas
+  const fila = (etiqueta: string, valor: number | undefined, fuerte = false) => valor === undefined ? null : (
+    <div className={`flex justify-between ${fuerte ? 'border-t border-line pt-1.5 font-medium' : ''}`}><dt className={fuerte ? '' : 'text-muted'}>{etiqueta}</dt><dd><Importe valor={valor} /></dd></div>)
+  return (
+    <Tarjeta titulo={`Renta ${r.anio} (presentada)`} accion={<Etiqueta tono="bien">Presentada</Etiqueta>}>
+      <dl className="space-y-1.5 text-sm">
+        {fila('Trabajo (nómina)', c.rendimiento_trabajo)}
+        {fila('Actividad (autónomo)', c.rendimiento_actividad)}
+        {fila('Alquiler', c.rendimiento_alquiler)}
+        {fila(`Cuota${c.base_general ? ` (${String(Math.round((c.cuota / c.base_general) * 1000) / 10).replace('.', ',')} % de media)` : ''}`, c.cuota, true)}
+        {fila('Retenido en la nómina', c.retenciones_trabajo !== undefined ? -c.retenciones_trabajo : undefined)}
+        {fila('Pagos del 130', c.pagos_130 !== undefined ? -c.pagos_130 : undefined)}
+        <div className="flex justify-between border-t border-line pt-1.5 font-semibold"><dt>{r.resultado >= 0 ? 'Pagaste' : 'Te devolvieron'}</dt><dd><Importe valor={Math.abs(r.resultado)} /></dd></div>
+      </dl>
+      {c.gastos_actividad !== undefined && <p className="mt-3 text-xs text-muted">
+        Gastos de la actividad: {eur(c.gastos_actividad)} al año{c.ss_autonomo !== undefined && `, de ellos ${eur(c.ss_autonomo)} de cuota de autónomos`}.</p>}
+    </Tarjeta>
+  )
+}
+
+const GASTOS_FUENTE: Record<string, string> = {
+  'Nómina': 'Seguridad Social', 'Autónomo': 'Cuota y gastos', 'Alquiler': 'Comunidad, seguro, IBI e intereses',
+}
+
+function LoQueGanas({ anios, cuota, origenCuota }: { anios: RentaPrevista[]; cuota: number; origenCuota: string }) {
+  const [anio, setAnio] = useState(anios[0]?.anio)
+  const r = anios.find((x) => x.anio === anio) ?? anios[0]
+  if (!r) return null
+  const mes = (v: number) => v / 12
+  return (
+    <Tarjeta className="mt-4" titulo={`Lo que ganas al mes en ${r.anio}`} accion={anios.length > 1 && (
+      <div className="flex gap-1">{anios.map((x) => (
+        <Boton key={x.anio} variante={x.anio === r.anio ? 'primario' : 'secundario'} className="px-2.5 py-1 text-xs" onClick={() => setAnio(x.anio)}>{x.anio}</Boton>
+      ))}</div>)}>
+      <Tabla>
+        <thead><tr><th>Fuente</th><th className="num">Bruto</th><th className="num">Gastos</th><th className="num">IRPF</th><th className="num">Neto</th></tr></thead>
+        <tbody>
+          {r.ingresos.fuentes.map((f) => (
+            <tr key={f.fuente}>
+              <td>{f.fuente}<div className="text-xs text-muted">{GASTOS_FUENTE[f.fuente]}</div></td>
+              <td className="num"><Importe valor={f.bruto_mes} /></td>
+              <td className="num"><Importe valor={-mes(f.gastos_anual)} /></td>
+              <td className="num"><Importe valor={-mes(f.irpf_anual)} /></td>
+              <td className="num font-medium"><Importe valor={f.neto_mes} /></td>
+            </tr>
+          ))}
+          <tr className="font-semibold">
+            <td>Total al mes</td>
+            <td className="num"><Importe valor={r.ingresos.total.bruto_mes} /></td>
+            <td className="num"><Importe valor={-mes(r.ingresos.total.gastos_anual)} /></td>
+            <td className="num"><Importe valor={-mes(r.ingresos.total.irpf_anual)} /></td>
+            <td className="num"><Importe valor={r.ingresos.total.neto_mes} /></td>
+          </tr>
+          <tr className="text-muted">
+            <td>Total al año</td>
+            <td className="num"><Importe valor={r.ingresos.total.bruto_anual} /></td>
+            <td className="num"><Importe valor={-r.ingresos.total.gastos_anual} /></td>
+            <td className="num"><Importe valor={-r.ingresos.total.irpf_anual} /></td>
+            <td className="num"><Importe valor={r.ingresos.total.neto_anual} /></td>
+          </tr>
+        </tbody>
+      </Tabla>
+      <p className="mt-3 text-xs text-muted">
+        Media del año (las pagas extra y el variable se reparten en 12). El IRPF es el de la renta completa, no solo lo retenido:
+        la nómina paga el de sus tramos, el autónomo lo que añade encima y el alquiler el resto.
+        Gastos de autónomo: {eur(cuota)} al mes ({origenCuota}).
+      </p>
+    </Tarjeta>
   )
 }
 
@@ -167,6 +239,8 @@ export default function Prevision() {
             </div>
           </Tarjeta>
 
+          <LoQueGanas anios={d.anios} cuota={d.gastos_autonomo_mes} origenCuota={d.origen_gastos_autonomo} />
+
           <Tarjeta className="mt-4" titulo="Mes a mes">
             <Tabla>
               <thead><tr><th>Mes</th><th className="num">Nómina</th><th className="num">Clientes</th><th className="num">Alquiler</th>
@@ -195,7 +269,8 @@ export default function Prevision() {
               «Pagos» son los de Planificación (la casa nueva, llamadas de capital…).</p>
           </Tarjeta>
 
-          <div className="mt-4 grid gap-4 md:grid-cols-2">
+          <div className={`mt-4 grid gap-4 md:grid-cols-2 ${d.renta_presentada ? 'xl:grid-cols-3' : ''}`}>
+            {d.renta_presentada && <RentaPresentada r={d.renta_presentada} />}
             {d.anios.map((r) => (
               <Tarjeta key={r.anio} titulo={`Renta ${r.anio} (estimada)`} accion={<Etiqueta tono={r.resultado > 0 ? 'aviso' : 'bien'}>{r.resultado > 0 ? 'A pagar' : 'A devolver'}</Etiqueta>}>
                 <dl className="space-y-1.5 text-sm">

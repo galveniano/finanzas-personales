@@ -78,3 +78,33 @@ def test_facturado_y_neto_por_anio():
         assert filas[2018]["facturado"] == 10000 and 0 < filas[2018]["neto"] < 10000 and not filas[2018]["previsto"]
         actual = filas[date.today().year]
         assert actual["previsto"] and actual["facturado"] >= 8800 * 11
+
+
+def test_bruto_y_neto_por_fuente():
+    with TestClient(app) as c:
+        c.put("/api/prevision/supuestos", json=SUPUESTOS)
+        r = c.get("/api/prevision").json()["anios"][-1]
+        ing = r["ingresos"]
+        fuentes = {x["fuente"]: x for x in ing["fuentes"]}
+        assert fuentes["Nómina"]["bruto_anual"] == 42000  # 40.000 + 5 % de variable
+        assert fuentes["Autónomo"]["gastos_anual"] == 3600  # 300 al mes
+        # El IRPF repartido entre fuentes suma la cuota de la renta
+        assert abs(sum(x["irpf_anual"] for x in ing["fuentes"]) - r["cuota"]) < 0.05
+        assert ing["total"]["neto_mes"] < ing["total"]["bruto_mes"]
+        assert all(abs(x["neto_anual"] - (x["bruto_anual"] - x["gastos_anual"] - x["irpf_anual"])) < 0.05
+                   for x in ing["fuentes"])
+
+
+def test_cuota_de_autonomos_del_banco():
+    import io
+    from datetime import date, timedelta
+    mes_pasado = date.today().replace(day=1) - timedelta(days=1)
+    with TestClient(app) as c:
+        cuenta = c.post("/api/cuentas", json={"nombre": "Cuenta cuota", "entidad": "Banco ejemplo"}).json()
+        csv = f"Fecha;Concepto;Importe;Saldo\n{mes_pasado:%d/%m/%Y};TGSS COTIZACION 0521;-310,00;1000,00\n"
+        c.post(f"/api/cuentas/{cuenta['id']}/importar", files={"fichero": ("e.csv", io.BytesIO(csv.encode()), "text/csv")})
+        c.put("/api/prevision/supuestos", json={**SUPUESTOS, "gastos_autonomo_mes": 0})
+        d = c.get("/api/prevision").json()
+        assert d["gastos_autonomo_mes"] == 310 and "banco" in d["origen_gastos_autonomo"]
+        c.put("/api/prevision/supuestos", json=SUPUESTOS)
+        assert c.get("/api/prevision").json()["gastos_autonomo_mes"] == 300  # lo puesto a mano manda

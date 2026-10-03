@@ -85,9 +85,14 @@ def resumen(s: Session = SesionDB):
     facturas, gastos = s.scalars(select(Factura)).all(), s.scalars(select(GastoAutonomo)).all()
     t = autonomo.trimestre_de(hoy)
     m303 = autonomo.calcular_303(hoy.year, t, facturas, gastos)
-    m130 = autonomo.calcular_130(hoy.year, t, facturas, gastos)
     presentadas = _presentadas(s, hoy.year)
+    m130 = autonomo.calcular_130(hoy.year, t, facturas, gastos, _presentados_130(presentadas))
     d303, d130 = presentadas.get(("303", t)), presentadas.get(("130", t))
+    # Si hay previsión, lo no presentado sale de ella, igual que en Autónomo y Previsión
+    from finanzas import prevision
+    prev = prevision.calcular(s) if prevision.leer(s).get("clientes") or prevision.leer(s).get("nomina") else None
+    p_t = (prev or {}).get("trimestres", {}).get(f"{hoy.year}-{t}")
+    renta = next((a for a in (prev or {}).get("anios", []) if a["anio"] == hoy.year), None)
     historico = s.scalars(select(Instantanea).order_by(Instantanea.fecha)).all()
     proximos = s.scalars(select(PagoPrevisto).where(~PagoPrevisto.pagado).order_by(PagoPrevisto.fecha).limit(6))
     return {
@@ -107,11 +112,17 @@ def resumen(s: Session = SesionDB):
                            for pp in proximos],
         "fiscal": {
             "trimestre": t, "anio": hoy.year,
-            "iva": {"resultado": n(d303.importe if d303 else m303.resultado), "presentado": bool(d303),
+            "iva": {"resultado": n(d303.importe) if d303 else p_t["iva"] if p_t else n(m303.resultado),
+                    "presentado": bool(d303), "previsto": bool(p_t and not d303),
                     "repercutido": n(m303.iva_repercutido),
                     "soportado": n(m303.iva_soportado_deducible), "plazo": m303.plazo},
-            "irpf": {"resultado": n(d130.importe if d130 else m130.resultado), "presentado": bool(d130),
-                     "exento": False if d130 else m130.exento, "notas": [] if d130 else m130.notas, "plazo": m130.plazo},
+            "irpf": {"resultado": n(d130.importe) if d130 else p_t["irpf"] if p_t else n(m130.resultado),
+                     "presentado": bool(d130), "previsto": bool(p_t and not d130),
+                     "exento": False if d130 else p_t["exento_130"] if p_t else m130.exento,
+                     "notas": [] if d130 or p_t else m130.notas, "plazo": m130.plazo},
+            "renta": {"anio": renta["anio"], "resultado": renta["resultado"], "cuota": renta["cuota"],
+                      "neto_mes": renta["ingresos"]["total"]["neto_mes"],
+                      "bruto_mes": renta["ingresos"]["total"]["bruto_mes"]} if renta else None,
         },
         "sync": sync.estado(s),
     }
@@ -311,11 +322,16 @@ def _casillas(d: Declaracion | None) -> dict:
         return {}
 
 
+def _presentados_130(presentadas: dict[tuple[str, int], Declaracion]) -> dict[int, tuple]:
+    """Los 130 presentados por trimestre, con su importe y casillas, para que la estimación parta de ellos."""
+    return {t: (d.importe, _casillas(d)) for (mod, t), d in presentadas.items() if mod == "130"}
+
+
 def _autonomo_por_anio(s: Session, facturas, gastos, previsto: dict) -> list[dict]:
     """Facturado y ganado neto (menos gastos e IRPF de la actividad) de cada año con facturas.
     El año en curso, si hay previsión, se completa con lo previsto."""
     from finanzas import prevision
-    cfg = prevision.leer(s)
+    cfg = prevision.resolver_clientes(s, prevision.leer(s))
     anios = sorted({x.fecha.year for x in facturas} | {int(k[:4]) for k in previsto})
     filas = []
     for anio in anios:
@@ -347,7 +363,7 @@ def ver_autonomo(anio: int | None = None, s: Session = SesionDB):
     trimestres, ingresos_declarados, ultimo_130 = [], None, None
     for t in range(1, 5):
         m303 = autonomo.calcular_303(anio, t, facturas, gastos)
-        m130 = autonomo.calcular_130(anio, t, facturas, gastos)
+        m130 = autonomo.calcular_130(anio, t, facturas, gastos, _presentados_130(presentadas))
         d303, d130 = presentadas.get(("303", t)), presentadas.get(("130", t))
         p = previsto.get(f"{anio}-{t}")
         c130 = _casillas(d130)
@@ -625,7 +641,8 @@ def listar_inmuebles(anio: int | None = None, s: Session = SesionDB):
                            "tipo_interes_anual": n(d.tipo_interes_anual), "plazo_meses": d.plazo_meses,
                            "fecha_inicio": f(d.fecha_inicio),
                            "cuota": n(cuota_mensual(d.capital_inicial, d.tipo_interes_anual, d.plazo_meses)),
-                           "pendiente": n(saldo_pendiente(d, hoy)), "intereses_anio": n(intereses_anio(d, anio))}
+                           "pendiente": n(saldo_pendiente(d, hoy)), "intereses_anio": n(intereses_anio(d, anio)),
+                           "futura": bool(d.fecha_inicio and d.fecha_inicio > hoy)}
                           for d in deudas],
             "contratos": [{"id": c.id, "inquilino": c.inquilino, "fecha_inicio": f(c.fecha_inicio),
                            "fecha_fin": f(c.fecha_fin), "renta_inicial": n(c.renta_mensual),
@@ -662,6 +679,13 @@ def crear_hipoteca(activo_id: int, datos: HipotecaIn, s: Session = SesionDB):
     _obtener(s, Activo, activo_id)
     s.add(Deuda(activo_id=activo_id, tipo="hipoteca", saldo_fecha=date.today() if datos.saldo_pendiente_manual else None,
                 **datos.model_dump()))
+    s.commit()
+    return {"ok": True}
+
+
+@router.delete("/deudas/{deuda_id}")
+def borrar_deuda(deuda_id: int, s: Session = SesionDB):
+    s.delete(_obtener(s, Deuda, deuda_id))
     s.commit()
     return {"ok": True}
 
@@ -970,8 +994,10 @@ def _estimado(s: Session, d: Declaracion, cache: dict) -> float | None:
     if not any(x.fecha.year == d.ejercicio for x in cache["f"]):
         return None
     t = int(d.periodo[0])
-    calc = autonomo.calcular_303 if d.modelo == "303" else autonomo.calcular_130
-    return n(calc(d.ejercicio, t, cache["f"], cache["g"]).resultado)
+    if d.modelo == "303":
+        return n(autonomo.calcular_303(d.ejercicio, t, cache["f"], cache["g"]).resultado)
+    previos = _presentados_130(_presentadas(s, d.ejercicio))
+    return n(autonomo.calcular_130(d.ejercicio, t, cache["f"], cache["g"], previos).resultado)
 
 
 def _declaracion(d: Declaracion, estimado: float | None) -> dict:
@@ -1031,7 +1057,9 @@ def _guardar_pdf(s: Session, contenido: bytes, nombre: str) -> str:
     d.justificante, d.resultado, d.importe, d.fecha_presentacion, d.csv = (
         j.justificante, j.resultado, j.importe, j.fecha_presentacion, j.csv)
     d.nombre_fichero, d.pdf = nombre[:200], contenido
-    if d.notas.startswith("Importado del fichero .txt"):
+    if j.casillas:
+        d.casillas = json.dumps(j.casillas)
+    if (d.notas or "").startswith("Importado del fichero .txt"):
         d.notas = ""
     s.add(d)
     s.commit()

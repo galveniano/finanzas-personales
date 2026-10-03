@@ -101,6 +101,8 @@ def calcular(session: Session, a_fecha: date | None = None) -> Patrimonio:
         p.activos.append(Linea(inv.nombre, "Inversiones", inv.nav, f"{inv.gestora} · {detalle}".lstrip(" ·")))
 
     for d in session.scalars(select(Deuda)):
+        if d.fecha_inicio and d.fecha_inicio > a_fecha:
+            continue  # hipoteca prevista, aún sin firmar
         p.pasivos.append(Linea(d.nombre, d.tipo.capitalize(), saldo_pendiente(d, a_fecha), d.entidad))
 
     return p

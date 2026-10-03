@@ -7,7 +7,7 @@ y el periodo están en la cabecera del propio modelo.
 import io
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -44,6 +44,7 @@ class Justificante:
     fecha_presentacion: date | None
     justificante: str
     csv: str
+    casillas: dict = field(default_factory=dict)
 
 
 def _importe(texto: str) -> Decimal:
@@ -84,10 +85,36 @@ def interpretar(paginas: list[str]) -> Justificante:
             resultado, signo = nombre, s
             break
     importe = Decimal("0")
+    casillas = _casillas_renta(todo) if modelo == "100" else {}
     if m := re.search(r"IMPORTE:?\s*(-?[\d.]+,\d{2})", portada, re.IGNORECASE):
         importe = abs(_importe(m.group(1))) * signo
+    elif "resultado" in casillas:
+        # La renta no trae el importe en la portada: sale de la casilla 670 (negativa si es a devolver)
+        importe = Decimal(str(casillas["resultado"]))
+        if importe < 0:
+            resultado = "devolver"
+        elif resultado in ("otro", "devolver", "compensar"):
+            resultado = "ingresar"
 
-    return Justificante(modelo, ejercicio, periodo, resultado, importe, fecha, justificante, csv)
+    return Justificante(modelo, ejercicio, periodo, resultado, importe, fecha, justificante, csv, casillas)
+
+
+# Casillas de la renta (modelo 100) que usa la app para comparar con su estimación
+CASILLAS_RENTA = {
+    "0022": "rendimiento_trabajo", "0180": "ingresos_actividad", "0186": "ss_autonomo", "0218": "gastos_actividad",
+    "0224": "rendimiento_actividad", "0156": "rendimiento_alquiler", "0155": "imputacion_inmuebles",
+    "0435": "base_general", "0460": "base_ahorro", "0595": "cuota", "0596": "retenciones_trabajo",
+    "0604": "pagos_130", "0609": "pagos_a_cuenta", "0670": "resultado",
+}
+
+
+def _casillas_renta(texto: str) -> dict:
+    """En el PDF de la renta cada importe va seguido de su número de casilla: «38.232,00 0003»."""
+    valores = {}
+    for cifra, casilla in re.findall(r"(-?[\d.]+,\d{2})\s+(\d{4})\b", texto):
+        if casilla in CASILLAS_RENTA and CASILLAS_RENTA[casilla] not in valores:
+            valores[CASILLAS_RENTA[casilla]] = float(_importe(cifra))
+    return valores
 
 
 def leer_pdf(contenido: bytes) -> Justificante:
@@ -95,7 +122,7 @@ def leer_pdf(contenido: bytes) -> Justificante:
 
     try:
         lector = PdfReader(io.BytesIO(contenido))
-        paginas = [p.extract_text() or "" for p in lector.pages[:4]]
+        paginas = [p.extract_text() or "" for p in lector.pages[:20]]
     except Exception as e:
         raise ErrorAEAT(f"No se puede leer el PDF: {e}")
     return interpretar(paginas)

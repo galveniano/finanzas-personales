@@ -97,7 +97,7 @@ export default function Panel() {
   if (error) return <ErrorCarga error={error} />
   if (!r) return null
   const maxCat = Math.max(1, ...r.gasto_categorias.map((c) => c.importe))
-  const { iva, irpf, trimestre } = r.fiscal
+  const { iva, irpf, trimestre, renta } = r.fiscal
 
   return (
     <>
@@ -117,15 +117,30 @@ export default function Panel() {
         </Tarjeta>
       </div>
 
-      <div className="mt-4 grid gap-4 md:grid-cols-2">
+      <div className={`mt-4 grid gap-4 md:grid-cols-2 ${renta ? 'xl:grid-cols-4' : ''}`}>
         <Tarjeta titulo={`IVA ${trimestre}T · modelo 303`} accion={<Etiqueta tono="aviso">{iva.plazo}</Etiqueta>}>
           <Dato etiqueta={iva.resultado >= 0 ? 'A ingresar' : 'A compensar'} valor={eur(iva.resultado)} />
-          <p className="mt-3 text-sm text-muted">{iva.presentado ? 'Ya presentado en Hacienda.' : `Estimado: repercutido ${eur(iva.repercutido)} menos soportado ${eur(iva.soportado)}.`}</p>
+          <p className="mt-3 text-sm text-muted">{iva.presentado ? 'Ya presentado en Hacienda.' : iva.previsto
+            ? 'Previsto con tus tarifas y los días del último mes.'
+            : `Estimado: repercutido ${eur(iva.repercutido)} menos soportado ${eur(iva.soportado)}.`}</p>
         </Tarjeta>
         <Tarjeta titulo={`IRPF ${trimestre}T · modelo 130`} accion={<Etiqueta tono={irpf.exento ? 'bien' : 'aviso'}>{irpf.exento ? 'Exento' : irpf.plazo}</Etiqueta>}>
           <Dato etiqueta="A ingresar" valor={irpf.exento ? 'No presentas' : eur(irpf.resultado)} />
-          {irpf.notas.map((n) => <p key={n} className="mt-3 text-sm text-muted">{n}</p>)}
+          <p className="mt-3 text-sm text-muted">{irpf.presentado ? 'Ya presentado en Hacienda.'
+            : '20 % de lo ganado en el año menos retenciones y lo ya pagado; el resto se ajusta en la renta.'}</p>
+          {irpf.notas.map((n) => <p key={n} className="mt-2 text-sm text-muted">{n}</p>)}
         </Tarjeta>
+        {renta && <>
+          <Tarjeta titulo={`Renta ${renta.anio}`} accion={<Link to="/prevision" className="text-xs font-medium text-accent">Ver previsión</Link>}>
+            <Dato etiqueta={renta.resultado >= 0 ? `A pagar en junio de ${renta.anio + 1}` : `A devolver en ${renta.anio + 1}`}
+              valor={eur(Math.abs(renta.resultado))} tono={renta.resultado > 0 ? 'neg' : undefined} />
+            <p className="mt-3 text-sm text-muted">Estimada con tu nómina, lo que facturas y el alquiler.</p>
+          </Tarjeta>
+          <Tarjeta titulo="Lo que ganas al mes">
+            <Dato etiqueta="Neto" valor={eur(renta.neto_mes)} />
+            <p className="mt-3 text-sm text-muted">De {eur(renta.bruto_mes)} brutos, tras Seguridad Social, gastos e IRPF.</p>
+          </Tarjeta>
+        </>}
       </div>
 
       <div className="mt-4 grid gap-4 lg:grid-cols-3">

@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { X } from 'lucide-react'
+import { Trash2, X } from 'lucide-react'
 import { eur } from '../lib/format'
 
 const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(' ')
@@ -73,7 +73,7 @@ export function Dato({ etiqueta, valor, nota, tono }: { etiqueta: string; valor:
 
 export function Importe({ valor, signo = false, className }: { valor: number | null | undefined; signo?: boolean; className?: string }) {
   if (valor == null) return <span className={cx('cifra text-muted', className)}>—</span>
-  const txt = eur(valor)
+  const txt = eur(Math.abs(valor) < 0.005 ? 0 : valor)  // sin «-0,00 €»
   return (
     <span className={cx('cifra whitespace-nowrap', signo && valor > 0 && 'text-pos', signo && valor < 0 && 'text-neg', className)}>
       {signo && valor > 0 ? '+' : ''}{txt}
@@ -233,4 +233,11 @@ export function Cargando() {
 
 export function ErrorCarga({ error }: { error: Error }) {
   return <Vacio>No se han podido cargar los datos: {error.message}</Vacio>
+}
+
+export function BorrarEnDosPasos({ onBorrar }: { onBorrar: () => void }) {
+  const [seguro, setSeguro] = useState(false)
+  return seguro
+    ? <Boton variante="peligro" className="px-2 py-1 text-xs" onClick={onBorrar} onBlur={() => setSeguro(false)} autoFocus>Confirmar</Boton>
+    : <Boton variante="fantasma" className="px-2 py-1" onClick={() => setSeguro(true)} aria-label="Borrar"><Trash2 size={14} /></Boton>
 }

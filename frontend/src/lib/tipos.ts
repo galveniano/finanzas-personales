@@ -19,8 +19,9 @@ export interface Resumen {
   proximos_pagos: { id: number; concepto: string; fecha: string; importe: number }[]
   fiscal: {
     trimestre: number; anio: number
-    iva: { resultado: number; presentado: boolean; repercutido: number; soportado: number; plazo: string }
-    irpf: { resultado: number; presentado: boolean; exento: boolean; notas: string[]; plazo: string }
+    iva: { resultado: number; presentado: boolean; previsto: boolean; repercutido: number; soportado: number; plazo: string }
+    irpf: { resultado: number; presentado: boolean; previsto: boolean; exento: boolean; notas: string[]; plazo: string }
+    renta: { anio: number; resultado: number; cuota: number; neto_mes: number; bruto_mes: number } | null
   }
   sync: EstadoSync
 }
@@ -79,7 +80,7 @@ export interface Inmueble {
   porcentaje_propiedad: number; valor: number; valor_detalle: string; deuda: number; equity: number
   valoraciones: { fecha: string; valor: number }[]
   hipotecas: { id: number; nombre: string; entidad: string; capital_inicial: number; tipo_interes_anual: number
-    plazo_meses: number; fecha_inicio: string | null; cuota: number; pendiente: number; intereses_anio: number }[]
+    plazo_meses: number; fecha_inicio: string | null; cuota: number; pendiente: number; intereses_anio: number; futura: boolean }[]
   contratos: { id: number; inquilino: string; fecha_inicio: string; fecha_fin: string | null; renta_inicial: number
     renta_actual: number; reduccion_pct: number; cambios: { desde: string; renta: number }[] }[]
   gastos: { id: number; fecha: string; tipo: string; importe: number; concepto: string }[]
@@ -177,9 +178,15 @@ export interface MesPrevision {
 export interface RentaPrevista {
   anio: number; rendimiento_trabajo: number; rendimiento_actividad: number; rendimiento_alquiler: number; base: number
   cuota: number; retenciones_nomina: number; retenciones_facturas: number; pagos_130: number; resultado: number; tipo_medio: number
+  ingresos: { fuentes: IngresoFuente[]; total: Omit<IngresoFuente, 'fuente'> }
+}
+export interface IngresoFuente {
+  fuente: string; bruto_anual: number; neto_anual: number; gastos_anual: number; irpf_anual: number; bruto_mes: number; neto_mes: number
 }
 export interface Prevision {
   supuestos: SupuestosPrevision; gasto_habitual_banco: number | null; liquidez_hoy: number
+  gastos_autonomo_mes: number; origen_gastos_autonomo: string
+  renta_presentada: { anio: number; resultado: number; casillas: Record<string, number> } | null
   clientes: { nombre: string; tarifa_hora: number; horas_dia: number; dias_mes: number; origen_dias: string }[]
   meses: MesPrevision[]; anios: RentaPrevista[]
 }
