@@ -151,7 +151,7 @@ export default function InversionesPrivadas() {
           {data.inversiones.map((i) => <Fondo key={i.id} inv={i} onEditar={() => setEditando(i)} />)}
         </div>
       ) : (
-        <Vacio>Añade aquí tus fondos de private equity (por ejemplo, de Concrescenta) con el compromiso y las llamadas de capital. Las pendientes salen en Planificación.</Vacio>
+        <Vacio>Añade aquí tus fondos de private equity (por ejemplo, de Concrescenta) con el compromiso y las llamadas de capital. Las pendientes salen en el Plan.</Vacio>
       )}
       <Dialogo abierto={nueva} onCerrar={() => setNueva(false)} titulo="Nuevo fondo">
         <Nueva onCerrar={() => setNueva(false)} />

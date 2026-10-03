@@ -65,7 +65,7 @@ export default function Asistente() {
         {mensajes.length > 0 && <Boton variante="secundario" onClick={() => setMensajes([])}><RotateCcw size={15} />Nueva conversación</Boton>}
       </Cabecera>
       {estado && !estado.disponible ? (
-        <Vacio>Para activar el asistente pon tu clave de OpenAI en <Link to="/conexiones" className="font-medium text-accent">Conexiones → Asistente (IA)</Link>.</Vacio>
+        <Vacio>Para activar el asistente pon tu clave de OpenAI en <Link to="/ajustes" className="font-medium text-accent">Ajustes → Asistente (IA)</Link>.</Vacio>
       ) : (
         <div className="flex min-h-[60vh] flex-col rounded-2xl border border-line bg-panel">
           <div className="flex-1 space-y-4 p-5">

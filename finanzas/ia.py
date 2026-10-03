@@ -1,6 +1,6 @@
 """Modelos de lenguaje para el asistente y para leer documentos: OpenAI o Claude (Anthropic).
 
-El proveedor, la clave y el modelo se eligen desde la app (Conexiones) y se guardan cifrados;
+El proveedor, la clave y el modelo se eligen desde la app (Ajustes) y se guardan cifrados;
 si no, se usan las variables de entorno. El resto del código no sabe qué proveedor hay detrás:
 usa `conversar` (bucle con herramientas) y `extraer` (datos estructurados).
 """
@@ -60,7 +60,7 @@ def disponible(s: Session) -> bool:
 
 def _post(cfg: ConfigIA, cuerpo: dict, transport=None) -> dict:
     if not cfg.clave:
-        raise ErrorIA(f"Falta la clave de {PROVEEDORES[cfg.proveedor]['nombre']}: ponla en Conexiones > Asistente")
+        raise ErrorIA(f"Falta la clave de {PROVEEDORES[cfg.proveedor]['nombre']}: ponla en Ajustes > Asistente")
     if cfg.proveedor == "openai":
         cabeceras = {"Authorization": f"Bearer {cfg.clave}"}
     else:

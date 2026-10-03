@@ -83,15 +83,18 @@ def resumen(s: Session = SesionDB):
     hoy = date.today()
     p = patrimonio.calcular(s, hoy)
     facturas, gastos = s.scalars(select(Factura)).all(), s.scalars(select(GastoAutonomo)).all()
-    t = autonomo.trimestre_de(hoy)
-    m303 = autonomo.calcular_303(hoy.year, t, facturas, gastos)
-    presentadas = _presentadas(s, hoy.year)
-    m130 = autonomo.calcular_130(hoy.year, t, facturas, gastos, _presentados_130(presentadas))
+    # El trimestre que toca pagar: el anterior mientras dura su plazo (hasta el 20, o el 30 de enero), si no el actual
+    anio_t, t = hoy.year, autonomo.trimestre_de(hoy)
+    if hoy.month in (1, 4, 7, 10) and hoy.day <= (30 if hoy.month == 1 else 20):
+        anio_t, t = (hoy.year - 1, 4) if t == 1 else (hoy.year, t - 1)
+    m303 = autonomo.calcular_303(anio_t, t, facturas, gastos)
+    presentadas = _presentadas(s, anio_t)
+    m130 = autonomo.calcular_130(anio_t, t, facturas, gastos, _presentados_130(presentadas))
     d303, d130 = presentadas.get(("303", t)), presentadas.get(("130", t))
     # Si hay previsión, lo no presentado sale de ella, igual que en Autónomo y Previsión
     from finanzas import prevision
     prev = prevision.calcular(s) if prevision.leer(s).get("clientes") or prevision.leer(s).get("nomina") else None
-    p_t = (prev or {}).get("trimestres", {}).get(f"{hoy.year}-{t}")
+    p_t = (prev or {}).get("trimestres", {}).get(f"{anio_t}-{t}")
     renta = next((a for a in (prev or {}).get("anios", []) if a["anio"] == hoy.year), None)
     historico = s.scalars(select(Instantanea).order_by(Instantanea.fecha)).all()
     proximos = s.scalars(select(PagoPrevisto).where(~PagoPrevisto.pagado).order_by(PagoPrevisto.fecha).limit(6))
@@ -111,7 +114,7 @@ def resumen(s: Session = SesionDB):
         "proximos_pagos": [{"id": pp.id, "concepto": pp.concepto, "fecha": f(pp.fecha), "importe": n(pp.importe)}
                            for pp in proximos],
         "fiscal": {
-            "trimestre": t, "anio": hoy.year,
+            "trimestre": t, "anio": anio_t,
             "iva": {"resultado": n(d303.importe) if d303 else p_t["iva"] if p_t else n(m303.resultado),
                     "presentado": bool(d303), "previsto": bool(p_t and not d303),
                     "repercutido": n(m303.iva_repercutido),

@@ -3,7 +3,8 @@ import { useQuery } from '@tanstack/react-query'
 import { Plus, Search, Upload } from 'lucide-react'
 import { api } from '../lib/api'
 import { eur, fecha } from '../lib/format'
-import type { Categoria, Cuenta, Movimiento } from '../lib/tipos'
+import type { Categoria, Cuenta, GastosRecientes, Movimiento, Resumen } from '../lib/tipos'
+import ComoGastas, { FlujoMensual } from '../components/Gastos'
 import CarteraIndexa from '../components/CarteraIndexa'
 import InversionesPrivadas from '../components/InversionesPrivadas'
 import { Boton, Cabecera, Campo, Cargando, Dialogo, Etiqueta, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio, num, useAccion, useAvisos } from '../components/ui'
@@ -73,6 +74,8 @@ export default function Cuentas() {
   if (!filtro.cuenta) params.set('solo_tuyas', 'true')  // las cuentas que no son tuyas, solo si las eliges
   const qs = params.toString()
   const movs = useQuery({ queryKey: ['movimientos', qs], queryFn: () => api.get<Movimiento[]>(`/movimientos${qs ? `?${qs}` : ''}`) })
+  const gastos = useQuery({ queryKey: ['gastos-recientes'], queryFn: () => api.get<GastosRecientes>('/gastos/recientes') })
+  const resumen = useQuery({ queryKey: ['resumen'], queryFn: () => api.get<Resumen>('/resumen') })
   const crear = useAccion((d: Record<string, string>) => api.post('/cuentas', { ...d, saldo: num(d.saldo) ?? 0 }).then(() => setNueva(false)), 'Cuenta creada')
   const categorizar = useAccion(({ id, cat }: { id: number; cat: string }) => api.patch(`/movimientos/${id}`, { categoria_id: cat ? Number(cat) : null }))
 
@@ -112,12 +115,14 @@ export default function Cuentas() {
               </Tarjeta>
             )
           })}
-          {!cuentas.data?.length && <Vacio>Crea tu cuenta de Sabadell o conéctala en Conexiones.</Vacio>}
+          {!cuentas.data?.length && <Vacio>Crea tu cuenta de Sabadell o conéctala en Ajustes.</Vacio>}
         </div>
       )}
 
       <CarteraIndexa />
       <InversionesPrivadas />
+      {gastos.data && <ComoGastas g={gastos.data} />}
+      {resumen.data && <FlujoMensual flujo={resumen.data.flujo_mensual} />}
 
       <Tarjeta className="mt-6" titulo="Movimientos">
         <div className="mb-4 grid gap-3 sm:grid-cols-[1fr_1fr_1.4fr]">

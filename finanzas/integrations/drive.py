@@ -134,7 +134,7 @@ def importar(s: Session, token: str, desde: str = "2024-01-01", transport=None) 
     """Revisa como mucho POR_LLAMADA ficheros nuevos o cambiados. Devuelve cuántos quedan."""
     cfg = ia.configuracion(s)
     if not cfg.lista:
-        raise ErrorDrive("Para leer facturas hace falta configurar el asistente (OpenAI o Claude) en Conexiones")
+        raise ErrorDrive("Para leer facturas hace falta configurar el asistente (OpenAI o Claude) en Ajustes")
     drive = Drive(token, transport)
     vistos = {d.drive_id: d for d in s.scalars(select(DocumentoDrive))}
     nuevos = [f for f in drive.candidatos(f"{desde}T00:00:00")

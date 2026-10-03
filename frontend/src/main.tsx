@@ -1,19 +1,17 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { HashRouter, Route, Routes } from 'react-router-dom'
+import { HashRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import './index.css'
 import Layout from './components/Layout'
 import { ProveedorAvisos } from './components/ui'
-import Panel from './pages/Panel'
+import Inicio from './pages/Inicio'
 import Cuentas from './pages/Cuentas'
-import Autonomo from './pages/Autonomo'
-import Nominas from './pages/Nominas'
+import Ingresos from './pages/Ingresos'
+import Impuestos from './pages/Impuestos'
 import Inmuebles from './pages/Inmuebles'
-import Prevision from './pages/Prevision'
-import Planificacion from './pages/Planificacion'
-import Conexiones from './pages/Conexiones'
-import Hacienda from './pages/Hacienda'
+import Plan from './pages/Plan'
+import Ajustes from './pages/Ajustes'
 import Asistente from './pages/Asistente'
 import Acceso from './components/Acceso'
 
@@ -27,16 +25,22 @@ createRoot(document.getElementById('root')!).render(
         <HashRouter>
           <Routes>
             <Route element={<Layout />}>
-              <Route index element={<Panel />} />
+              <Route index element={<Inicio />} />
               <Route path="cuentas" element={<Cuentas />} />
-              <Route path="autonomo" element={<Autonomo />} />
-              <Route path="hacienda" element={<Hacienda />} />
-              <Route path="nominas" element={<Nominas />} />
+              <Route path="ingresos" element={<Ingresos />} />
+              <Route path="impuestos" element={<Impuestos />} />
               <Route path="inmuebles" element={<Inmuebles />} />
-              <Route path="prevision" element={<Prevision />} />
-              <Route path="planificacion" element={<Planificacion />} />
-              <Route path="conexiones" element={<Conexiones />} />
+              <Route path="plan" element={<Plan />} />
+              <Route path="ajustes" element={<Ajustes />} />
               <Route path="asistente" element={<Asistente />} />
+              {/* Direcciones antiguas */}
+              <Route path="autonomo" element={<Navigate to="/ingresos" replace />} />
+              <Route path="nominas" element={<Navigate to="/ingresos?ver=nomina" replace />} />
+              <Route path="hacienda" element={<Navigate to="/impuestos" replace />} />
+              <Route path="prevision" element={<Navigate to="/plan" replace />} />
+              <Route path="planificacion" element={<Navigate to="/plan" replace />} />
+              <Route path="conexiones" element={<Navigate to="/ajustes" replace />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
             </Route>
           </Routes>
         </HashRouter>

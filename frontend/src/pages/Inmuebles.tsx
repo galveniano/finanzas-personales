@@ -1,11 +1,11 @@
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Plus, Upload } from 'lucide-react'
+import { Plus } from 'lucide-react'
 import { api } from '../lib/api'
 import { eur, fecha, hoyISO } from '../lib/format'
 import type { Inmueble } from '../lib/tipos'
-import { Barra, BorrarEnDosPasos, Boton, Cabecera, Campo, Cargando, Dato, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio, num, opc, useAccion, useAvisos } from '../components/ui'
+import { Barra, BorrarEnDosPasos, Boton, Cabecera, Campo, Cargando, Dato, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio, num, opc, useAccion } from '../components/ui'
 
 type Accion = { tipo: 'valoracion' | 'hipoteca' | 'contrato' | 'renta' | 'gasto' | 'nuevo'; inmueble?: Inmueble; contratoId?: number }
 
@@ -68,7 +68,7 @@ function Ficha({ i, abrir }: { i: Inmueble; abrir: (a: Accion) => void }) {
                   <span className="flex items-center gap-2"><Etiqueta tono={p.pagado ? 'bien' : 'neutro'}>{p.pagado ? 'Pagado' : 'Pendiente'}</Etiqueta><Importe valor={p.importe} /></span>
                 </li>
               ))}
-              {!i.pagos.length && <li className="py-2 text-sm text-muted">Añade los plazos en Planificación.</li>}
+              {!i.pagos.length && <li className="py-2 text-sm text-muted">Añade los plazos en Plan.</li>}
             </ul>
           </div>
         )}
@@ -84,7 +84,7 @@ function Ficha({ i, abrir }: { i: Inmueble; abrir: (a: Accion) => void }) {
             <Fila etiqueta="Cuota mensual" valor={h.cuota} />
             <Fila etiqueta={`Interés ${String(h.tipo_interes_anual).replace('.', ',')} %, intereses este año`} valor={h.intereses_anio} />
             {h.futura
-              ? <p className="mt-2 text-xs text-muted">Empieza el {fecha(h.fecha_inicio)}. Hasta entonces no cuenta como deuda; sus cuotas ya están en la Previsión.</p>
+              ? <p className="mt-2 text-xs text-muted">Empieza el {fecha(h.fecha_inicio)}. Hasta entonces no cuenta como deuda; sus cuotas ya cuentan en el Plan.</p>
               : <Fila etiqueta="Pendiente hoy" valor={h.pendiente} fuerte />}
           </div>
         ))}
@@ -231,20 +231,9 @@ const TITULOS: Record<Accion['tipo'], string> = {
 export default function Inmuebles() {
   const [accion, setAccion] = useState<Accion | null>(null)
   const { data, isLoading, error } = useQuery({ queryKey: ['inmuebles'], queryFn: () => api.get<{ anio: number; inmuebles: Inmueble[] }>('/inmuebles') })
-  const avisar = useAvisos()
-  const input = useRef<HTMLInputElement>(null)
-  const importar = useAccion(async (f: File) => {
-    const fd = new FormData()
-    fd.append('fichero', f)
-    const r = await api.post<{ mensajes: string[] }>('/importar/datos', fd)
-    r.mensajes.forEach((m) => avisar(m))
-  })
   return (
     <>
       <Cabecera titulo="Bienes" subtitulo="Pisos, la casa nueva, hipotecas y coche">
-        <input ref={input} type="file" accept=".json,application/json" className="hidden"
-          onChange={(e) => { const f = e.target.files?.[0]; if (f) importar.mutate(f); e.target.value = '' }} />
-        <Boton variante="secundario" onClick={() => input.current?.click()} disabled={importar.isPending}><Upload size={16} />Importar datos</Boton>
         <Boton onClick={() => setAccion({ tipo: 'nuevo' })}><Plus size={16} />Añadir</Boton>
       </Cabecera>
       {isLoading ? <Cargando /> : error ? <ErrorCarga error={error} /> :
