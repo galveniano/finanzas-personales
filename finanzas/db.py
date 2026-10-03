@@ -8,11 +8,27 @@ class Base(DeclarativeBase):
     pass
 
 
+def url_postgres(url: str) -> str:
+    """Neon y Vercel dan URLs postgres://; SQLAlchemy necesita el driver explícito."""
+    for prefijo in ("postgres://", "postgresql://"):
+        if url.startswith(prefijo):
+            return "postgresql+psycopg://" + url[len(prefijo):]
+    return url
+
+
 def make_engine(url: str | None = None):
+    if url is None and config.DATABASE_URL:
+        url = config.DATABASE_URL
     if url is None:
+        if config.EN_VERCEL:
+            raise RuntimeError("En Vercel hace falta DATABASE_URL (una base de datos Postgres). Ver README.")
         config.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         url = f"sqlite:///{config.DB_PATH}"
-    return create_engine(url, connect_args={"check_same_thread": False})
+    url = url_postgres(url)
+    if url.startswith("sqlite"):
+        return create_engine(url, connect_args={"check_same_thread": False})
+    # En funciones serverless cada instancia abre pocas conexiones y comprueba que siguen vivas
+    return create_engine(url, pool_pre_ping=True, pool_size=2, max_overflow=2, pool_recycle=300)
 
 
 engine = make_engine()

@@ -12,6 +12,8 @@ import Nominas from './pages/Nominas'
 import Inmuebles from './pages/Inmuebles'
 import Planificacion from './pages/Planificacion'
 import Conexiones from './pages/Conexiones'
+import Hacienda from './pages/Hacienda'
+import Acceso from './components/Acceso'
 
 const qc = new QueryClient({ defaultOptions: { queries: { staleTime: 30_000, retry: 1, refetchOnWindowFocus: false } } })
 
@@ -19,12 +21,14 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={qc}>
       <ProveedorAvisos>
+        <Acceso>
         <HashRouter>
           <Routes>
             <Route element={<Layout />}>
               <Route index element={<Panel />} />
               <Route path="cuentas" element={<Cuentas />} />
               <Route path="autonomo" element={<Autonomo />} />
+              <Route path="hacienda" element={<Hacienda />} />
               <Route path="nominas" element={<Nominas />} />
               <Route path="inmuebles" element={<Inmuebles />} />
               <Route path="planificacion" element={<Planificacion />} />
@@ -32,6 +36,7 @@ createRoot(document.getElementById('root')!).render(
             </Route>
           </Routes>
         </HashRouter>
+        </Acceso>
       </ProveedorAvisos>
     </QueryClientProvider>
   </StrictMode>,

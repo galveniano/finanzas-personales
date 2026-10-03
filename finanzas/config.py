@@ -18,6 +18,10 @@ def _load_dotenv(path: Path) -> None:
 
 _load_dotenv(ROOT / ".env")
 
+# En Vercel (o cualquier nube) el disco no persiste: hace falta una base de datos Postgres.
+EN_VERCEL = bool(os.environ.get("VERCEL"))
+DATABASE_URL = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL") or ""
+
 DB_PATH = Path(os.environ.get("FINANZAS_DB") or ROOT / "data" / "finanzas.db")
 if not DB_PATH.is_absolute():
     DB_PATH = ROOT / DB_PATH
@@ -30,12 +34,23 @@ CCAA = os.environ.get("CCAA", "Murcia")
 
 # Enable Banking (sincronización de Sabadell). Ver README.
 ENABLE_BANKING_APP_ID = os.environ.get("ENABLE_BANKING_APP_ID", "")
-ENABLE_BANKING_KEY = os.environ.get("ENABLE_BANKING_KEY", "")  # ruta al .pem de la aplicación
+# Ruta al .pem de la aplicación, o su contenido entero (así se guarda en Vercel)
+ENABLE_BANKING_KEY = os.environ.get("ENABLE_BANKING_KEY", "")
 ENABLE_BANKING_REDIRECT_URL = os.environ.get(
     "ENABLE_BANKING_REDIRECT_URL", "https://localhost:8000/sabadell/vuelta"
 )
 ENABLE_BANKING_BASE_URL = os.environ.get("ENABLE_BANKING_BASE_URL", "https://api.enablebanking.com")
 BANCO = os.environ.get("BANCO", "Banco Sabadell")
 
-# Cada cuántas horas sincroniza sola mientras la app está abierta (0 = nunca)
-SYNC_HORAS = float(os.environ.get("SYNC_HORAS", "6"))
+# Cada cuántas horas sincroniza sola mientras la app está abierta (0 = nunca).
+# En Vercel no hay procesos permanentes: sincroniza una tarea programada (vercel.json).
+SYNC_HORAS = 0.0 if EN_VERCEL else float(os.environ.get("SYNC_HORAS", "6"))
+# Secreto con el que Vercel llama a la tarea programada (Authorization: Bearer ...)
+CRON_SECRET = os.environ.get("CRON_SECRET", "")
+
+# Acceso con Google. Si GOOGLE_CLIENT_ID está vacío y la app corre en tu ordenador, no pide
+# iniciar sesión. En Vercel siempre lo pide.
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
+EMAILS_PERMITIDOS = {e.strip().lower() for e in os.environ.get("EMAILS_PERMITIDOS", "").split(",") if e.strip()}
+SESSION_SECRET = os.environ.get("SESSION_SECRET", "")
+AUTH_REQUERIDA = bool(GOOGLE_CLIENT_ID) or EN_VERCEL

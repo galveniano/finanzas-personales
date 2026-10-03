@@ -6,3 +6,4 @@ data/*.db
 secretos/
 *.pem
 frontend/node_modules/
+.vercel/

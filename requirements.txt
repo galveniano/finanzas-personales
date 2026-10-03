@@ -8,3 +8,5 @@ xlrd>=2.0
 pyjwt>=2.8
 cryptography>=42
 pytest>=8
+pypdf>=5
+psycopg[binary]>=3.2

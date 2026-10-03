@@ -1,17 +1,19 @@
-import { NavLink, Outlet } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
-import { Briefcase, Building2, CalendarClock, LayoutDashboard, Landmark, PlugZap, RefreshCw, Wallet } from 'lucide-react'
+import { useState } from 'react'
+import { NavLink, Outlet, useLocation } from 'react-router-dom'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Briefcase, Building2, CalendarClock, Ellipsis, LayoutDashboard, Landmark, LogOut, PlugZap, RefreshCw, Scale, Wallet } from 'lucide-react'
 import { api, esDemo } from '../lib/api'
-import type { EstadoSync } from '../lib/tipos'
+import type { EstadoAuth, EstadoSync } from '../lib/tipos'
 import { Boton, useAccion } from './ui'
 
-const secciones: { a: string; texto: string; corto?: string; icono: typeof Wallet }[] = [
-  { a: '/', texto: 'Panel', icono: LayoutDashboard },
-  { a: '/cuentas', texto: 'Cuentas', icono: Wallet },
-  { a: '/autonomo', texto: 'Autónomo', icono: Briefcase },
+const secciones: { a: string; texto: string; corto?: string; icono: typeof Wallet; movil?: boolean }[] = [
+  { a: '/', texto: 'Panel', icono: LayoutDashboard, movil: true },
+  { a: '/cuentas', texto: 'Cuentas', icono: Wallet, movil: true },
+  { a: '/autonomo', texto: 'Autónomo', icono: Briefcase, movil: true },
+  { a: '/hacienda', texto: 'Hacienda', icono: Scale, movil: true },
   { a: '/nominas', texto: 'Nóminas', icono: Landmark },
   { a: '/inmuebles', texto: 'Inmuebles', corto: 'Pisos', icono: Building2 },
-  { a: '/planificacion', texto: 'Planificación', corto: 'Planes', icono: CalendarClock },
+  { a: '/planificacion', texto: 'Planificación', corto: 'Planes', icono: CalendarClock, movil: true },
   { a: '/conexiones', texto: 'Conexiones', corto: 'Bancos', icono: PlugZap },
 ]
 
@@ -34,6 +36,56 @@ function EstadoConexiones() {
   )
 }
 
+function Sesion({ compacto }: { compacto?: boolean }) {
+  const qc = useQueryClient()
+  const { data } = useQuery({ queryKey: ['auth'], queryFn: () => api.get<EstadoAuth>('/auth/estado'), enabled: !esDemo, staleTime: Infinity })
+  if (!data?.email) return null
+  const salir = async () => { await api.post('/auth/salir'); qc.clear(); location.reload() }
+  return compacto
+    ? <button onClick={salir} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-muted"><LogOut size={18} />Salir ({data.email})</button>
+    : (
+      <div className="mt-4 flex items-center justify-between gap-2 border-t border-line px-2 pt-4 text-xs text-muted">
+        <span className="truncate" title={data.email}>{data.email}</span>
+        <button onClick={salir} aria-label="Cerrar sesión" className="rounded-lg p-1.5 hover:bg-panel-2 hover:text-ink"><LogOut size={15} /></button>
+      </div>
+    )
+}
+
+function NavMovil() {
+  const [mas, setMas] = useState(false)
+  const { pathname } = useLocation()
+  const resto = secciones.filter((x) => !x.movil)
+  const enResto = resto.some((x) => x.a === pathname)
+  const clase = (activo: boolean) => `flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-lg py-1 text-[10px] ${activo ? 'text-accent' : 'text-muted'}`
+  return (
+    <>
+      {mas && (
+        <div className="fixed inset-0 z-30 bg-black/30 md:hidden" onClick={() => setMas(false)}>
+          <div className="absolute inset-x-3 rounded-2xl border border-line bg-panel p-2 shadow-xl" style={{ bottom: 'calc(72px + env(safe-area-inset-bottom, 0px))' }}>
+            {resto.map(({ a, texto, icono: Icono }) => (
+              <NavLink key={a} to={a} onClick={() => setMas(false)}
+                className={({ isActive }) => `flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm ${isActive ? 'bg-accent-soft font-semibold text-accent' : ''}`}>
+                <Icono size={18} />{texto}
+              </NavLink>
+            ))}
+            <Sesion compacto />
+          </div>
+        </div>
+      )}
+      <nav className="fixed inset-x-0 bottom-0 z-30 flex justify-around border-t border-line bg-panel px-1 pt-1.5 md:hidden" style={{ paddingBottom: 'calc(6px + env(safe-area-inset-bottom, 0px))' }}>
+        {secciones.filter((x) => x.movil).map(({ a, texto, corto, icono: Icono }) => (
+          <NavLink key={a} to={a} end={a === '/'} onClick={() => setMas(false)} className={({ isActive }) => clase(isActive)}>
+            <Icono size={20} /><span className="max-w-full truncate">{corto ?? texto}</span>
+          </NavLink>
+        ))}
+        <button className={clase(enResto || mas)} onClick={() => setMas(!mas)} aria-expanded={mas}>
+          <Ellipsis size={20} /><span>Más</span>
+        </button>
+      </nav>
+    </>
+  )
+}
+
 export default function Layout() {
   return (
     <div className="min-h-full md:grid md:grid-cols-[232px_1fr]">
@@ -52,7 +104,8 @@ export default function Layout() {
             </NavLink>
           ))}
         </nav>
-        <p className="mt-auto px-2 text-xs leading-relaxed text-muted">Todo se guarda en tu ordenador. Las cifras fiscales son estimaciones.</p>
+        <p className="mt-auto px-2 text-xs leading-relaxed text-muted">Las cifras fiscales son estimaciones.</p>
+        <Sesion />
       </aside>
 
       <div className="min-w-0 pb-24 md:pb-0">
@@ -70,14 +123,7 @@ export default function Layout() {
         </main>
       </div>
 
-      <nav className="fixed inset-x-0 bottom-0 z-30 flex justify-around border-t border-line bg-panel px-1 pt-1.5 md:hidden" style={{ paddingBottom: 'calc(6px + env(safe-area-inset-bottom, 0px))' }}>
-        {secciones.map(({ a, texto, corto, icono: Icono }) => (
-          <NavLink key={a} to={a} end={a === '/'}
-            className={({ isActive }) => `flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-lg py-1 text-[10px] ${isActive ? 'text-accent' : 'text-muted'}`}>
-            <Icono size={20} /><span className="max-w-full truncate">{corto ?? texto}</span>
-          </NavLink>
-        ))}
-      </nav>
+      <NavMovil />
     </div>
   )
 }

@@ -3,22 +3,23 @@ from collections import defaultdict
 from datetime import date, timedelta
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from finanzas import config, db, patrimonio, sync
+from finanzas import auth, config, db, patrimonio, sync
 from finanzas.fiscal import alquiler, autonomo
 from finanzas.hipoteca import cuota_mensual, intereses_anio, saldo_pendiente
-from finanzas.importers import sabadell
+from finanzas.importers import aeat, sabadell
 from finanzas.integrations import enablebanking
 from finanzas.models import (
-    Activo, CambioRenta, Categoria, Cliente, ContratoAlquiler, Cuenta, Deuda, Factura, GastoAutonomo,
+    Activo, CambioRenta, Categoria, Cliente, ContratoAlquiler, Cuenta, Declaracion, Deuda, Factura, GastoAutonomo,
     GastoInmueble, Instantanea, Movimiento, Nomina, Objetivo, PagoPrevisto, Valoracion,
 )
 
-router = APIRouter(prefix="/api")
+router = APIRouter(prefix="/api", dependencies=[Depends(auth.requiere_sesion)])
 SesionDB = Depends(db.get_session)
 CERO = Decimal("0")
 
@@ -601,3 +602,110 @@ def actualizar_pago(pago_id: int, datos: PagoPatch, s: Session = SesionDB):
 def ver_config():
     return {"ccaa": config.CCAA, "banco": config.BANCO,
             "redirect_url": config.ENABLE_BANKING_REDIRECT_URL}
+
+
+# --- Hacienda: modelos presentados ------------------------------------------
+
+NOMBRE_MODELO = {"303": "IVA trimestral", "130": "IRPF pago fraccionado", "100": "Renta",
+                 "390": "Resumen anual IVA", "347": "Operaciones con terceros", "349": "Operaciones intracomunitarias"}
+
+
+def _estimado(s: Session, d: Declaracion, cache: dict) -> float | None:
+    """Lo que la app calcula para ese modelo y trimestre, para compararlo con lo presentado."""
+    if d.modelo not in ("303", "130") or not d.periodo.endswith("T"):
+        return None
+    if "f" not in cache:
+        cache["f"] = s.scalars(select(Factura)).all()
+        cache["g"] = s.scalars(select(GastoAutonomo)).all()
+    if not any(x.fecha.year == d.ejercicio for x in cache["f"]):
+        return None
+    t = int(d.periodo[0])
+    calc = autonomo.calcular_303 if d.modelo == "303" else autonomo.calcular_130
+    return n(calc(d.ejercicio, t, cache["f"], cache["g"]).resultado)
+
+
+def _declaracion(d: Declaracion, estimado: float | None) -> dict:
+    return {"id": d.id, "modelo": d.modelo, "nombre": NOMBRE_MODELO.get(d.modelo, f"Modelo {d.modelo}"),
+            "ejercicio": d.ejercicio, "periodo": d.periodo, "resultado": d.resultado, "importe": n(d.importe),
+            "fecha_presentacion": f(d.fecha_presentacion), "justificante": d.justificante, "csv": d.csv,
+            "tiene_pdf": bool(d.nombre_fichero), "estimado": estimado, "notas": d.notas}
+
+
+@router.get("/declaraciones")
+def ver_declaraciones(s: Session = SesionDB):
+    decl = s.scalars(select(Declaracion).order_by(Declaracion.ejercicio.desc(), Declaracion.periodo.desc(),
+                                                  Declaracion.modelo)).all()
+    cache: dict = {}
+    lista = [_declaracion(d, _estimado(s, d, cache)) for d in decl]
+    por_anio: dict[int, dict] = {}
+    for d in decl:
+        a = por_anio.setdefault(d.ejercicio, {"ejercicio": d.ejercicio, "pagado": 0.0, "devuelto": 0.0})
+        if d.importe > 0:
+            a["pagado"] += float(d.importe)
+        elif d.resultado == "devolver":
+            a["devuelto"] -= float(d.importe)
+    return {"declaraciones": lista, "por_anio": sorted(por_anio.values(), key=lambda x: -x["ejercicio"])}
+
+
+@router.post("/declaraciones/pdf")
+async def subir_declaraciones(ficheros: list[UploadFile] = File(...), s: Session = SesionDB):
+    resultados = []
+    for fichero in ficheros:
+        contenido = await fichero.read()
+        try:
+            j = aeat.leer_pdf(contenido)
+        except aeat.ErrorAEAT as e:
+            resultados.append({"fichero": fichero.filename, "ok": False, "mensaje": str(e)})
+            continue
+        d = s.scalar(select(Declaracion).where(
+            Declaracion.modelo == j.modelo, Declaracion.ejercicio == j.ejercicio,
+            Declaracion.periodo == j.periodo, Declaracion.justificante == j.justificante))
+        nueva = d is None
+        d = d or Declaracion(modelo=j.modelo, ejercicio=j.ejercicio, periodo=j.periodo, justificante=j.justificante)
+        d.resultado, d.importe, d.fecha_presentacion, d.csv = j.resultado, j.importe, j.fecha_presentacion, j.csv
+        d.nombre_fichero, d.pdf = (fichero.filename or "justificante.pdf")[:200], contenido
+        s.add(d)
+        s.commit()
+        resultados.append({"fichero": fichero.filename, "ok": True,
+                           "mensaje": f"Modelo {j.modelo} {j.periodo} {j.ejercicio}" + ("" if nueva else " (actualizado)")})
+    return {"resultados": resultados}
+
+
+class DeclaracionIn(BaseModel):
+    modelo: str
+    ejercicio: int
+    periodo: str
+    resultado: str = "ingresar"
+    importe: Decimal
+    fecha_presentacion: date | None = None
+    notas: str = ""
+
+
+@router.post("/declaraciones")
+def crear_declaracion(datos: DeclaracionIn, s: Session = SesionDB):
+    v = datos.model_dump()
+    if v["resultado"] in ("devolver", "compensar"):
+        v["importe"] = -abs(v["importe"])
+    s.add(Declaracion(**v))
+    try:
+        s.commit()
+    except IntegrityError:
+        s.rollback()
+        raise HTTPException(409, "Ya tienes esa declaración apuntada")
+    return {"ok": True}
+
+
+@router.delete("/declaraciones/{declaracion_id}")
+def borrar_declaracion(declaracion_id: int, s: Session = SesionDB):
+    s.delete(_obtener(s, Declaracion, declaracion_id))
+    s.commit()
+    return {"ok": True}
+
+
+@router.get("/declaraciones/{declaracion_id}/pdf")
+def pdf_declaracion(declaracion_id: int, s: Session = SesionDB):
+    d = _obtener(s, Declaracion, declaracion_id)
+    if not d.pdf:
+        raise HTTPException(404, "Esta declaración no tiene PDF")
+    return Response(d.pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="{d.modelo}-{d.periodo}-{d.ejercicio}.pdf"'})

@@ -85,3 +85,14 @@ export interface Planificacion {
   liquidez: number; pendiente_12_meses: number; objetivos: Objetivo[]; pagos: Pago[]
   inmuebles: { id: number; nombre: string }[]
 }
+export interface EstadoAuth { requerida: boolean; client_id: string | null; email: string | null }
+export interface Declaracion {
+  id: number; modelo: string; nombre: string; ejercicio: number; periodo: string
+  resultado: 'ingresar' | 'devolver' | 'compensar' | 'negativa' | 'cero' | 'domiciliar' | 'otro'
+  importe: number; fecha_presentacion: string | null; justificante: string; csv: string
+  tiene_pdf: boolean; estimado: number | null; notas: string
+}
+export interface Declaraciones {
+  declaraciones: Declaracion[]
+  por_anio: { ejercicio: number; pagado: number; devuelto: number }[]
+}

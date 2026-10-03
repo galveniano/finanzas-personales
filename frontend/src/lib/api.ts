@@ -8,6 +8,9 @@ export const esDemo = typeof window !== 'undefined' && !!window.__DEMO__
 
 export class ApiError extends Error {}
 
+/** Se lanza cuando la sesión de Google caduca o no existe; Acceso vuelve a pedir entrar. */
+export const SESION_CADUCADA = 'finanzas:sesion-caducada'
+
 async function peticion<T>(metodo: string, ruta: string, cuerpo?: unknown): Promise<T> {
   if (esDemo) {
     if (metodo === 'GET') {
@@ -25,6 +28,7 @@ async function peticion<T>(metodo: string, ruta: string, cuerpo?: unknown): Prom
     init.headers = { 'Content-Type': 'application/json' }
   }
   const r = await fetch(`/api${ruta}`, init)
+  if (r.status === 401 && !ruta.startsWith('/auth/')) window.dispatchEvent(new Event(SESION_CADUCADA))
   if (!r.ok) {
     let detalle = `Error ${r.status}`
     try {

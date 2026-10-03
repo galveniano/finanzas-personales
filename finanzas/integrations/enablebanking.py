@@ -39,19 +39,27 @@ def configurado() -> bool:
     return bool(config.ENABLE_BANKING_APP_ID and config.ENABLE_BANKING_KEY)
 
 
+def _leer_clave(valor: str) -> str:
+    """La clave puede ser la ruta al .pem o su contenido (en Vercel va en una variable de entorno,
+    a veces con los saltos de línea escritos como \\n)."""
+    if "-----BEGIN" in valor:
+        return valor.replace("\\n", "\n")
+    ruta = Path(valor)
+    if not ruta.is_absolute():
+        ruta = config.ROOT / ruta
+    if not valor or not ruta.is_file():
+        raise EnableBankingError(f"No encuentro la clave privada de Enable Banking en {ruta}")
+    return ruta.read_text()
+
+
 class EnableBankingClient:
     def __init__(self, app_id: str | None = None, clave_privada: str | None = None,
                  base_url: str | None = None, transport=None):
         self.app_id = app_id or config.ENABLE_BANKING_APP_ID
         if clave_privada is None:
-            ruta = Path(config.ENABLE_BANKING_KEY)
-            if not ruta.is_absolute():
-                ruta = config.ROOT / ruta
             if not self.app_id:
                 raise EnableBankingError("Falta configurar Enable Banking: ENABLE_BANKING_APP_ID en .env")
-            if not ruta.is_file():
-                raise EnableBankingError(f"No encuentro la clave privada de Enable Banking en {ruta}")
-            clave_privada = ruta.read_text()
+            clave_privada = _leer_clave(config.ENABLE_BANKING_KEY)
         self.clave_privada = clave_privada
         self.http = httpx.Client(base_url=base_url or config.ENABLE_BANKING_BASE_URL,
                                  timeout=30, transport=transport)
