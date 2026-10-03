@@ -64,6 +64,9 @@ export interface Nomina {
 export interface Nominas {
   anio: number; nominas: Nomina[]; bruto_12_meses: number | null
   totales: { bruto: number; retencion_irpf: number; seguridad_social: number; neto: number }
+  fuente: 'nominas' | 'banco' | 'ninguna'
+  estimado_banco: { neto_medio_mes: number; meses: number; bruto_anual: number; irpf_anual: number; ss_anual: number; tipo_irpf: number } | null
+  banco: { id: number; fecha: string; concepto: string; importe: number; cuenta: string }[]
 }
 export interface Rendimiento {
   anio: number; ingresos: number; gastos_limitados: number; gastos_otros: number; amortizacion: number

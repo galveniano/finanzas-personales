@@ -407,8 +407,20 @@ class NominaIn(BaseModel):
     neto: Decimal
 
 
+def _nominas_banco(s: Session) -> list[Movimiento]:
+    """Ingresos categorizados como Nómina en tus cuentas (los dos últimos años)."""
+    return s.scalars(
+        select(Movimiento).join(Cuenta, Movimiento.cuenta_id == Cuenta.id)
+        .join(Categoria, Movimiento.categoria_id == Categoria.id)
+        .where(Categoria.nombre == "Nómina", Movimiento.importe > 0, PARTE > 0,
+               Movimiento.fecha >= date.today() - timedelta(days=730))
+        .order_by(Movimiento.fecha.desc())).all()
+
+
 @router.get("/nominas")
 def listar_nominas(anio: int | None = None, s: Session = SesionDB):
+    """Las nóminas registradas mandan; si no hay, se sacan de los ingresos de nómina del banco
+    (solo se ve el neto: bruto, IRPF y Seguridad Social se estiman a partir de él)."""
     anio = anio or date.today().year
     nominas = s.scalars(select(Nomina).order_by(Nomina.fecha.desc())).all()
     del_anio = [x for x in nominas if x.fecha.year == anio]
@@ -416,8 +428,28 @@ def listar_nominas(anio: int | None = None, s: Session = SesionDB):
                for k in ("bruto", "retencion_irpf", "seguridad_social", "neto")}
     hace_un_anio = date.today() - timedelta(days=365)
     ultimos = [x for x in nominas if x.fecha > hace_un_anio]
-    return {"anio": anio, "totales": totales,
-            "bruto_12_meses": n(sum((x.bruto for x in ultimos), CERO)) if ultimos else None,
+    bruto_12 = n(sum((x.bruto for x in ultimos), CERO)) if ultimos else None
+
+    banco = _nominas_banco(s)
+    estimado, fuente = None, "nominas" if del_anio else "ninguna"
+    recientes = [m for m in banco if m.fecha > hace_un_anio]
+    if recientes:
+        meses = len({(m.fecha.year, m.fecha.month) for m in recientes})
+        neto_medio = float(sum((m.importe for m in recientes), CERO)) / meses
+        # Media de lo cobrado (con extras incluidas) como si fueran 12 pagas iguales
+        c = calc_nomina.bruto_para_neto(neto_medio, pagas=12)
+        estimado = {"neto_medio_mes": round(neto_medio, 2), "meses": meses, "bruto_anual": c.bruto_anual,
+                    "irpf_anual": c.irpf_anual, "ss_anual": c.ss_anual, "tipo_irpf": c.tipo_irpf}
+        bruto_12 = bruto_12 if ultimos else c.bruto_anual
+        cobrado = sum((m.importe for m in banco if m.fecha.year == anio), CERO)
+        if not del_anio and cobrado:
+            parte = float(cobrado) / c.neto_anual
+            totales = {"bruto": round(c.bruto_anual * parte, 2), "retencion_irpf": round(c.irpf_anual * parte, 2),
+                       "seguridad_social": round(c.ss_anual * parte, 2), "neto": n(cobrado)}
+            fuente = "banco"
+    return {"anio": anio, "totales": totales, "fuente": fuente, "bruto_12_meses": bruto_12, "estimado_banco": estimado,
+            "banco": [{"id": m.id, "fecha": f(m.fecha), "concepto": m.concepto, "importe": n(m.importe),
+                       "cuenta": m.cuenta.nombre} for m in banco],
             "nominas": [{"id": x.id, "empresa": x.empresa, "fecha": f(x.fecha), "bruto": n(x.bruto),
                          "retencion_irpf": n(x.retencion_irpf), "seguridad_social": n(x.seguridad_social),
                          "neto": n(x.neto)} for x in nominas]}
