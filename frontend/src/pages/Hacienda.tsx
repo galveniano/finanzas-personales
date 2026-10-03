@@ -34,7 +34,7 @@ export default function Hacienda() {
     const r = await api.post<{ resultados: { fichero: string; ok: boolean; mensaje: string }[] }>('/declaraciones/pdf', fd)
     const bien = r.resultados.filter((x) => x.ok)
     const mal = r.resultados.filter((x) => !x.ok)
-    if (bien.length) avisar(`${bien.length === 1 ? bien[0].mensaje : `${bien.length} justificantes`} guardado${bien.length === 1 ? '' : 's'}`)
+    if (bien.length) avisar(bien.length === 1 ? bien[0].mensaje : `${bien.length} declaraciones guardadas`)
     mal.forEach((x) => avisar(`${x.fichero}: ${x.mensaje}`, 'error'))
   })
   const crear = useAccion((v: Record<string, string>) => api.post('/declaraciones', {
@@ -44,27 +44,28 @@ export default function Hacienda() {
   const borrar = useAccion((id: number) => api.del(`/declaraciones/${id}`), 'Borrada')
 
   const elegir = (lista: FileList | null) => {
-    const pdfs = [...(lista ?? [])].filter((f) => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'))
-    if (pdfs.length) subir.mutate(pdfs)
+    const validos = [...(lista ?? [])].filter((f) => /\.(pdf|txt)$/i.test(f.name) || f.type === 'application/pdf')
+    if (validos.length) subir.mutate(validos)
   }
 
   return (
     <>
       <Cabecera titulo="Hacienda" subtitulo="Los modelos que ya has presentado: IVA, IRPF y renta">
         <Boton variante="secundario" onClick={() => setManual(true)}><Plus size={16} />A mano</Boton>
-        <Boton onClick={() => input.current?.click()} disabled={subir.isPending}><Upload size={16} />{subir.isPending ? 'Leyendo…' : 'Subir justificantes'}</Boton>
+        <Boton onClick={() => input.current?.click()} disabled={subir.isPending}><Upload size={16} />{subir.isPending ? 'Leyendo…' : 'Subir declaraciones'}</Boton>
       </Cabecera>
-      <input ref={input} type="file" accept="application/pdf,.pdf" multiple hidden onChange={(e) => { elegir(e.target.files); e.target.value = '' }} />
+      <input ref={input} type="file" accept="application/pdf,.pdf,.txt,text/plain" multiple hidden onChange={(e) => { elegir(e.target.files); e.target.value = '' }} />
 
       <div
         onDragOver={(e) => { e.preventDefault(); setArrastrando(true) }}
         onDragLeave={() => setArrastrando(false)}
         onDrop={(e) => { e.preventDefault(); setArrastrando(false); elegir(e.dataTransfer.files) }}
         className={`mb-6 rounded-2xl border-2 border-dashed px-5 py-6 text-sm transition ${arrastrando ? 'border-accent bg-accent-soft' : 'border-line'}`}>
-        <p className="font-medium">Arrastra aquí los PDF que te da la sede de la Agencia Tributaria al presentar</p>
+        <p className="font-medium">Arrastra aquí los justificantes PDF o los ficheros .txt de tus declaraciones, todos a la vez</p>
         <p className="mt-1 text-muted">
-          Se leen solos el modelo, el periodo, la fecha y el importe. Hacienda no tiene una API para particulares, así que
-          para los antiguos entra en la sede con Cl@ve, ve a <em>Mis expedientes</em> o <em>Consulta de declaraciones</em> y descarga los justificantes.
+          Se leen solos el modelo, el periodo y el importe (y del PDF, también la fecha y el CSV). Si subes el .txt y luego el
+          justificante PDF del mismo trimestre, se queda el PDF. Hacienda no tiene una API para particulares: los antiguos se
+          descargan en la sede con Cl@ve, en <em>Mis expedientes</em> o <em>Consulta de declaraciones</em>.
         </p>
       </div>
 
