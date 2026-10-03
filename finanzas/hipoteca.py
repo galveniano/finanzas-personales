@@ -53,6 +53,8 @@ def cuadro_amortizacion(deuda: Deuda) -> list[Cuota]:
 
 
 def saldo_pendiente(deuda: Deuda, a_fecha: date) -> Decimal:
+    if deuda.fecha_inicio and deuda.fecha_inicio > a_fecha:
+        return Decimal("0")  # aún no firmada: es una simulación, no una deuda
     cuadro = cuadro_amortizacion(deuda)
     if deuda.saldo_pendiente_manual is not None:
         # El saldo real que diste en una fecha; desde ahí sigue bajando con cada cuota del cuadro

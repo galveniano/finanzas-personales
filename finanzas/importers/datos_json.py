@@ -1,5 +1,7 @@
 """Carga de datos en bloque desde un fichero JSON: inmuebles, coches y sus hipotecas, contratos, gastos y
-pagos, e inversiones privadas con sus llamadas de capital. Lo que ya existe (mismo nombre) no se duplica.
+pagos, e inversiones privadas con sus llamadas de capital. Lo que ya existe (mismo nombre) no se duplica:
+de un inmueble que ya existe se actualizan sus datos de compra y catastro, sus gastos (por fecha y tipo) y su
+contrato de alquiler, para poder corregirlos volviendo a subir el fichero.
 
     {"activos": [{"nombre": "Piso", "tipo": "inmueble", "uso": "alquiler", "precio_compra": 100000,
                   "valoraciones": [...], "hipotecas": [...], "contratos": [...], "gastos": [...], "pagos": [...]}],
@@ -12,8 +14,8 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from finanzas.models import (Activo, ContratoAlquiler, Deuda, GastoInmueble, InversionPrivada, PagoPrevisto,
-                             Valoracion)
+from finanzas.models import (Activo, CambioRenta, ContratoAlquiler, Deuda, GastoInmueble, InversionPrivada,
+                             PagoPrevisto, Valoracion)
 
 TIPOS_ACTIVO = {"inmueble", "inmueble_en_construccion", "vehiculo", "otro"}
 
@@ -45,8 +47,8 @@ def _activo(s: Session, x: dict) -> str:
     nombre = str(x.get("nombre", "")).strip()[:120]
     if not nombre:
         raise ErrorDatos("Falta el nombre de un inmueble o coche")
-    if s.scalar(select(Activo).where(Activo.nombre == nombre)):
-        return f"{nombre}: ya existía, no se ha tocado"
+    if existente := s.scalar(select(Activo).where(Activo.nombre == nombre)):
+        return _actualizar(s, existente, x)
     tipo = x.get("tipo", "inmueble")
     if tipo not in TIPOS_ACTIVO:
         raise ErrorDatos(f"{nombre}: tipo {tipo!r} no válido")
@@ -68,16 +70,56 @@ def _activo(s: Session, x: dict) -> str:
                     saldo_pendiente_manual=None if manual is None else _dinero(manual),
                     saldo_fecha=_fecha(h.get("saldo_fecha")) or (date.today() if manual is not None else None)))
     for c in x.get("contratos", []):
-        s.add(ContratoAlquiler(activo_id=a.id, inquilino=str(c.get("inquilino", ""))[:120],
-                               fecha_inicio=_fecha(c.get("fecha_inicio")) or date.today(),
-                               fecha_fin=_fecha(c.get("fecha_fin")), renta_mensual=_dinero(c.get("renta_mensual")),
-                               reduccion_pct=_dinero(c.get("reduccion_pct"), "60")))
+        contrato = ContratoAlquiler(activo_id=a.id, inquilino=str(c.get("inquilino", ""))[:120],
+                                    fecha_inicio=_fecha(c.get("fecha_inicio")) or date.today(),
+                                    fecha_fin=_fecha(c.get("fecha_fin")), renta_mensual=_dinero(c.get("renta_mensual")),
+                                    reduccion_pct=_dinero(c.get("reduccion_pct"), "60"))
+        s.add(contrato)
+        s.flush()
+        _cambios(s, contrato, c)
     for g in x.get("gastos", []):
         s.add(GastoInmueble(activo_id=a.id, fecha=_fecha(g.get("fecha")) or date.today(), tipo=g.get("tipo", "otros"),
                             importe=_dinero(g.get("importe")), concepto=str(g.get("concepto", ""))))
     for p in x.get("pagos", []):
         s.add(_pago(p, activo_id=a.id))
     return f"{nombre}: añadido"
+
+
+CAMPOS_COMPRA = {"fecha_compra": _fecha, "precio_compra": _dinero, "gastos_compra": _dinero,
+                 "valor_catastral": _dinero, "valor_catastral_construccion": _dinero, "porcentaje_propiedad": _dinero}
+
+
+def _cambios(s: Session, contrato: ContratoAlquiler, c: dict) -> None:
+    ya = {x.desde for x in s.scalars(select(CambioRenta).where(CambioRenta.contrato_id == contrato.id))}
+    for cambio in c.get("cambios", []):
+        desde = _fecha(cambio.get("desde"))
+        if desde and desde not in ya:
+            s.add(CambioRenta(contrato_id=contrato.id, desde=desde, renta_mensual=_dinero(cambio.get("renta_mensual"))))
+
+
+def _actualizar(s: Session, a: Activo, x: dict) -> str:
+    """Corrige un inmueble que ya existe con lo que trae el fichero, sin duplicar nada."""
+    for campo, conv in CAMPOS_COMPRA.items():
+        if campo in x:
+            setattr(a, campo, conv(x[campo]))
+    if "notas" in x:
+        a.notas = str(x["notas"])
+    gastos = {(g.fecha, g.tipo): g for g in s.scalars(select(GastoInmueble).where(GastoInmueble.activo_id == a.id))}
+    for g in x.get("gastos", []):
+        clave = (_fecha(g.get("fecha")) or date.today(), g.get("tipo", "otros"))
+        if clave in gastos:
+            gastos[clave].importe, gastos[clave].concepto = _dinero(g.get("importe")), str(g.get("concepto", ""))
+        else:
+            s.add(GastoInmueble(activo_id=a.id, fecha=clave[0], tipo=clave[1], importe=_dinero(g.get("importe")),
+                                concepto=str(g.get("concepto", ""))))
+    contratos = s.scalars(select(ContratoAlquiler).where(ContratoAlquiler.activo_id == a.id)).all()
+    if len(contratos) == 1 and len(x.get("contratos", [])) == 1:
+        c, nuevo = contratos[0], x["contratos"][0]
+        c.fecha_inicio = _fecha(nuevo.get("fecha_inicio")) or c.fecha_inicio
+        c.renta_mensual = _dinero(nuevo.get("renta_mensual", c.renta_mensual))
+        c.reduccion_pct = _dinero(nuevo.get("reduccion_pct", c.reduccion_pct))
+        _cambios(s, c, nuevo)
+    return f"{a.nombre}: ya existía, actualizado"
 
 
 def _inversion(s: Session, x: dict) -> str:

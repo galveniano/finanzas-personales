@@ -5,7 +5,7 @@ import { Plus, Upload } from 'lucide-react'
 import { api } from '../lib/api'
 import { eur, fecha, hoyISO } from '../lib/format'
 import type { Inmueble } from '../lib/tipos'
-import { Barra, Boton, Cabecera, Campo, Cargando, Dato, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio, num, opc, useAccion, useAvisos } from '../components/ui'
+import { Barra, BorrarEnDosPasos, Boton, Cabecera, Campo, Cargando, Dato, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio, num, opc, useAccion, useAvisos } from '../components/ui'
 
 type Accion = { tipo: 'valoracion' | 'hipoteca' | 'contrato' | 'renta' | 'gasto' | 'nuevo'; inmueble?: Inmueble; contratoId?: number }
 
@@ -26,6 +26,7 @@ function Ficha({ i, abrir }: { i: Inmueble; abrir: (a: Accion) => void }) {
   const totalObra = i.pagos.reduce((s, p) => s + p.importe, 0)
   const pagado = i.pagos.filter((p) => p.pagado).reduce((s, p) => s + p.importe, 0)
   const r = i.rendimiento
+  const borrarHipoteca = useAccion((id: number) => api.del(`/deudas/${id}`), 'Hipoteca borrada')
   return (
     <Tarjeta className="mb-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -74,12 +75,17 @@ function Ficha({ i, abrir }: { i: Inmueble; abrir: (a: Accion) => void }) {
 
         {i.hipotecas.map((h) => (
           <div key={h.id}>
-            <h3 className="mb-2 text-sm font-semibold">{h.nombre} · {h.entidad}</h3>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <h3 className="text-sm font-semibold">{h.nombre} · {h.entidad}{h.futura && <> <Etiqueta tono="acento">Prevista</Etiqueta></>}</h3>
+              <BorrarEnDosPasos onBorrar={() => borrarHipoteca.mutate(h.id)} />
+            </div>
             <div className="mb-1 flex justify-between text-xs text-muted"><span>{eur(h.capital_inicial - h.pendiente)} amortizado</span><span>{eur(h.capital_inicial)}</span></div>
             <Barra valor={h.capital_inicial - h.pendiente} max={h.capital_inicial} />
             <Fila etiqueta="Cuota mensual" valor={h.cuota} />
             <Fila etiqueta={`Interés ${String(h.tipo_interes_anual).replace('.', ',')} %, intereses este año`} valor={h.intereses_anio} />
-            <Fila etiqueta="Pendiente hoy" valor={h.pendiente} fuerte />
+            {h.futura
+              ? <p className="mt-2 text-xs text-muted">Empieza el {fecha(h.fecha_inicio)}. Hasta entonces no cuenta como deuda; sus cuotas ya están en la Previsión.</p>
+              : <Fila etiqueta="Pendiente hoy" valor={h.pendiente} fuerte />}
           </div>
         ))}
 

@@ -117,26 +117,41 @@ def porcentaje_con_retencion(facturas: Iterable[Factura], anio: int) -> Decimal 
 
 
 def calcular_130(
-    anio: int, trimestre: int, facturas: Iterable[Factura], gastos: Iterable[GastoAutonomo]
+    anio: int, trimestre: int, facturas: Iterable[Factura], gastos: Iterable[GastoAutonomo],
+    presentados: dict[int, tuple[Decimal, dict]] | None = None,
 ) -> Modelo130:
     """El 130 es acumulativo: desde el 1 de enero hasta el final del trimestre,
-    restando las retenciones de las facturas y lo ya ingresado en trimestres anteriores."""
+    restando las retenciones de las facturas y lo ya ingresado en trimestres anteriores.
+
+    `presentados` son los 130 ya presentados por trimestre (importe y casillas). Lo ingresado en
+    Hacienda cuenta como pago anterior, y las casillas acumuladas del último presentado sirven de
+    punto de partida: solo se suman las facturas posteriores."""
     facturas = list(facturas)
     gastos = list(gastos)
+    presentados = presentados or {}
     pagos_previos = CERO
+    base = (CERO, CERO, CERO)  # ingresos, gastos y retenciones acumulados ya declarados
+    desde = date(anio, 1, 1)
     m = Modelo130(anio, trimestre)
     for t in range(1, trimestre + 1):
         _, fin = limites_trimestre(anio, t)
-        inicio = date(anio, 1, 1)
-        m = Modelo130(anio, t, pagos_anteriores=pagos_previos)
+        m = Modelo130(anio, t, ingresos_acumulados=base[0], gastos_acumulados=base[1],
+                      retenciones_acumuladas=base[2], pagos_anteriores=pagos_previos)
         for f in facturas:
-            if _en_rango(f.fecha, inicio, fin):
+            if _en_rango(f.fecha, desde, fin):
                 m.ingresos_acumulados += f.base
-                m.retenciones_acumuladas += f.retencion
+                m.retenciones_acumuladas += abs(f.retencion)
         for g in gastos:
-            if _en_rango(g.fecha, inicio, fin):
+            if _en_rango(g.fecha, desde, fin):
                 m.gastos_acumulados += (g.base * g.deducible_pct / 100).quantize(CENT)
-        pagos_previos += m.resultado
+        if t in presentados and t < trimestre:
+            importe, casillas = presentados[t]
+            pagos_previos += importe
+            if "ingresos" in casillas:
+                base = tuple(Decimal(str(casillas.get(k, 0))) for k in ("ingresos", "gastos", "retenciones"))
+                desde = fin
+        else:
+            pagos_previos += m.resultado
     m.porcentaje_con_retencion_anio_anterior = porcentaje_con_retencion(facturas, anio - 1)
     if m.exento:
         m.notas.append(

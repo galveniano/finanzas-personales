@@ -1,19 +1,12 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Plus, Trash2 } from 'lucide-react'
+import { Plus } from 'lucide-react'
 import { api } from '../lib/api'
 import { eur, eurK, fecha, hoyISO } from '../lib/format'
 import { Link } from 'react-router-dom'
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import type { Autonomo as Datos, Fuente, Prevision } from '../lib/tipos'
-import { Boton, Cabecera, Campo, Cargando, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio, num, opc, useAccion } from '../components/ui'
-
-function BorrarEnDosPasos({ onBorrar }: { onBorrar: () => void }) {
-  const [seguro, setSeguro] = useState(false)
-  return seguro
-    ? <Boton variante="peligro" className="px-2 py-1 text-xs" onClick={onBorrar} onBlur={() => setSeguro(false)} autoFocus>Confirmar</Boton>
-    : <Boton variante="fantasma" className="px-2 py-1" onClick={() => setSeguro(true)} aria-label="Borrar"><Trash2 size={14} /></Boton>
-}
+import { BorrarEnDosPasos, Boton, Cabecera, Campo, Cargando, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio, num, opc, useAccion } from '../components/ui'
 
 function FormFactura({ clientes, onHecho }: { clientes: string[]; onHecho: () => void }) {
   const [tipo, setTipo] = useState<'nacional' | 'extranjero'>('nacional')

@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from finanzas import ajustes
 from finanzas.fiscal import alquiler, nomina as calc_nomina
-from finanzas.hipoteca import intereses_anio
+from finanzas.hipoteca import cuadro_amortizacion, intereses_anio
 from finanzas.models import (Activo, Categoria, Cliente, ContratoAlquiler, Cuenta, Declaracion, Deuda, Factura,
                              GastoInmueble, Movimiento, PagoPrevisto)
 
@@ -115,8 +115,25 @@ def _dias_ultimo_mes(s: Session, c: dict) -> tuple[float, str] | None:
     return round(base / precio_dia, 1), ultimo
 
 
+PATRON_CUOTA_AUTONOMO = ("tgss", "seguridad social", "cotizacion autonomo", "cuota autonomo")
+
+
+def cuota_autonomo_banco(s: Session) -> float | None:
+    """Media mensual de la cuota de autónomos cargada en el banco en los últimos 3 meses completos."""
+    fin = date.today().replace(day=1)
+    inicio = (fin - timedelta(days=85)).replace(day=1)
+    movs = s.scalars(select(Movimiento).where(Movimiento.fecha >= inicio, Movimiento.fecha < fin,
+                                              Movimiento.importe < 0)).all()
+    cargos = [m for m in movs if any(p in (m.concepto or "").lower() for p in PATRON_CUOTA_AUTONOMO)]
+    if not cargos:
+        return None
+    meses = len({m.fecha.strftime("%Y-%m") for m in cargos})
+    return round(-float(sum((m.importe for m in cargos), Decimal(0))) / meses, 2)
+
+
 def resolver_clientes(s: Session, cfg: dict) -> dict:
-    """Si no pones días al mes, se usan los del último mes facturado (y si no hay facturas, 20)."""
+    """Si no pones días al mes, se usan los del último mes facturado (y si no hay facturas, 20).
+    Si no pones gastos de autónomo, se usa la cuota de autónomos que veas cargada en el banco."""
     clientes = []
     for c in cfg.get("clientes", []):
         c = dict(c)
@@ -126,7 +143,28 @@ def resolver_clientes(s: Session, cfg: dict) -> dict:
         else:
             c["origen_dias"] = "a mano"
         clientes.append(c)
-    return {**cfg, "clientes": clientes}
+    resuelto = {**cfg, "clientes": clientes, "origen_gastos_autonomo": "a mano"}
+    if not float(cfg.get("gastos_autonomo_mes") or 0):
+        cuota, origen = cuota_autonomo_banco(s), "cuota de autónomos del banco"
+        if not cuota and (ultima := ultima_renta(s)) and ultima["casillas"].get("gastos_actividad"):
+            cuota = round(ultima["casillas"]["gastos_actividad"] / 12, 2)
+            origen = f"gastos de la actividad en la renta {ultima['anio']}"
+        resuelto["gastos_autonomo_mes"] = cuota or 0
+        resuelto["origen_gastos_autonomo"] = origen if cuota else "sin datos"
+    return resuelto
+
+
+def ultima_renta(s: Session) -> dict | None:
+    """La última renta (modelo 100) presentada con sus casillas leídas del PDF."""
+    d = s.scalar(select(Declaracion).where(Declaracion.modelo == "100").order_by(Declaracion.ejercicio.desc(),
+                                                                                  Declaracion.id.desc()))
+    if not d:
+        return None
+    try:
+        casillas = json.loads(d.casillas) if d.casillas else {}
+    except ValueError:
+        casillas = {}
+    return {"anio": d.ejercicio, "resultado": float(d.importe), "casillas": casillas}
 
 
 def _escala(base: float) -> float:
@@ -198,6 +236,68 @@ def _presentado(s: Session, modelo: str, anio: int, trimestre: int) -> float | N
     return float(d.importe) if d else None
 
 
+def _casillas_130(s: Session, anio: int, trimestre: int) -> dict:
+    d = s.scalar(select(Declaracion).where(Declaracion.modelo == "130", Declaracion.ejercicio == anio,
+                                           Declaracion.periodo == f"{trimestre}T").order_by(Declaracion.id.desc()))
+    try:
+        return json.loads(d.casillas) if d and d.casillas else {}
+    except ValueError:
+        return {}
+
+
+def _facturado_por_mes(s: Session) -> dict[str, tuple[float, float, float]]:
+    """Base, IVA y retención de las facturas emitidas, por mes."""
+    meses: dict[str, list[float]] = {}
+    for x in s.scalars(select(Factura)).all():
+        fila = meses.setdefault(x.fecha.strftime("%Y-%m"), [0.0, 0.0, 0.0])
+        fila[0] += float(x.base)
+        fila[1] += float(x.cuota_iva)
+        fila[2] += abs(float(x.retencion))
+    return {k: (round(b, 2), round(i, 2), round(r, 2)) for k, (b, i, r) in meses.items()}
+
+
+def _gastos_alquiler(s: Session, anio: int) -> tuple[float, float]:
+    """Gastos del año de los pisos alquilados (sin intereses) e intereses de sus hipotecas.
+    Si el año aún no tiene gastos apuntados, se repiten los del último año que los tenga."""
+    gastos = intereses = 0.0
+    for a in s.scalars(select(Activo).where(Activo.tipo == "inmueble")):
+        if not s.scalar(select(ContratoAlquiler.id).where(ContratoAlquiler.activo_id == a.id).limit(1)):
+            continue
+        lista = [g for g in s.scalars(select(GastoInmueble).where(GastoInmueble.activo_id == a.id))
+                 if g.tipo != "intereses"]
+        anios = sorted({g.fecha.year for g in lista if g.fecha.year <= anio})
+        if anios:
+            gastos += float(sum((g.importe for g in lista if g.fecha.year == anios[-1]), Decimal(0)))
+        for d in s.scalars(select(Deuda).where(Deuda.activo_id == a.id)):
+            intereses += float(intereses_anio(d, anio))
+    return gastos, intereses
+
+
+def _ingresos(nom: dict, facturado: float, gastos_act: float, alquiler_bruto: float, gastos_alq: float,
+              intereses: float, r: dict) -> dict:
+    """Bruto y neto de cada fuente al mes. El IRPF se reparte por tramos: la nómina paga el suyo,
+    la actividad lo que añade encima y el alquiler el resto de la cuota."""
+    trabajo = r["rendimiento_trabajo"]
+    minimo = _escala(calc_nomina.MINIMO_PERSONAL)
+    irpf_trabajo = max(_escala(trabajo) - minimo, 0.0)
+    irpf_act = max(_escala(trabajo + r["rendimiento_actividad"]) - minimo, 0.0) - irpf_trabajo
+    irpf_alq = max(r["cuota"] - irpf_trabajo - irpf_act, 0.0)
+    fuentes = [
+        {"fuente": "Nómina", "bruto": nom["bruto"], "gastos": nom["ss"], "irpf": irpf_trabajo},
+        {"fuente": "Autónomo", "bruto": facturado, "gastos": gastos_act, "irpf": irpf_act},
+        {"fuente": "Alquiler", "bruto": alquiler_bruto, "gastos": gastos_alq + intereses, "irpf": irpf_alq},
+    ]
+    filas = []
+    for f_ in fuentes:
+        neto = f_["bruto"] - f_["gastos"] - f_["irpf"]
+        filas.append({"fuente": f_["fuente"], "bruto_anual": round(f_["bruto"], 2), "neto_anual": round(neto, 2),
+                      "gastos_anual": round(f_["gastos"], 2), "irpf_anual": round(f_["irpf"], 2),
+                      "bruto_mes": round(f_["bruto"] / 12, 2), "neto_mes": round(neto / 12, 2)})
+    total = {k: round(sum(x[k] for x in filas), 2) for k in ("bruto_anual", "neto_anual", "gastos_anual", "irpf_anual",
+                                                               "bruto_mes", "neto_mes")}
+    return {"fuentes": filas, "total": total}
+
+
 def calcular(s: Session, meses: int = 12) -> dict:
     supuestos = leer(s)
     cfg = resolver_clientes(s, supuestos)
@@ -211,6 +311,12 @@ def calcular(s: Session, meses: int = 12) -> dict:
     pagos = s.scalars(select(PagoPrevisto).where(~PagoPrevisto.pagado)).all()
     gastos_act_mes = float(cfg.get("gastos_autonomo_mes", 0))
 
+    reales = _facturado_por_mes(s)
+    # Las hipotecas que aún no han empezado (la de la casa nueva) no están en el gasto del banco: sus cuotas se suman
+    cuotas_futuras: dict[str, float] = {}
+    for deuda in s.scalars(select(Deuda).where(Deuda.fecha_inicio > hoy)):
+        for c in cuadro_amortizacion(deuda):
+            cuotas_futuras[c.fecha.strftime("%Y-%m")] = cuotas_futuras.get(c.fecha.strftime("%Y-%m"), 0.0) + float(c.cuota)
     tabla: dict[str, Mes] = {}
     trimestres: dict[str, dict] = {}
     resumen_anios = []
@@ -220,27 +326,34 @@ def calcular(s: Session, meses: int = 12) -> dict:
         facturado_anio = ret_anio = 0.0
         for d in _meses(date(anio, 1, 1), 12):
             m = tabla.setdefault(d.strftime("%Y-%m"), Mes(d.strftime("%Y-%m")))
-            base, iva, ret = _facturacion(cfg, d)
+            # Los meses ya cerrados con facturas usan lo facturado de verdad; el resto, las tarifas
+            base, iva, ret = reales.get(d.strftime("%Y-%m")) if d < inicio and d.strftime("%Y-%m") in reales \
+                else _facturacion(cfg, d)
             m.nomina, m.facturado, m.iva, m.retenciones = round(nom["meses"][d.month], 2), base, iva, ret
             m.cobros, m.alquiler = round(base + iva - ret, 2), round(renta_mes, 2)
             m.gastos = round(habitual, 2)
             m.pagos_previstos = round(float(sum((p.importe for p in pagos if p.fecha.strftime("%Y-%m") == m.clave),
-                                                Decimal(0))), 2)
+                                                Decimal(0))) + cuotas_futuras.get(m.clave, 0.0), 2)
             facturado_anio, ret_anio = facturado_anio + base, ret_anio + ret
             acumulado["base"] += base - gastos_act_mes
             acumulado["ret"] += ret
             if d.month % 3 == 0:  # fin de trimestre: 303 y 130 se pagan el mes siguiente
                 t = d.month // 3
                 pago = _meses(d, 2)[1]
-                iva_t = sum(_facturacion(cfg, x)[1] for x in _meses(date(anio, d.month - 2, 1), 3))
+                del_trimestre = [tabla[x.strftime("%Y-%m")] for x in _meses(date(anio, d.month - 2, 1), 3)]
+                iva_t = sum(x.iva for x in del_trimestre)
                 p130 = 0.0 if _exento_130(cfg) else max(
                     0.2 * acumulado["base"] - acumulado["ret"] - acumulado["pagos130"], 0.0)
                 real_303, real_130 = _presentado(s, "303", anio, t), _presentado(s, "130", anio, t)
                 iva_t = real_303 if real_303 is not None else iva_t
                 p130 = real_130 if real_130 is not None else p130
                 acumulado["pagos130"] += p130
+                casillas = _casillas_130(s, anio, t)
+                if "ingresos" in casillas:  # lo declarado en el 130 manda sobre lo calculado
+                    acumulado["base"] = float(casillas["ingresos"]) - float(casillas.get("gastos", 0))
+                    acumulado["ret"] = float(casillas.get("retenciones", acumulado["ret"]))
                 trimestres[f"{anio}-{t}"] = {
-                    "base": round(sum(_facturacion(cfg, x)[0] for x in _meses(date(anio, d.month - 2, 1), 3)), 2),
+                    "base": round(sum(x.facturado for x in del_trimestre), 2),
                     "iva": round(iva_t, 2), "irpf": round(p130, 2), "exento_130": _exento_130(cfg)}
                 destino = tabla.setdefault(pago.strftime("%Y-%m"), Mes(pago.strftime("%Y-%m")))
                 for concepto, importe, real in ((f"IVA {t}T (303)", iva_t, real_303), (f"IRPF {t}T (130)", p130, real_130)):
@@ -250,6 +363,9 @@ def calcular(s: Session, meses: int = 12) -> dict:
         _, alquiler_tributa = _alquiler(s, anio)
         r = _renta(cfg, nom, facturado_anio, ret_anio, acumulado["pagos130"], alquiler_tributa)
         r["anio"] = anio
+        alquiler_bruto = sum(tabla[x.strftime("%Y-%m")].alquiler for x in _meses(date(anio, 1, 1), 12))
+        r["ingresos"] = _ingresos(nom, facturado_anio, gastos_act_mes * 12, alquiler_bruto,
+                                  *_gastos_alquiler(s, anio), r)
         resumen_anios.append(r)
         junio = tabla.setdefault(f"{anio + 1}-06", Mes(f"{anio + 1}-06"))
         if r["resultado"]:
@@ -267,7 +383,9 @@ def calcular(s: Session, meses: int = 12) -> dict:
                       "pagos_previstos": m.pagos_previstos, "impuestos": m.impuestos,
                       "total_impuestos": round(sum(i["importe"] for i in m.impuestos), 2),
                       "neto": m.neto, "liquidez": round(saldo, 2)})
-    return {"supuestos": supuestos, "clientes": cfg["clientes"], "trimestres": trimestres, "gasto_habitual_banco": gasto_habitual(s), "liquidez_hoy": round(liquidez, 2),
+    return {"supuestos": supuestos, "clientes": cfg["clientes"],
+            "gastos_autonomo_mes": cfg["gastos_autonomo_mes"], "origen_gastos_autonomo": cfg["origen_gastos_autonomo"],
+            "renta_presentada": ultima_renta(s), "trimestres": trimestres, "gasto_habitual_banco": gasto_habitual(s), "liquidez_hoy": round(liquidez, 2),
             "meses": filas, "anios": [a for a in resumen_anios if a["anio"] in {d.year for d in ventana}]}
 
 

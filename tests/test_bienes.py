@@ -60,3 +60,45 @@ def test_importar_rechaza_basura_sin_guardar_nada():
         assert subir(c, malo).status_code == 400
         assert not any(i["nombre"] == "Bien A" for i in c.get("/api/inmuebles").json()["inmuebles"])
         assert c.post("/api/importar/datos", files={"fichero": ("x.json", b"no es json", "application/json")}).status_code == 400
+
+
+def test_hipoteca_prevista_no_es_deuda_y_entra_en_la_prevision():
+    from datetime import date
+    with TestClient(app) as c:
+        obra = c.post("/api/inmuebles", json={"nombre": "Obra de prueba", "tipo": "inmueble_en_construccion"}).json()
+        futuro = date(date.today().year + 1, date.today().month, 1).isoformat()
+        c.post(f"/api/inmuebles/{obra['id']}/hipotecas", json={"nombre": "Hipoteca prevista", "entidad": "Banco ejemplo",
+               "capital_inicial": 100000, "tipo_interes_anual": 3, "fecha_inicio": futuro, "plazo_meses": 240})
+        ficha = next(i for i in c.get("/api/inmuebles").json()["inmuebles"] if i["nombre"] == "Obra de prueba")
+        [h] = ficha["hipotecas"]
+        assert h["futura"] and h["pendiente"] == 0 and ficha["deuda"] == 0
+        assert "Hipoteca prevista" not in {l["nombre"] for l in c.get("/api/resumen").json()["lineas_pasivo"]}
+        c.put("/api/prevision/supuestos", json={"nomina": {"bruto_anual": 30000, "pagas": 12}})
+        meses = c.get("/api/prevision?meses=24").json()["meses"]
+        assert any(m["pagos_previstos"] >= h["cuota"] - 0.01 for m in meses)
+        c.put("/api/prevision/supuestos", json={})
+        assert c.delete(f"/api/deudas/{h['id']}").status_code == 200
+        ficha = next(i for i in c.get("/api/inmuebles").json()["inmuebles"] if i["nombre"] == "Obra de prueba")
+        assert ficha["hipotecas"] == []
+
+
+def test_reimportar_corrige_el_inmueble():
+    datos = {"activos": [{"nombre": "Piso corregible", "tipo": "inmueble", "uso": "alquiler", "precio_compra": 70000,
+                          "contratos": [{"fecha_inicio": "2023-01-01", "renta_mensual": 500}],
+                          "gastos": [{"fecha": "2019-01-01", "tipo": "comunidad", "importe": 300}]}]}
+    with TestClient(app) as c:
+        subir(c, datos)
+        datos["activos"][0].update({
+            "precio_compra": 75000, "gastos_compra": 2000, "fecha_compra": "2018-03-01", "valor_catastral": 40000,
+            "valor_catastral_construccion": 30000,
+            "contratos": [{"fecha_inicio": "2018-03-01", "renta_mensual": 450,
+                           "cambios": [{"desde": "2019-03-01", "renta_mensual": 500}]}],
+            "gastos": [{"fecha": "2019-01-01", "tipo": "comunidad", "importe": 360},
+                       {"fecha": "2019-01-01", "tipo": "ibi", "importe": 200}]})
+        assert "actualizado" in subir(c, datos).json()["mensajes"][0]
+        subir(c, datos)  # dos veces no duplica
+        piso = next(i for i in c.get("/api/inmuebles?anio=2019").json()["inmuebles"] if i["nombre"] == "Piso corregible")
+        assert piso["precio_compra"] == 75000 and piso["valor_catastral_construccion"] == 30000
+        [contrato] = piso["contratos"]
+        assert contrato["fecha_inicio"] == "2018-03-01" and contrato["renta_actual"] == 500 and len(contrato["cambios"]) == 1
+        assert piso["rendimiento"]["ingresos"] == 450 * 2 + 500 * 10
