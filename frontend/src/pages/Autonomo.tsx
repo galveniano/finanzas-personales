@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Plus, Trash2 } from 'lucide-react'
 import { api } from '../lib/api'
 import { eur, fecha, hoyISO } from '../lib/format'
-import type { Autonomo as Datos } from '../lib/tipos'
+import type { Autonomo as Datos, Fuente } from '../lib/tipos'
 import { Boton, Cabecera, Campo, Cargando, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio, num, opc, useAccion } from '../components/ui'
 
 function BorrarEnDosPasos({ onBorrar }: { onBorrar: () => void }) {
@@ -65,6 +65,21 @@ function FormGasto({ onHecho }: { onHecho: () => void }) {
   )
 }
 
+/** Resultado de un modelo: lo presentado manda; si las facturas dan otra cifra, se enseña debajo. */
+function Modelo({ nombre, valor, fuente, estimado, exento }: { nombre: string; valor: number; fuente: Fuente; estimado: number | null; exento?: boolean }) {
+  const distinto = fuente === 'presentado' && estimado !== null && Math.abs(estimado - valor) >= 1
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-2">
+        <dt className="flex items-center gap-1.5 text-muted">{nombre}
+          {fuente === 'presentado' ? <Etiqueta tono="bien">Presentado</Etiqueta> : <Etiqueta>Estimado</Etiqueta>}</dt>
+        <dd className="font-semibold">{exento ? <Etiqueta tono="bien">Exento</Etiqueta> : <Importe valor={valor} />}</dd>
+      </div>
+      {distinto && <p className="mt-0.5 text-right text-xs text-muted">Con tus facturas saldría <Importe valor={estimado} /></p>}
+    </div>
+  )
+}
+
 export default function Autonomo() {
   const actual = new Date().getFullYear()
   const [anio, setAnio] = useState(actual)
@@ -76,7 +91,9 @@ export default function Autonomo() {
 
   return (
     <>
-      <Cabecera titulo="Autónomo" subtitulo={d ? `${eur(d.total_facturado)} facturados en ${anio}` : undefined}>
+      <Cabecera titulo="Autónomo" subtitulo={d ? (d.ingresos_declarados !== null
+        ? `${eur(d.ingresos_declarados)} de ingresos declarados en ${anio} (130 hasta el ${d.ultimo_130}T)`
+        : `${eur(d.total_facturado)} facturados en ${anio}`) : undefined}>
         <Selector value={anio} onChange={(e) => setAnio(Number(e.target.value))} aria-label="Año" className="w-28">
           {[actual + 1, actual, actual - 1, actual - 2].map((a) => <option key={a} value={a}>{a}</option>)}
         </Selector>
@@ -91,15 +108,19 @@ export default function Autonomo() {
               <Tarjeta key={t.trimestre} className={t.trimestre === trimActual ? 'ring-2 ring-accent' : ''}
                 titulo={`${t.trimestre}º trimestre`} accion={<span className="text-xs text-muted">{t.plazo}</span>}>
                 <dl className="space-y-2 text-sm">
-                  <div className="flex justify-between gap-2"><dt className="text-muted">Facturado</dt><dd><Importe valor={t.base} /></dd></div>
-                  <div className="flex justify-between gap-2"><dt className="text-muted">IVA (303)</dt><dd className="font-semibold"><Importe valor={t.iva_resultado} /></dd></div>
-                  <div className="flex justify-between gap-2"><dt className="text-muted">IRPF (130)</dt>
-                    <dd className="font-semibold">{t.exento_130 ? <Etiqueta tono="bien">Exento</Etiqueta> : <Importe valor={t.irpf_resultado} />}</dd></div>
+                  <Modelo nombre="IVA (303)" valor={t.iva_resultado} fuente={t.iva_fuente} estimado={t.iva_estimado} />
+                  <Modelo nombre="IRPF (130)" valor={t.irpf_resultado} fuente={t.irpf_fuente} estimado={t.irpf_estimado} exento={t.exento_130} />
+                  {t.ingresos_acumulados !== null
+                    ? <div className="flex justify-between gap-2 border-t border-line pt-2 text-xs"><dt className="text-muted">Ingresos acumulados (130)</dt><dd><Importe valor={t.ingresos_acumulados} /></dd></div>
+                    : <div className="flex justify-between gap-2 border-t border-line pt-2 text-xs"><dt className="text-muted">Facturado</dt><dd><Importe valor={t.base} /></dd></div>}
                   <div className="flex justify-between gap-2 border-t border-line pt-2 text-xs"><dt className="text-muted">Retenciones acumuladas</dt><dd><Importe valor={t.retenciones_acumuladas} /></dd></div>
                 </dl>
               </Tarjeta>
             ))}
           </div>
+          {(d.pagado_iva !== 0 || d.pagado_irpf !== 0) && (
+            <p className="mt-3 text-sm text-muted">Presentado en Hacienda en {anio}: <Importe valor={d.pagado_iva} /> de IVA y <Importe valor={d.pagado_irpf} /> de IRPF.
+              Lo que aún no has presentado se estima con tus facturas y gastos.</p>)}
           {d.trimestres[3].notas.map((n) => <p key={n} className="mt-3 text-sm text-muted">{n}</p>)}
 
           <div className="mt-6 grid gap-4 lg:grid-cols-3">

@@ -354,6 +354,8 @@ class Declaracion(Base):
     nombre_fichero: Mapped[str] = mapped_column(String(200), default="")
     pdf: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
     notas: Mapped[str] = mapped_column(Text, default="")
+    # Casillas leídas del .txt (JSON), p. ej. ingresos y retenciones acumulados del 130
+    casillas: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class DocumentoDrive(Base):

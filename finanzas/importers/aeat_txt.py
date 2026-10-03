@@ -9,7 +9,7 @@ N negativa, D devolución, C compensar...). Los importes son campos de 17 cifras
 delante si son negativos). El fichero no prueba que se presentara: no lleva fecha, CSV ni justificante.
 """
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 
 from finanzas.importers.aeat import ErrorAEAT
@@ -23,6 +23,8 @@ SIGNO = {"ingresar": 1, "domiciliar": 1, "devolver": -1, "compensar": -1, "negat
 
 # Dónde está el resultado final en los modelos cuyo diseño conocemos: (página, nº de casilla de importe)
 RESULTADO = {"130": ("01", 19)}
+# Casillas que interesan en Autónomo (importes acumulados del año en el 130)
+CASILLAS = {"130": ("01", {"ingresos": 1, "gastos": 2, "rendimiento": 3, "pagos_anteriores": 5, "retenciones": 6})}
 # Página 01 de los modelos trimestrales: etiqueta, complementaria, tipo, NIF, apellidos, nombre, ejercicio, periodo
 INICIO_CASILLAS = 1 + 1 + 9 + 60 + 20 + 4 + 2
 
@@ -35,6 +37,7 @@ class DeclaracionTxt:
     resultado: str
     importe: Decimal
     exacto: bool  # False si el importe se ha deducido sin conocer el diseño del modelo
+    casillas: dict[str, Decimal] = field(default_factory=dict)
 
 
 def _cifra(campo: str) -> Decimal | None:
@@ -82,5 +85,11 @@ def leer(contenido: bytes) -> DeclaracionTxt:
             raise ErrorAEAT(f"No sé leer el importe del modelo {modelo} en .txt; súbelo en PDF o añádelo a mano")
         importe = _cifra(fin.group(1))
         resultado = TIPOS.get(fin.group(2), resultado)
+    casillas = {}
+    if modelo in CASILLAS and CASILLAS[modelo][0] in paginas:
+        pagina, nombres = CASILLAS[modelo]
+        valores = _casillas(paginas[pagina])
+        casillas = {k: valores[i - 1] for k, i in nombres.items() if len(valores) >= i and valores[i - 1] is not None}
     importe = abs(importe) * SIGNO.get(resultado, 1) if SIGNO.get(resultado, 1) else Decimal("0")
-    return DeclaracionTxt(modelo, ejercicio, periodo, resultado, importe.quantize(Decimal("0.01")), exacto)
+    return DeclaracionTxt(modelo, ejercicio, periodo, resultado, importe.quantize(Decimal("0.01")), exacto,
+                          casillas)

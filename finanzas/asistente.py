@@ -18,7 +18,7 @@ HERRAMIENTAS = [
      "parameters": {"type": "object", "properties": {
          "texto": {"type": "string", "description": "Texto a buscar en el concepto (vacío = todos)"},
          "limite": {"type": "integer", "description": "Máximo de movimientos (por defecto 50, máximo 300)"}}}},
-    {"name": "autonomo", "description": "Facturas emitidas, gastos y estimación de los modelos 303 y 130 de un año.",
+    {"name": "autonomo", "description": "Modelos 303 y 130 de un año: lo presentado en Hacienda (fuente 'presentado', manda) y, si no, lo estimado con facturas y gastos.",
      "parameters": {"type": "object", "properties": {"anio": {"type": "integer"}}, "required": ["anio"]}},
     {"name": "nominas", "description": "Nóminas registradas y totales de un año.",
      "parameters": {"type": "object", "properties": {"anio": {"type": "integer"}}, "required": ["anio"]}},
@@ -69,7 +69,7 @@ def _contexto(s: Session) -> str:
     r = api.resumen(s=s)
     r.pop("historico", None)
     a = api.ver_autonomo(anio=hoy.year, s=s)
-    autonomo = {k: a[k] for k in ("anio", "trimestres", "total_facturado", "por_cliente")}
+    autonomo = {k: a[k] for k in ("anio", "trimestres", "ingresos_declarados", "pagado_iva", "pagado_irpf", "total_facturado", "por_cliente")}
     n = api.listar_nominas(anio=hoy.year, s=s)
     datos = {"hoy": hoy.isoformat(), "comunidad_autonoma": config.CCAA, "resumen": r, "autonomo_este_anio": autonomo,
              "nominas_este_anio": {"totales": n["totales"], "bruto_12_meses": n.get("bruto_12_meses")},
