@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from finanzas import auth, config, db, patrimonio, sync
-from finanzas.fiscal import alquiler, autonomo
+from finanzas.fiscal import alquiler, autonomo, nomina as calc_nomina
 from finanzas.hipoteca import cuota_mensual, intereses_anio, saldo_pendiente
 from finanzas.importers import aeat, sabadell
 from finanzas.integrations import enablebanking
@@ -340,10 +340,27 @@ def listar_nominas(anio: int | None = None, s: Session = SesionDB):
     del_anio = [x for x in nominas if x.fecha.year == anio]
     totales = {k: n(sum((getattr(x, k) for x in del_anio), CERO))
                for k in ("bruto", "retencion_irpf", "seguridad_social", "neto")}
+    hace_un_anio = date.today() - timedelta(days=365)
+    ultimos = [x for x in nominas if x.fecha > hace_un_anio]
     return {"anio": anio, "totales": totales,
+            "bruto_12_meses": n(sum((x.bruto for x in ultimos), CERO)) if ultimos else None,
             "nominas": [{"id": x.id, "empresa": x.empresa, "fecha": f(x.fecha), "bruto": n(x.bruto),
                          "retencion_irpf": n(x.retencion_irpf), "seguridad_social": n(x.seguridad_social),
                          "neto": n(x.neto)} for x in nominas]}
+
+
+@router.get("/nominas/calculo")
+def calcular_nomina(bruto_anual: float | None = None, neto_mes: float | None = None, pagas: int = 14,
+                    hijos: int = 0, temporal: bool = False):
+    """De bruto anual a neto de cada mes, o el bruto que hace falta para un neto mensual."""
+    try:
+        if neto_mes is not None:
+            return calc_nomina.bruto_para_neto(neto_mes, pagas, hijos, temporal).a_dict()
+        if bruto_anual is None:
+            raise HTTPException(400, "Indica el bruto anual o el neto mensual")
+        return calc_nomina.calcular(bruto_anual, pagas, hijos, temporal).a_dict()
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @router.post("/nominas")

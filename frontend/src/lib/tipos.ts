@@ -53,7 +53,7 @@ export interface Nomina {
   seguridad_social: number; neto: number
 }
 export interface Nominas {
-  anio: number; nominas: Nomina[]
+  anio: number; nominas: Nomina[]; bruto_12_meses: number | null
   totales: { bruto: number; retencion_irpf: number; seguridad_social: number; neto: number }
 }
 export interface Rendimiento {
@@ -95,4 +95,9 @@ export interface Declaracion {
 export interface Declaraciones {
   declaraciones: Declaracion[]
   por_anio: { ejercicio: number; pagado: number; devuelto: number }[]
+}
+export interface CalculoNomina {
+  bruto_anual: number; pagas: number; tipo_irpf: number; ss_anual: number; irpf_anual: number
+  neto_anual: number; neto_mes: number; neto_paga_extra: number | null
+  meses: { mes: number; bruto: number; seguridad_social: number; irpf: number; neto: number; paga_extra: boolean }[]
 }
