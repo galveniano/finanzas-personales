@@ -13,7 +13,7 @@ const secciones: { a: string; texto: string; corto?: string; icono: typeof Walle
   { a: '/autonomo', texto: 'Autónomo', icono: Briefcase, movil: true },
   { a: '/hacienda', texto: 'Hacienda', icono: Scale, movil: true },
   { a: '/nominas', texto: 'Nóminas', icono: Landmark },
-  { a: '/inmuebles', texto: 'Inmuebles', corto: 'Pisos', icono: Building2 },
+  { a: '/inmuebles', texto: 'Bienes', corto: 'Bienes', icono: Building2 },
   { a: '/planificacion', texto: 'Planificación', corto: 'Planes', icono: CalendarClock, movil: true },
   { a: '/conexiones', texto: 'Conexiones', corto: 'Bancos', icono: PlugZap },
 ]

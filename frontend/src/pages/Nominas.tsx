@@ -29,11 +29,16 @@ export default function Nominas() {
         <Boton onClick={() => setAbierto(true)}><Plus size={16} />Nómina</Boton>
       </Cabecera>
       <Tarjeta>
+        {d.fuente === 'banco' && d.estimado_banco && (
+          <p className="mb-4 text-sm text-muted">Sacado de los ingresos de nómina de tus cuentas: el banco solo da el neto, así que
+            bruto, IRPF y Seguridad Social están estimados (unos {eur(d.estimado_banco.bruto_anual)} brutos al año,
+            {' '}{String(d.estimado_banco.tipo_irpf).replace('.', ',')} % de retención). Si registras una nómina, manda la nómina.</p>
+        )}
         <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
           <Dato etiqueta="Bruto acumulado" valor={eur(t.bruto)} />
           <Dato etiqueta="Retenido IRPF" valor={eur(t.retencion_irpf)} nota={`${tipoMedio.toFixed(2).replace('.', ',')} % de media`} />
           <Dato etiqueta="Seguridad Social" valor={eur(t.seguridad_social)} />
-          <Dato etiqueta="Neto cobrado" valor={eur(t.neto)} />
+          <Dato etiqueta="Neto cobrado" valor={eur(t.neto)} nota={d.fuente === 'banco' ? 'según el banco' : undefined} />
         </div>
       </Tarjeta>
 
@@ -57,7 +62,25 @@ export default function Nominas() {
 
       <CalculadoraSueldo brutoInicial={d.bruto_12_meses} />
 
-      <Tarjeta className="mt-4" titulo="Todas las nóminas">
+      {d.banco.length > 0 && (
+        <Tarjeta className="mt-4" titulo="Cobros de nómina en el banco">
+          <Tabla>
+            <thead><tr><th>Fecha</th><th>Concepto</th><th>Cuenta</th><th className="num">Importe</th></tr></thead>
+            <tbody>
+              {d.banco.map((m) => (
+                <tr key={m.id}>
+                  <td className="cifra whitespace-nowrap text-muted">{fecha(m.fecha)}</td>
+                  <td className="max-w-xs truncate">{m.concepto}</td>
+                  <td className="text-muted">{m.cuenta}</td>
+                  <td className="num font-medium"><Importe valor={m.importe} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </Tabla>
+        </Tarjeta>
+      )}
+
+      <Tarjeta className="mt-4" titulo="Nóminas registradas">
         {d.nominas.length ? (
           <Tabla>
             <thead><tr><th>Mes</th><th>Empresa</th><th className="num">Bruto</th><th className="num">IRPF</th><th className="num">SS</th><th className="num">Neto</th></tr></thead>
@@ -74,7 +97,7 @@ export default function Nominas() {
               ))}
             </tbody>
           </Tabla>
-        ) : <Vacio>Registra tus nóminas de Indra para saber cuánto te han retenido y estimar la renta.</Vacio>}
+        ) : <Vacio>{d.banco.length ? 'Con los cobros del banco basta; registra alguna nómina si quieres el bruto y la retención exactos.' : 'Sincroniza el banco o registra tus nóminas para saber cuánto te han retenido.'}</Vacio>}
       </Tarjeta>
 
       <Dialogo abierto={abierto} onCerrar={() => setAbierto(false)} titulo="Registrar nómina">

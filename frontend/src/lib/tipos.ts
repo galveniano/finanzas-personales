@@ -64,6 +64,9 @@ export interface Nomina {
 export interface Nominas {
   anio: number; nominas: Nomina[]; bruto_12_meses: number | null
   totales: { bruto: number; retencion_irpf: number; seguridad_social: number; neto: number }
+  fuente: 'nominas' | 'banco' | 'ninguna'
+  estimado_banco: { neto_medio_mes: number; meses: number; bruto_anual: number; irpf_anual: number; ss_anual: number; tipo_irpf: number } | null
+  banco: { id: number; fecha: string; concepto: string; importe: number; cuenta: string }[]
 }
 export interface Rendimiento {
   anio: number; ingresos: number; gastos_limitados: number; gastos_otros: number; amortizacion: number
@@ -81,6 +84,12 @@ export interface Inmueble {
   gastos: { id: number; fecha: string; tipo: string; importe: number; concepto: string }[]
   pagos: { id: number; concepto: string; fecha: string; importe: number; pagado: boolean }[]
   rendimiento: Rendimiento | null
+  rentabilidad: Rentabilidad | null; notas: string
+}
+export interface Rentabilidad {
+  renta_anual: number; gastos_anuales: number; intereses_anuales: number; cuotas_anuales: number
+  coste: number; aportado: number; bruta: number | null; neta: number | null; neta_sobre_valor: number | null
+  sobre_aportado: number | null; flujo_caja_anual: number
 }
 export interface Objetivo {
   id: number; nombre: string; tipo: string; fecha_objetivo: string | null; importe_objetivo: number
