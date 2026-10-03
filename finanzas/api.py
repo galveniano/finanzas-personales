@@ -816,27 +816,59 @@ def ver_declaraciones(s: Session = SesionDB):
     return {"declaraciones": lista, "por_anio": sorted(por_anio.values(), key=lambda x: -x["ejercicio"])}
 
 
+def _guardar_txt(s: Session, contenido: bytes, nombre: str) -> str:
+    """Declaración en .txt (formato de presentación). Si ya hay un justificante PDF de ese periodo, manda el PDF."""
+    from finanzas.importers import aeat_txt
+    t = aeat_txt.leer(contenido)
+    existentes = s.scalars(select(Declaracion).where(
+        Declaracion.modelo == t.modelo, Declaracion.ejercicio == t.ejercicio, Declaracion.periodo == t.periodo)).all()
+    texto = f"Modelo {t.modelo} {t.periodo} {t.ejercicio}"
+    if any(d.justificante for d in existentes):
+        return texto + " (ya estaba con su justificante PDF)"
+    d = existentes[0] if existentes else Declaracion(modelo=t.modelo, ejercicio=t.ejercicio, periodo=t.periodo,
+                                                     justificante="")
+    d.resultado, d.importe, d.nombre_fichero = t.resultado, t.importe, nombre[:200]
+    d.notas = "Importado del fichero .txt" + ("" if t.exacto else ": revisa el importe")
+    s.add(d)
+    s.commit()
+    return texto + (" (actualizado)" if existentes else "") + ("" if t.exacto else ", revisa el importe")
+
+
+def _guardar_pdf(s: Session, contenido: bytes, nombre: str) -> str:
+    j = aeat.leer_pdf(contenido)
+    d = s.scalar(select(Declaracion).where(
+        Declaracion.modelo == j.modelo, Declaracion.ejercicio == j.ejercicio,
+        Declaracion.periodo == j.periodo, Declaracion.justificante == j.justificante))
+    # Si ese periodo venía de un .txt, el justificante lo sustituye
+    d = d or s.scalar(select(Declaracion).where(
+        Declaracion.modelo == j.modelo, Declaracion.ejercicio == j.ejercicio,
+        Declaracion.periodo == j.periodo, Declaracion.justificante == ""))
+    nueva = d is None
+    d = d or Declaracion(modelo=j.modelo, ejercicio=j.ejercicio, periodo=j.periodo)
+    d.justificante, d.resultado, d.importe, d.fecha_presentacion, d.csv = (
+        j.justificante, j.resultado, j.importe, j.fecha_presentacion, j.csv)
+    d.nombre_fichero, d.pdf = nombre[:200], contenido
+    if d.notas.startswith("Importado del fichero .txt"):
+        d.notas = ""
+    s.add(d)
+    s.commit()
+    return f"Modelo {j.modelo} {j.periodo} {j.ejercicio}" + ("" if nueva else " (actualizado)")
+
+
 @router.post("/declaraciones/pdf")
 async def subir_declaraciones(ficheros: list[UploadFile] = File(...), s: Session = SesionDB):
+    """Justificantes PDF de la sede o ficheros .txt de la declaración, varios a la vez."""
     resultados = []
     for fichero in ficheros:
         contenido = await fichero.read()
+        nombre = fichero.filename or "declaracion"
+        es_txt = nombre.lower().endswith(".txt") or contenido.lstrip()[:2] == b"<T"
         try:
-            j = aeat.leer_pdf(contenido)
+            mensaje = _guardar_txt(s, contenido, nombre) if es_txt else _guardar_pdf(s, contenido, nombre)
+            resultados.append({"fichero": nombre, "ok": True, "mensaje": mensaje})
         except aeat.ErrorAEAT as e:
-            resultados.append({"fichero": fichero.filename, "ok": False, "mensaje": str(e)})
-            continue
-        d = s.scalar(select(Declaracion).where(
-            Declaracion.modelo == j.modelo, Declaracion.ejercicio == j.ejercicio,
-            Declaracion.periodo == j.periodo, Declaracion.justificante == j.justificante))
-        nueva = d is None
-        d = d or Declaracion(modelo=j.modelo, ejercicio=j.ejercicio, periodo=j.periodo, justificante=j.justificante)
-        d.resultado, d.importe, d.fecha_presentacion, d.csv = j.resultado, j.importe, j.fecha_presentacion, j.csv
-        d.nombre_fichero, d.pdf = (fichero.filename or "justificante.pdf")[:200], contenido
-        s.add(d)
-        s.commit()
-        resultados.append({"fichero": fichero.filename, "ok": True,
-                           "mensaje": f"Modelo {j.modelo} {j.periodo} {j.ejercicio}" + ("" if nueva else " (actualizado)")})
+            s.rollback()
+            resultados.append({"fichero": nombre, "ok": False, "mensaje": str(e)})
     return {"resultados": resultados}
 
 
