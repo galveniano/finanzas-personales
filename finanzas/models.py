@@ -1,8 +1,8 @@
 """Modelo de datos. Todos los importes en euros, con Numeric(14, 2)."""
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, Date, ForeignKey, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from finanzas.db import Base
@@ -27,6 +27,10 @@ class Cuenta(Base):
     saldo: Mapped[Decimal] = mapped_column(Dinero, default=Decimal("0"))
     saldo_fecha: Mapped[date | None] = mapped_column(Date, nullable=True)
     activa: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Conexión bancaria de la que viene (Enable Banking) y su id de cuenta en esa sesión
+    conexion_id: Mapped[int | None] = mapped_column(ForeignKey("conexiones_bancarias.id"), nullable=True)
+    uid_externo: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    ultima_sincronizacion: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     movimientos: Mapped[list["Movimiento"]] = relationship(back_populates="cuenta")
 
@@ -258,3 +262,42 @@ class PagoPrevisto(Base):
     objetivo_id: Mapped[int | None] = mapped_column(ForeignKey("objetivos.id"), nullable=True)
     activo_id: Mapped[int | None] = mapped_column(ForeignKey("activos.id"), nullable=True)
     pagado: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+# --- Sincronización ----------------------------------------------------------
+
+class ConexionBancaria(Base):
+    """Consentimiento PSD2 vía Enable Banking. Caduca (máximo 180 días) y hay que renovarlo."""
+    __tablename__ = "conexiones_bancarias"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    proveedor: Mapped[str] = mapped_column(String(30), default="enable_banking")
+    banco: Mapped[str] = mapped_column(String(80))
+    session_id: Mapped[str] = mapped_column(String(80))
+    valida_hasta: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    creada: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    activa: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class RegistroSync(Base):
+    __tablename__ = "registro_sync"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    fuente: Mapped[str] = mapped_column(String(30))  # sabadell | indexa
+    fecha: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    ok: Mapped[bool] = mapped_column(Boolean, default=True)
+    mensaje: Mapped[str] = mapped_column(Text, default="")
+
+
+class Instantanea(Base):
+    """Foto diaria del patrimonio para dibujar su evolución."""
+    __tablename__ = "instantaneas"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    fecha: Mapped[date] = mapped_column(Date, unique=True)
+    liquidez: Mapped[Decimal] = mapped_column(Dinero, default=Decimal("0"))
+    inversiones: Mapped[Decimal] = mapped_column(Dinero, default=Decimal("0"))
+    inmuebles: Mapped[Decimal] = mapped_column(Dinero, default=Decimal("0"))
+    otros: Mapped[Decimal] = mapped_column(Dinero, default=Decimal("0"))
+    deudas: Mapped[Decimal] = mapped_column(Dinero, default=Decimal("0"))
+
+    @property
+    def neto(self) -> Decimal:
+        return self.liquidez + self.inversiones + self.inmuebles + self.otros - self.deudas

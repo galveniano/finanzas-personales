@@ -1,0 +1,87 @@
+export interface Linea { nombre: string; grupo: string; importe: number; detalle: string }
+export interface UltimaSync { fecha: string; ok: boolean; mensaje: string }
+export interface EstadoSync {
+  sabadell: { configurado: boolean; conectado: boolean; valida_hasta: string | null; ultima: UltimaSync | null }
+  indexa: { configurado: boolean; ultima: UltimaSync | null }
+  cada_horas: number
+}
+export interface Resumen {
+  fecha: string; neto: number; activos: number; pasivos: number
+  grupos: { grupo: string; importe: number }[]
+  lineas_activo: Linea[]; lineas_pasivo: Linea[]
+  historico: { fecha: string; neto: number; liquidez: number; inversiones: number; inmuebles: number; deudas: number }[]
+  flujo_mensual: { mes: string; ingresos: number; gastos: number }[]
+  gasto_categorias: { categoria: string; importe: number }[]
+  proximos_pagos: { id: number; concepto: string; fecha: string; importe: number }[]
+  fiscal: {
+    trimestre: number; anio: number
+    iva: { resultado: number; repercutido: number; soportado: number; plazo: string }
+    irpf: { resultado: number; exento: boolean; notas: string[]; plazo: string }
+  }
+  sync: EstadoSync
+}
+export interface Cuenta {
+  id: number; nombre: string; entidad: string; tipo: string; iban: string; origen: string
+  saldo: number; saldo_fecha: string | null; ultima_sincronizacion: string | null
+}
+export interface Categoria { id: number; nombre: string; tipo: string; ambito: string }
+export interface Movimiento {
+  id: number; cuenta_id: number; cuenta: string; fecha: string; concepto: string
+  importe: number; saldo: number | null; categoria_id: number | null
+}
+export interface Trimestre {
+  trimestre: number; plazo: string; base: number; iva_repercutido: number; iva_soportado: number
+  iva_resultado: number; rendimiento_acumulado: number; retenciones_acumuladas: number
+  irpf_resultado: number; exento_130: boolean; notas: string[]
+}
+export interface Factura {
+  id: number; numero: string; cliente: string; fecha: string; concepto: string; base: number
+  tipo_iva: number; tipo_retencion: number; cuota_iva: number; retencion: number; total: number
+  fecha_cobro: string | null
+}
+export interface GastoAutonomo {
+  id: number; fecha: string; proveedor: string; concepto: string; categoria: string
+  base: number; tipo_iva: number; cuota_iva: number; deducible_pct: number
+}
+export interface Autonomo {
+  anio: number; trimestres: Trimestre[]; total_facturado: number
+  por_cliente: { cliente: string; base: number }[]
+  facturas: Factura[]; gastos: GastoAutonomo[]; clientes: string[]
+}
+export interface Nomina {
+  id: number; empresa: string; fecha: string; bruto: number; retencion_irpf: number
+  seguridad_social: number; neto: number
+}
+export interface Nominas {
+  anio: number; nominas: Nomina[]
+  totales: { bruto: number; retencion_irpf: number; seguridad_social: number; neto: number }
+}
+export interface Rendimiento {
+  anio: number; ingresos: number; gastos_limitados: number; gastos_otros: number; amortizacion: number
+  rendimiento_neto: number; reduccion_pct: number; reduccion: number; rendimiento_reducido: number; notas: string[]
+}
+export interface Inmueble {
+  id: number; nombre: string; tipo: string; uso: string; fecha_compra: string | null
+  precio_compra: number; gastos_compra: number; valor_catastral: number; valor_catastral_construccion: number
+  porcentaje_propiedad: number; valor: number; valor_detalle: string; deuda: number; equity: number
+  valoraciones: { fecha: string; valor: number }[]
+  hipotecas: { id: number; nombre: string; entidad: string; capital_inicial: number; tipo_interes_anual: number
+    plazo_meses: number; fecha_inicio: string | null; cuota: number; pendiente: number; intereses_anio: number }[]
+  contratos: { id: number; inquilino: string; fecha_inicio: string; fecha_fin: string | null; renta_inicial: number
+    renta_actual: number; reduccion_pct: number; cambios: { desde: string; renta: number }[] }[]
+  gastos: { id: number; fecha: string; tipo: string; importe: number; concepto: string }[]
+  pagos: { id: number; concepto: string; fecha: string; importe: number; pagado: boolean }[]
+  rendimiento: Rendimiento | null
+}
+export interface Objetivo {
+  id: number; nombre: string; tipo: string; fecha_objetivo: string | null; importe_objetivo: number
+  ahorrado: number; ahorro_mensual: number | null
+}
+export interface Pago {
+  id: number; concepto: string; fecha: string; importe: number; pagado: boolean
+  objetivo: string | null; inmueble: string | null
+}
+export interface Planificacion {
+  liquidez: number; pendiente_12_meses: number; objetivos: Objetivo[]; pagos: Pago[]
+  inmuebles: { id: number; nombre: string }[]
+}
