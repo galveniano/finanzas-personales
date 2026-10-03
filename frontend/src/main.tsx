@@ -10,6 +10,7 @@ import Cuentas from './pages/Cuentas'
 import Autonomo from './pages/Autonomo'
 import Nominas from './pages/Nominas'
 import Inmuebles from './pages/Inmuebles'
+import Prevision from './pages/Prevision'
 import Planificacion from './pages/Planificacion'
 import Conexiones from './pages/Conexiones'
 import Hacienda from './pages/Hacienda'
@@ -32,6 +33,7 @@ createRoot(document.getElementById('root')!).render(
               <Route path="hacienda" element={<Hacienda />} />
               <Route path="nominas" element={<Nominas />} />
               <Route path="inmuebles" element={<Inmuebles />} />
+              <Route path="prevision" element={<Prevision />} />
               <Route path="planificacion" element={<Planificacion />} />
               <Route path="conexiones" element={<Conexiones />} />
               <Route path="asistente" element={<Asistente />} />

@@ -3,7 +3,8 @@ pagos, e inversiones privadas con sus llamadas de capital. Lo que ya existe (mis
 
     {"activos": [{"nombre": "Piso", "tipo": "inmueble", "uso": "alquiler", "precio_compra": 100000,
                   "valoraciones": [...], "hipotecas": [...], "contratos": [...], "gastos": [...], "pagos": [...]}],
-     "inversiones": [{"nombre": "Fondo", "compromiso": 20000, "llamadas": [...]}]}
+     "inversiones": [{"nombre": "Fondo", "compromiso": 20000, "llamadas": [...]}],
+     "prevision": {"nomina": {...}, "clientes": [...]}}
 """
 from datetime import date
 from decimal import Decimal
@@ -103,6 +104,10 @@ def importar(s: Session, datos: dict) -> list[str]:
     try:
         mensajes = [_activo(s, x) for x in datos.get("activos", [])]
         mensajes += [_inversion(s, x) for x in datos.get("inversiones", [])]
+        if isinstance(datos.get("prevision"), dict):
+            from finanzas import prevision
+            prevision.guardar(s, {**prevision.leer(s), **datos["prevision"]})
+            mensajes.append("Supuestos de la previsión guardados")
         s.commit()
         return mensajes
     except Exception:

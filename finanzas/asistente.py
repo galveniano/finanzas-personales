@@ -20,7 +20,7 @@ HERRAMIENTAS = [
          "limite": {"type": "integer", "description": "Máximo de movimientos (por defecto 50, máximo 300)"}}}},
     {"name": "autonomo", "description": "Modelos 303 y 130 de un año: lo presentado en Hacienda (fuente 'presentado', manda) y, si no, lo estimado con facturas y gastos.",
      "parameters": {"type": "object", "properties": {"anio": {"type": "integer"}}, "required": ["anio"]}},
-    {"name": "nominas", "description": "Nóminas registradas y totales de un año.",
+    {"name": "nominas", "description": "Nóminas de un año: las registradas o, si no hay, los cobros de nómina del banco con bruto e IRPF estimados.",
      "parameters": {"type": "object", "properties": {"anio": {"type": "integer"}}, "required": ["anio"]}},
     {"name": "inmuebles", "description": "Inmuebles, hipotecas, alquiler y rendimiento fiscal del alquiler de un año.",
      "parameters": {"type": "object", "properties": {"anio": {"type": "integer"}}, "required": ["anio"]}},
@@ -31,6 +31,12 @@ HERRAMIENTAS = [
     {"name": "indexa", "description": "Cartera de Indexa Capital: fondos con su peso, valor, coste y plusvalía; "
      "rentabilidad anualizada, total y esperada, volatilidad y perfil de riesgo.",
      "parameters": {"type": "object", "properties": {}}},
+    {"name": "prevision", "description": "Previsión de los próximos meses: nómina, cobros de clientes, alquiler, gastos, "
+     "IVA, 130 y renta estimada, y liquidez mes a mes según los supuestos del usuario.",
+     "parameters": {"type": "object", "properties": {"meses": {"type": "integer", "description": "1 a 24, por defecto 12"}}}},
+    {"name": "gastos_recientes", "description": "Media mensual de ingresos, gastos y ahorro de los últimos meses, gasto por "
+     "categoría y suscripciones o recibos que se repiten cada mes.",
+     "parameters": {"type": "object", "properties": {"meses": {"type": "integer", "description": "1 a 12, por defecto 3"}}}},
     {"name": "hacienda", "description": "Modelos presentados a Hacienda (303, 130, renta) con sus importes.",
      "parameters": {"type": "object", "properties": {}}},
     {"name": "calcular_sueldo", "description": "Neto mensual a partir de un bruto anual, o bruto necesario para un neto.",
@@ -56,6 +62,10 @@ def _ejecutar(s: Session, nombre: str, args: dict):
         return api.listar_inversiones(s=s)
     if nombre == "indexa":
         return api.detalle_indexa(s=s)
+    if nombre == "gastos_recientes":
+        return api.ver_gastos_recientes(meses=int(args.get("meses") or 3), s=s)
+    if nombre == "prevision":
+        return api.ver_prevision(meses=int(args.get("meses") or 12), s=s)
     if nombre == "hacienda":
         return api.ver_declaraciones(s=s)
     if nombre == "calcular_sueldo":

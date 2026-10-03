@@ -319,11 +319,15 @@ def ver_autonomo(anio: int | None = None, s: Session = SesionDB):
     gastos = s.scalars(select(GastoAutonomo).order_by(GastoAutonomo.fecha.desc())).all()
     hay_facturas = any(x.fecha.year == anio for x in facturas)
     presentadas = _presentadas(s, anio)
+    # Lo no presentado se estima con la previsión (sueldo, tarifas y días del último mes) si está configurada
+    from finanzas import prevision
+    previsto = prevision.calcular(s)["trimestres"] if prevision.leer(s).get("clientes") else {}
     trimestres, ingresos_declarados, ultimo_130 = [], None, None
     for t in range(1, 5):
         m303 = autonomo.calcular_303(anio, t, facturas, gastos)
         m130 = autonomo.calcular_130(anio, t, facturas, gastos)
         d303, d130 = presentadas.get(("303", t)), presentadas.get(("130", t))
+        p = previsto.get(f"{anio}-{t}")
         c130 = _casillas(d130)
         if "ingresos" in c130:
             ingresos_declarados, ultimo_130 = c130["ingresos"], t
@@ -331,16 +335,18 @@ def ver_autonomo(anio: int | None = None, s: Session = SesionDB):
             "trimestre": t, "plazo": m303.plazo,
             "base": n(m303.base_repercutida), "iva_repercutido": n(m303.iva_repercutido),
             "iva_soportado": n(m303.iva_soportado_deducible),
-            "iva_resultado": n(d303.importe) if d303 else n(m303.resultado),
-            "iva_fuente": "presentado" if d303 else "estimado",
+            "iva_resultado": n(d303.importe) if d303 else p["iva"] if p else n(m303.resultado),
+            "iva_fuente": "presentado" if d303 else "previsto" if p else "estimado",
             "iva_estimado": n(m303.resultado) if hay_facturas else None,
             "ingresos_acumulados": c130.get("ingresos"),
             "rendimiento_acumulado": c130.get("rendimiento", n(m130.rendimiento_neto)),
             "retenciones_acumuladas": c130.get("retenciones", n(m130.retenciones_acumuladas)),
-            "irpf_resultado": n(d130.importe) if d130 else n(m130.resultado),
-            "irpf_fuente": "presentado" if d130 else "estimado",
+            "irpf_resultado": n(d130.importe) if d130 else p["irpf"] if p else n(m130.resultado),
+            "irpf_fuente": "presentado" if d130 else "previsto" if p else "estimado",
+            "base_prevista": p["base"] if p and not d303 else None,
             "irpf_estimado": n(m130.resultado) if hay_facturas else None,
-            "exento_130": False if d130 else m130.exento, "notas": [] if d130 else m130.notas,
+            "exento_130": False if d130 else p["exento_130"] if p else m130.exento,
+            "notas": [] if d130 or p else m130.notas,
         })
     pagado = {m: n(sum((d.importe for (mod, _), d in presentadas.items() if mod == m), CERO)) for m in ("303", "130")}
     del_anio = [x for x in facturas if x.fecha.year == anio]
@@ -658,6 +664,52 @@ def crear_gasto_inmueble(activo_id: int, datos: GastoInmuebleIn, s: Session = Se
     _obtener(s, Activo, activo_id)
     s.add(GastoInmueble(activo_id=activo_id, **datos.model_dump()))
     s.commit()
+    return {"ok": True}
+
+
+@router.get("/prevision")
+def ver_prevision(meses: int = 12, s: Session = SesionDB):
+    from finanzas import prevision
+    return prevision.calcular(s, max(1, min(meses, 24)))
+
+
+class ClientePrevision(BaseModel):
+    nombre: str
+    tarifa_hora: float
+    horas_dia: float = 8
+    dias_mes: float | None = None  # vacío: los del último mes facturado
+    iva: float = 21
+    retencion: float = 15
+
+
+class NominaPrevision(BaseModel):
+    empresa: str = ""
+    bruto_anual: float
+    variable_pct: float = 0
+    mes_variable: int = 3
+    pagas: int = 14
+
+
+class SupuestosPrevision(BaseModel):
+    nomina: NominaPrevision | None = None
+    clientes: list[ClientePrevision] = []
+    gastos_autonomo_mes: float = 0
+    gasto_habitual_mes: float | None = None
+    meses_sin_facturar: list[int] = []
+
+
+@router.get("/gastos/recientes")
+def ver_gastos_recientes(meses: int = 3, s: Session = SesionDB):
+    from finanzas import prevision
+    return prevision.gastos_recientes(s, max(1, min(meses, 12)))
+
+
+@router.put("/prevision/supuestos")
+def guardar_supuestos(datos: SupuestosPrevision, s: Session = SesionDB):
+    from finanzas import prevision
+    if datos.nomina and datos.nomina.pagas not in (12, 14):
+        raise HTTPException(400, "Las pagas tienen que ser 12 o 14")
+    prevision.guardar(s, datos.model_dump())
     return {"ok": True}
 
 
