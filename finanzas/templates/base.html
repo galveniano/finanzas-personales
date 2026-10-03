@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block titulo %}Finanzas{% endblock %} · Finanzas personales</title>
+  <link rel="stylesheet" href="/static/estilo.css">
+</head>
+<body>
+<nav>
+  <span class="marca">Finanzas</span>
+  {% set ruta = request.url.path %}
+  <a href="/" class="{{ 'activo' if ruta == '/' }}">Panel</a>
+  <a href="/cuentas" class="{{ 'activo' if ruta.startswith('/cuentas') }}">Cuentas</a>
+  <a href="/autonomo" class="{{ 'activo' if ruta.startswith('/autonomo') }}">Autónomo</a>
+  <a href="/nominas" class="{{ 'activo' if ruta.startswith('/nominas') }}">Nóminas</a>
+  <a href="/inmuebles" class="{{ 'activo' if ruta.startswith('/inmuebles') }}">Inmuebles</a>
+  <a href="/planificacion" class="{{ 'activo' if ruta.startswith('/planificacion') }}">Planificación</a>
+</nav>
+<main>
+  {% if msg %}<div class="aviso">{{ msg }}</div>{% endif %}
+  {% block contenido %}{% endblock %}
+</main>
+</body>
+</html>

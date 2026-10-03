@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block titulo %}Planificación{% endblock %}
+{% block contenido %}
+<h1>Planificación</h1>
+<h2>Objetivos</h2>
+<div class="rejilla">
+{% for o in objetivos %}
+  <div class="tarjeta">
+    <div class="etiqueta">{{ o.tipo }} · {{ o.fecha_objetivo|fecha }}</div>
+    <h3 style="margin-top:4px">{{ o.nombre }}</h3>
+    <div>{{ o.ahorrado|eur }} de {{ o.importe_objetivo|eur }}</div>
+    <div class="barra"><span style="width:{{ [100, (o.ahorrado / o.importe_objetivo * 100)|int]|min if o.importe_objetivo else 0 }}%"></span></div>
+    {% if o.id in ahorro_mensual %}<div class="nota">Apartar {{ ahorro_mensual[o.id]|eur }} al mes para llegar</div>{% endif %}
+  </div>
+{% else %}<p class="nota">Sin objetivos todavía.</p>{% endfor %}
+</div>
+<details><summary>Nuevo objetivo</summary>
+<form class="linea" method="post" action="/objetivos">
+  <label>Nombre<input name="nombre" required placeholder="Boda de ..."></label>
+  <label>Tipo<select name="tipo"><option>boda</option><option>viaje</option><option>casa</option><option>colchon</option><option>otro</option></select></label>
+  <label>Fecha<input type="date" name="fecha_objetivo"></label>
+  <label>Presupuesto<input name="importe_objetivo" inputmode="decimal" required></label>
+  <label>Ya ahorrado<input name="ahorrado" inputmode="decimal" value="0"></label><button>Crear</button>
+</form></details>
+
+<h2>Pagos previstos</h2>
+<div class="tarjeta tabla-scroll">
+<table>
+  <tr><th>Fecha</th><th>Concepto</th><th class="num">Importe</th><th>Estado</th></tr>
+  {% for p in pagos %}
+  <tr><td>{{ p.fecha|fecha }}</td><td>{{ p.concepto }}</td><td class="num">{{ p.importe|eur }}</td>
+    <td><form method="post" action="/pagos/{{ p.id }}/pagado"><button class="sec">{{ 'Pagado ✓' if p.pagado else 'Pendiente' }}</button></form></td></tr>
+  {% else %}<tr><td colspan="4" class="nota">Sin pagos previstos. Aquí van los plazos de la obra nueva, señales de la boda, etc.</td></tr>{% endfor %}
+</table>
+<details><summary>Añadir pago previsto</summary>
+<form class="linea" method="post" action="/pagos">
+  <label>Concepto<input name="concepto" required></label>
+  <label>Fecha<input type="date" name="fecha" required></label>
+  <label>Importe<input name="importe" inputmode="decimal" required></label>
+  <label>Objetivo<select name="objetivo_id"><option value="">—</option>{% for o in objetivos %}<option value="{{ o.id }}">{{ o.nombre }}</option>{% endfor %}</select></label>
+  <label>Inmueble<select name="activo_id"><option value="">—</option>{% for a in activos %}<option value="{{ a.id }}">{{ a.nombre }}</option>{% endfor %}</select></label>
+  <label><span>Ya pagado</span><input type="checkbox" name="pagado" value="1"></label><button>Guardar</button>
+</form></details>
+</div>
+{% endblock %}

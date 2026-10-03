@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block titulo %}Inmuebles{% endblock %}
+{% block contenido %}
+<h1>Inmuebles</h1>
+{% for f in fichas %}{% set a = f.activo %}
+<div class="tarjeta">
+  <h2 style="margin-top:0">{{ a.nombre }}</h2>
+  <div class="nota">{{ a.tipo|replace('_', ' ') }} · uso: {{ a.uso|replace('_', ' ') }} · comprado {{ a.fecha_compra|fecha }} por {{ a.precio_compra|eur }}
+    · catastral {{ a.valor_catastral|eur }} (construcción {{ a.valor_catastral_construccion|eur }}) · {{ a.porcentaje_propiedad }} % propiedad</div>
+  <p><strong>Valor actual: {{ f.valor[0]|eur }}</strong> <span class="nota">({{ f.valor[1] }})</span></p>
+
+  {% if f.deudas %}<h3>Hipoteca</h3>
+  <div class="tabla-scroll"><table><tr><th>Préstamo</th><th class="num">Capital inicial</th><th class="num">Interés</th><th class="num">Cuota teórica</th><th class="num">Pendiente hoy</th></tr>
+  {% for d, pendiente, cuota in f.deudas %}<tr><td>{{ d.nombre }} ({{ d.entidad }})</td><td class="num">{{ d.capital_inicial|eur }}</td>
+    <td class="num">{{ d.tipo_interes_anual }} %</td><td class="num">{{ cuota|eur }}</td><td class="num">{{ pendiente|eur }}</td></tr>{% endfor %}
+  </table></div>{% endif %}
+
+  {% if f.contratos %}<h3>Alquiler</h3>
+  <div class="tabla-scroll"><table><tr><th>Inquilino</th><th>Desde</th><th class="num">Renta actual</th><th>Historial</th><th class="num">Reducción IRPF</th></tr>
+  {% for c in f.contratos %}<tr><td>{{ c.inquilino or '—' }}</td><td>{{ c.fecha_inicio|fecha }}</td>
+    <td class="num">{{ c.renta_en(hoy)|eur }}</td>
+    <td class="nota">{{ c.renta_mensual|eur }} inicial{% for cr in c.cambios_renta %} · {{ cr.renta_mensual|eur }} desde {{ cr.desde|fecha }}{% endfor %}</td>
+    <td class="num">{{ c.reduccion_pct }} %</td></tr>
+  <tr><td colspan="5"><details><summary>Actualizar renta</summary>
+    <form class="linea" method="post" action="/contratos/{{ c.id }}/renta">
+      <label>Desde<input type="date" name="desde" required></label>
+      <label>Nueva renta mensual<input name="renta_mensual" inputmode="decimal" required></label><button>Guardar</button>
+    </form><p class="nota">Para subidas del mismo contrato (IPC, acuerdo). Mantiene la reducción del contrato original.</p></details></td></tr>
+  {% endfor %}</table></div>{% endif %}
+
+  {% if f.rend %}{% set r = f.rend %}<h3>Rendimiento del alquiler {{ r.anio }} (IRPF, estimado)</h3>
+  <div class="tabla-scroll"><table>
+    <tr><td>Ingresos por alquiler</td><td class="num">{{ r.ingresos|eur }}</td></tr>
+    <tr><td>Intereses y reparaciones (hasta el límite de ingresos)</td><td class="num">−{{ r.gastos_limitados_aplicables|eur }}</td></tr>
+    <tr><td>Otros gastos (IBI, comunidad, seguro...)</td><td class="num">−{{ r.gastos_otros|eur }}</td></tr>
+    <tr><td>Amortización 3 %</td><td class="num">−{{ r.amortizacion|eur }}</td></tr>
+    <tr><td><strong>Rendimiento neto</strong></td><td class="num"><strong>{{ r.rendimiento_neto|eur }}</strong></td></tr>
+    <tr><td>Reducción {{ r.reduccion_pct }} %</td><td class="num">−{{ r.reduccion|eur }}</td></tr>
+    <tr><td><strong>Rendimiento a declarar</strong></td><td class="num"><strong>{{ r.rendimiento_reducido|eur }}</strong></td></tr>
+  </table></div>
+  {% for n in r.notas %}<p class="nota">{{ n }}</p>{% endfor %}{% endif %}
+
+  {% if f.pagos %}<h3>Pagos a la promotora / previstos</h3>
+  <div class="tabla-scroll"><table>{% for p in f.pagos %}<tr><td>{{ p.fecha|fecha }}</td><td>{{ p.concepto }}</td><td class="num">{{ p.importe|eur }}</td><td>{{ 'Pagado' if p.pagado else 'Pendiente' }}</td></tr>{% endfor %}</table></div>{% endif %}
+
+  {% if f.gastos %}<details><summary>Gastos registrados ({{ f.gastos|length }})</summary>
+  <div class="tabla-scroll"><table>{% for g in f.gastos %}<tr><td>{{ g.fecha|fecha }}</td><td>{{ g.tipo }}</td><td>{{ g.concepto }}</td><td class="num">{{ g.importe|eur }}</td></tr>{% endfor %}</table></div></details>{% endif %}
+
+  <details><summary>Añadir valoración</summary>
+  <form class="linea" method="post" action="/inmuebles/{{ a.id }}/valoracion">
+    <label>Fecha<input type="date" name="fecha" value="{{ hoy.isoformat() }}" required></label>
+    <label>Valor estimado<input name="valor" inputmode="decimal" required></label><button>Guardar</button></form></details>
+  <details><summary>Añadir hipoteca</summary>
+  <form class="linea" method="post" action="/inmuebles/{{ a.id }}/hipoteca">
+    <label>Nombre<input name="nombre" value="Hipoteca {{ a.nombre }}"></label>
+    <label>Entidad<input name="entidad" value="Banco Sabadell"></label>
+    <label>Capital inicial<input name="capital_inicial" inputmode="decimal" required></label>
+    <label>Interés anual %<input name="tipo_interes_anual" inputmode="decimal" required style="width:80px"></label>
+    <label>Fecha firma<input type="date" name="fecha_inicio" required></label>
+    <label>Plazo (meses)<input type="number" name="plazo_meses" required style="width:90px"></label>
+    <label>Pendiente real (opcional)<input name="saldo_pendiente_manual" inputmode="decimal"></label><button>Guardar</button></form></details>
+  <details><summary>Añadir contrato de alquiler</summary>
+  <form class="linea" method="post" action="/inmuebles/{{ a.id }}/contrato">
+    <label>Inquilino<input name="inquilino"></label>
+    <label>Inicio<input type="date" name="fecha_inicio" required></label>
+    <label>Fin<input type="date" name="fecha_fin"></label>
+    <label>Renta mensual<input name="renta_mensual" inputmode="decimal" required></label>
+    <label>Reducción IRPF %<input name="reduccion_pct" value="60" style="width:70px"></label><button>Guardar</button></form>
+    <p class="nota">Contratos anteriores al 26/05/2023: 60 %. Posteriores: 50 % general (hasta 90 % en casos concretos).</p></details>
+  <details><summary>Añadir gasto</summary>
+  <form class="linea" method="post" action="/inmuebles/{{ a.id }}/gasto">
+    <label>Fecha<input type="date" name="fecha" required></label>
+    <label>Tipo<select name="tipo"><option>ibi</option><option>comunidad</option><option>seguro</option><option>reparacion</option>
+      <option>intereses</option><option>suministros</option><option>gestion</option><option>otros</option></select></label>
+    <label>Importe<input name="importe" inputmode="decimal" required></label>
+    <label>Concepto<input name="concepto"></label><button>Guardar</button></form>
+    <p class="nota">Si no apuntas los intereses de la hipoteca, se estiman con el cuadro de amortización.</p></details>
+</div>
+{% else %}<p class="nota">Aún no hay inmuebles.</p>{% endfor %}
+
+<h2>Añadir inmueble</h2>
+<div class="tarjeta">
+<form class="linea" method="post" action="/inmuebles">
+  <label>Nombre<input name="nombre" required placeholder="Piso alquilado"></label>
+  <label>Tipo<select name="tipo"><option value="inmueble">Inmueble</option><option value="inmueble_en_construccion">Obra nueva (en construcción)</option></select></label>
+  <label>Uso<select name="uso"><option value="alquiler">Alquiler</option><option value="vivienda_habitual">Vivienda habitual</option><option value="otro">Otro</option></select></label>
+  <label>Fecha compra<input type="date" name="fecha_compra"></label>
+  <label>Precio compra<input name="precio_compra" inputmode="decimal" value="0"></label>
+  <label>Gastos compra (impuestos, notaría...)<input name="gastos_compra" inputmode="decimal" value="0"></label>
+  <label>Valor catastral<input name="valor_catastral" inputmode="decimal" value="0"></label>
+  <label>V. catastral construcción<input name="valor_catastral_construccion" inputmode="decimal" value="0"></label>
+  <label>% propiedad<input name="porcentaje_propiedad" value="100" style="width:70px"></label>
+  <button>Crear</button>
+</form>
+</div>
+{% endblock %}

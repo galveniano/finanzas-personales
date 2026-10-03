@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block titulo %}Cuentas{% endblock %}
+{% block contenido %}
+<h1>Cuentas</h1>
+<div class="tarjeta tabla-scroll">
+<table>
+  <tr><th>Cuenta</th><th>Entidad</th><th>Tipo</th><th>Origen</th><th class="num">Saldo</th><th>A fecha</th><th>Importar extracto</th></tr>
+  {% for c in cuentas %}
+  <tr>
+    <td><a href="/cuentas?cuenta_id={{ c.id }}">{{ c.nombre }}</a></td><td>{{ c.entidad }}</td><td>{{ c.tipo }}</td>
+    <td>{{ c.origen }}</td><td class="num">{{ c.saldo|eur }}</td><td>{{ c.saldo_fecha|fecha }}</td>
+    <td>{% if c.origen != 'indexa' %}
+      <form class="linea" method="post" action="/cuentas/{{ c.id }}/importar" enctype="multipart/form-data">
+        <input type="file" name="fichero" accept=".xls,.xlsx,.csv" required><button class="sec">Importar</button>
+      </form>{% endif %}</td>
+  </tr>
+  {% else %}<tr><td colspan="7" class="nota">Sin cuentas todavía.</td></tr>{% endfor %}
+</table>
+<details><summary>Añadir cuenta</summary>
+<form class="linea" method="post" action="/cuentas">
+  <label>Nombre<input name="nombre" required placeholder="Cuenta Sabadell"></label>
+  <label>Entidad<input name="entidad" value="Banco Sabadell"></label>
+  <label>Tipo<select name="tipo"><option>corriente</option><option>ahorro</option><option>tarjeta</option><option>inversion</option></select></label>
+  <label>IBAN<input name="iban"></label>
+  <label>Saldo actual<input name="saldo" inputmode="decimal" value="0"></label>
+  <button>Crear</button>
+</form></details>
+<form method="post" action="/indexa/sincronizar" style="margin-top:8px"><button class="sec">Actualizar Indexa Capital</button></form>
+</div>
+
+<h2>Movimientos</h2>
+<form class="linea" method="get" action="/cuentas" style="margin-bottom:8px">
+  <label>Cuenta<select name="cuenta_id"><option value="">Todas</option>
+    {% for c in cuentas %}<option value="{{ c.id }}" {{ 'selected' if cuenta_id == c.id }}>{{ c.nombre }}</option>{% endfor %}</select></label>
+  <label>Categoría<select name="categoria_id"><option value="">Todas</option><option value="0" {{ 'selected' if categoria_id == 0 }}>Sin categoría</option>
+    {% for cat in categorias %}<option value="{{ cat.id }}" {{ 'selected' if categoria_id == cat.id }}>{{ cat.nombre }}</option>{% endfor %}</select></label>
+  <button class="sec">Filtrar</button>
+</form>
+<div class="tarjeta tabla-scroll">
+<table>
+  <tr><th>Fecha</th><th>Concepto</th><th>Categoría</th><th class="num">Importe</th><th class="num">Saldo</th></tr>
+  {% for m in movimientos %}
+  <tr>
+    <td>{{ m.fecha|fecha }}</td><td>{{ m.concepto }}</td>
+    <td><form method="post" action="/movimientos/{{ m.id }}/categoria">
+      <input type="hidden" name="volver_a" value="{{ request.url.path }}?{{ request.url.query }}">
+      <select name="categoria_id" onchange="this.form.submit()"><option value="">—</option>
+        {% for cat in categorias %}<option value="{{ cat.id }}" {{ 'selected' if m.categoria_id == cat.id }}>{{ cat.nombre }}</option>{% endfor %}
+      </select></form></td>
+    <td class="num {{ 'neg' if m.importe < 0 else 'pos' }}">{{ m.importe|eur }}</td><td class="num">{{ m.saldo|eur }}</td>
+  </tr>
+  {% else %}<tr><td colspan="5" class="nota">Sin movimientos. Importa el extracto de Sabadell (Excel o CSV) en la cuenta.</td></tr>{% endfor %}
+</table>
+</div>
+{% endblock %}

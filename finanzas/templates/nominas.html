@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block titulo %}Nóminas{% endblock %}
+{% block contenido %}
+<h1>Nóminas</h1>
+<div class="rejilla">
+  <div class="tarjeta"><div class="etiqueta">Bruto {{ anio }}</div><div class="cifra">{{ totales.bruto|eur }}</div></div>
+  <div class="tarjeta"><div class="etiqueta">Retenciones IRPF {{ anio }}</div><div class="cifra">{{ totales.retencion_irpf|eur }}</div></div>
+  <div class="tarjeta"><div class="etiqueta">Seguridad Social {{ anio }}</div><div class="cifra">{{ totales.seguridad_social|eur }}</div></div>
+  <div class="tarjeta"><div class="etiqueta">Neto {{ anio }}</div><div class="cifra">{{ totales.neto|eur }}</div></div>
+</div>
+<div class="tarjeta tabla-scroll">
+<table>
+  <tr><th>Fecha</th><th>Empresa</th><th class="num">Bruto</th><th class="num">IRPF</th><th class="num">SS</th><th class="num">Neto</th><th class="num">% retención</th></tr>
+  {% for n in nominas %}
+  <tr><td>{{ n.fecha|fecha }}</td><td>{{ n.empresa }}</td><td class="num">{{ n.bruto|eur }}</td><td class="num">{{ n.retencion_irpf|eur }}</td>
+    <td class="num">{{ n.seguridad_social|eur }}</td><td class="num">{{ n.neto|eur }}</td>
+    <td class="num">{{ '%.2f'|format(n.retencion_irpf / n.bruto * 100) if n.bruto else '—' }} %</td></tr>
+  {% else %}<tr><td colspan="7" class="nota">Sin nóminas registradas.</td></tr>{% endfor %}
+</table>
+<details><summary>Registrar nómina</summary>
+<form class="linea" method="post" action="/nominas">
+  <label>Empresa<input name="empresa" value="Indra"></label>
+  <label>Fecha<input type="date" name="fecha" required></label>
+  <label>Bruto<input name="bruto" inputmode="decimal" required></label>
+  <label>Retención IRPF<input name="retencion_irpf" inputmode="decimal" required></label>
+  <label>Seguridad Social<input name="seguridad_social" inputmode="decimal" required></label>
+  <label>Neto<input name="neto" inputmode="decimal" required></label>
+  <button>Guardar</button>
+</form></details>
+</div>
+{% endblock %}
