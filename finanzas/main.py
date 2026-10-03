@@ -23,6 +23,7 @@ warnings.filterwarnings("ignore", category=sa_exc.SAWarning, message=".*Decimal.
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
 
 WEB = Path(__file__).parent / "web"
+log = logging.getLogger("finanzas")
 
 
 @asynccontextmanager
@@ -48,6 +49,7 @@ def cron_sync(request: Request):
     esperado = f"Bearer {config.CRON_SECRET}"
     if not config.CRON_SECRET or not hmac.compare_digest(request.headers.get("authorization", ""), esperado):
         raise HTTPException(401, "No autorizado")
+    db.asegurar_tablas()
     with db.SessionLocal() as s:
         return {"resultados": sync.sincronizar_todo(s)}
 
@@ -57,13 +59,22 @@ def vuelta_sabadell(code: str = ""):
     """Vuelta desde el banco cuando la app se sirve por https (Vercel). En local se pega la URL en Conexiones."""
     if not code:
         return RedirectResponse("/#/conexiones")
+    db.asegurar_tablas()
     with db.SessionLocal() as s:
         try:
             enablebanking.completar_autorizacion(s, code)
-            sync.sincronizar_sabadell(s)
+        except Exception as e:  # el code del banco es de un solo uso: hay que enseñar el motivo
+            s.rollback()
+            log.exception("Fallo al completar la autorización de Sabadell")
+            motivo = str(e) if isinstance(e, enablebanking.EnableBankingError) else f"{type(e).__name__}: {e}"
+            return RedirectResponse("/#/conexiones?" + urlencode({"sabadell_error": motivo[:300]}))
+        # La conexión ya está guardada; si la primera carga falla, queda registrada en Conexiones
+        sync.sincronizar_sabadell(s)
+        try:
             sync.guardar_instantanea(s)
-        except enablebanking.EnableBankingError as e:
-            return RedirectResponse("/#/conexiones?" + urlencode({"sabadell_error": str(e)[:300]}))
+        except Exception:
+            s.rollback()
+            log.exception("Fallo al guardar la foto del patrimonio")
     return RedirectResponse("/#/conexiones?sabadell=ok")
 
 

@@ -192,6 +192,12 @@ def extraer_code(texto: str) -> str:
     return texto
 
 
+def _id_cuenta(cta: dict) -> str:
+    """identification_hash identifica la cuenta entre sesiones; si no cabe en la columna, su sha256."""
+    h = cta.get("identification_hash") or ""
+    return h if len(h) <= 80 else hashlib.sha256(h.encode()).hexdigest()
+
+
 def completar_autorizacion(session: Session, code: str,
                            cliente: EnableBankingClient | None = None) -> ConexionBancaria:
     cliente = cliente or EnableBankingClient()
@@ -212,15 +218,15 @@ def completar_autorizacion(session: Session, code: str,
             cuenta = session.scalar(select(Cuenta).where(Cuenta.iban == iban))
         if cuenta is None:
             cuenta = session.scalar(select(Cuenta).where(
-                Cuenta.origen == "enable_banking", Cuenta.id_externo == cta.get("identification_hash", "")
+                Cuenta.origen == "enable_banking", Cuenta.id_externo == _id_cuenta(cta)
             ))
         if cuenta is None:
             nombre = cta.get("name") or cta.get("product") or "Cuenta"
-            cuenta = Cuenta(nombre=f"{config.BANCO.replace('Banco ', '')} {iban[-4:] or nombre}",
+            cuenta = Cuenta(nombre=f"{config.BANCO.replace('Banco ', '')} {iban[-4:] or nombre}"[:120],
                             entidad=config.BANCO, iban=iban)
             session.add(cuenta)
         cuenta.origen = "enable_banking"
-        cuenta.id_externo = cta.get("identification_hash", "") or cuenta.id_externo
+        cuenta.id_externo = _id_cuenta(cta) or cuenta.id_externo
         cuenta.uid_externo = cta["uid"]
         cuenta.conexion_id = con.id
     session.commit()

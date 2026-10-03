@@ -39,6 +39,18 @@ except RuntimeError as e:  # en Vercel sin base de datos: la app arranca y expli
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
 
+_tablas_listas = False
+
+
+def asegurar_tablas() -> None:
+    """Crea tablas y columnas nuevas una vez por proceso. En Vercel cada función puede arrancar
+    en frío sin pasar por el arranque de la app, así que se llama también al pedir una sesión."""
+    global _tablas_listas
+    if not _tablas_listas and engine is not None:
+        init_db()
+        _tablas_listas = True
+
+
 def init_db(eng=None) -> None:
     from finanzas import models  # noqa: F401  (registra las tablas)
 
@@ -47,6 +59,9 @@ def init_db(eng=None) -> None:
         return
     Base.metadata.create_all(eng)
     _añadir_columnas_nuevas(eng)
+    if eng is engine:
+        global _tablas_listas
+        _tablas_listas = True
 
 
 def _añadir_columnas_nuevas(eng) -> None:
@@ -66,6 +81,7 @@ def get_session():
     if engine is None:
         from fastapi import HTTPException
         raise HTTPException(503, ERROR_CONFIG)
+    asegurar_tablas()
     session = SessionLocal()
     try:
         yield session
