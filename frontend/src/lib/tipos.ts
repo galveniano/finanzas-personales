@@ -137,3 +137,15 @@ export interface Inversiones {
   inversiones: InversionPrivada[]
   totales: { compromiso: number; desembolsado: number; pendiente: number; nav: number; distribuido: number }
 }
+
+export interface PosicionIndexa {
+  nombre: string; codigo: string; clase: string; gestora: string; titulos: number | null; precio: number | null
+  valor: number; coste: number | null; fecha: string | null; peso: number
+}
+export interface CarteraIndexa {
+  cuenta_id: number; nombre: string; numero: string; fecha: string | null
+  tipo?: string | null; producto?: string | null; perfil_riesgo?: number | null
+  total?: number; efectivo?: number | null; invertido?: number; coste?: number | null; plusvalia?: number | null
+  rentabilidad_anual?: number | null; rentabilidad_total?: number | null; rentabilidad_dinero?: number | null
+  rentabilidad_esperada?: number | null; volatilidad?: number | null; posiciones?: PosicionIndexa[]
+}

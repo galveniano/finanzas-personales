@@ -4,6 +4,7 @@ import { Plus, Search, Upload } from 'lucide-react'
 import { api } from '../lib/api'
 import { eur, fecha } from '../lib/format'
 import type { Categoria, Cuenta, Movimiento } from '../lib/tipos'
+import CarteraIndexa from '../components/CarteraIndexa'
 import InversionesPrivadas from '../components/InversionesPrivadas'
 import { Boton, Cabecera, Campo, Cargando, Dialogo, Etiqueta, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio, num, useAccion, useAvisos } from '../components/ui'
 
@@ -87,6 +88,7 @@ export default function Cuentas() {
         </div>
       )}
 
+      <CarteraIndexa />
       <InversionesPrivadas />
 
       <Tarjeta className="mt-6" titulo="Movimientos">

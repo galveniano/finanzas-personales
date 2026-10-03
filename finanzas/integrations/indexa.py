@@ -3,6 +3,8 @@
 Documentación: https://indexacapital.com/en/api-rest-v1
 El token se genera en el área privada de Indexa y no caduca.
 """
+import json
+import logging
 from datetime import date
 from decimal import Decimal
 
@@ -37,6 +39,9 @@ class IndexaClient:
         r.raise_for_status()
         return r.json()
 
+    def cuenta(self, numero: str) -> dict:
+        return self._get(f"/accounts/{numero}")
+
     def cuentas(self) -> list[dict]:
         return self._get("/users/me").get("accounts", [])
 
@@ -59,6 +64,79 @@ def valor_total(cartera: dict) -> Decimal:
     return Decimal(str(total)).quantize(Decimal("0.01"))
 
 
+log = logging.getLogger(__name__)
+
+TIPOS = {"mutual": "Fondos de inversión", "pension": "Plan de pensiones", "epsv": "EPSV"}
+
+
+def _num(v) -> float | None:
+    try:
+        return None if v is None or v == "" else float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _identificador(instrumento: dict) -> str:
+    """ISIN en fondos; en planes de pensiones, código DGS (o EPSV) del plan y del fondo."""
+    nombre = instrumento.get("identifier_name") or "ISIN"
+    campos = {"ISIN": ("isin_code", None), "DGS": ("dgs_code", "dgs_fund_code"),
+              "EPSV": ("epsv_plan_code", "epsv_fund_code")}.get(nombre, ("isin_code", None))
+    codigo = instrumento.get(campos[0]) or instrumento.get("isin_code") or ""
+    if campos[1] and instrumento.get(campos[1]):
+        codigo = f"{codigo} - {instrumento[campos[1]]}"
+    return codigo
+
+
+def detalle(cartera: dict, rentabilidad: dict | None = None, cuenta: dict | None = None) -> dict:
+    """Resumen de una cuenta de Indexa a partir de sus respuestas de la API. La API no documenta
+    todos los campos, así que todo es opcional: lo que no venga se queda en None."""
+    bloque = cartera.get("portfolio", cartera) or {}
+    total = _num(bloque.get("total_amount")) or 0.0
+    posiciones = []
+    for ia in cartera.get("instrument_accounts") or []:
+        for p in ia.get("positions") or []:
+            ins = p.get("instrument") or {}
+            valor = _num(p.get("amount")) or 0.0
+            peso = _num(p.get("weight_real"))
+            posiciones.append({
+                "nombre": ins.get("name") or ins.get("description") or "Fondo",
+                "codigo": _identificador(ins), "clase": ins.get("asset_class") or "",
+                "gestora": ins.get("management_company_description") or "",
+                "titulos": _num(p.get("titles")), "precio": _num(p.get("price")), "valor": round(valor, 2),
+                "coste": _num(p.get("cost_amount")), "fecha": p.get("date"),
+                "peso": round(peso * 100 if peso is not None else (valor / total * 100 if total else 0), 2),
+            })
+    posiciones.sort(key=lambda x: -x["valor"])
+    costes = [x["coste"] for x in posiciones if x["coste"] is not None]
+    coste = round(sum(costes), 2) if costes and len(costes) == len(posiciones) else None
+    invertido = sum(x["valor"] for x in posiciones)
+    r = (rentabilidad or {}).get("return") or {}
+    pct = lambda v: round(v * 100, 2) if v is not None else None  # noqa: E731  (la API da tantos por uno)
+    perfil = (cuenta or {}).get("profile") or {}
+    return {
+        "tipo": (cuenta or {}).get("type"), "producto": TIPOS.get((cuenta or {}).get("type"), (cuenta or {}).get("type")),
+        "perfil_riesgo": perfil.get("selected_risk") or perfil.get("risk") or perfil.get("recommended_risk"),
+        "total": round(total, 2), "efectivo": _num(bloque.get("cash_amount")),
+        "invertido": round(_num(bloque.get("instruments_amount")) or invertido, 2),
+        "coste": coste, "plusvalia": round(invertido - coste, 2) if coste is not None else None,
+        "rentabilidad_anual": pct(_num(r.get("time_return_annual"))),
+        "rentabilidad_total": pct(_num(r.get("time_return"))),
+        "rentabilidad_dinero": pct(_num(r.get("money_return"))),
+        "rentabilidad_esperada": pct(_num((rentabilidad or {}).get("plan_expected_return"))),
+        "volatilidad": pct(_num((rentabilidad or {}).get("volatility"))),
+        "posiciones": posiciones,
+    }
+
+
+def _opcional(fn, *args) -> dict | None:
+    """Rentabilidad y datos de la cuenta son un extra: si fallan, el saldo se actualiza igual."""
+    try:
+        return fn(*args)
+    except Exception as e:
+        log.warning("Indexa: no se pudo leer %s: %s", fn.__name__, e)
+        return None
+
+
 def sincronizar(session: Session, cliente: IndexaClient | None = None) -> list[Cuenta]:
     """Crea o actualiza una Cuenta de tipo inversión por cada cuenta de Indexa."""
     cliente = cliente or IndexaClient()
@@ -67,7 +145,8 @@ def sincronizar(session: Session, cliente: IndexaClient | None = None) -> list[C
         numero = c.get("account_number")
         if not numero:
             continue
-        total = valor_total(cliente.cartera(numero))
+        cartera = cliente.cartera(numero)
+        total = valor_total(cartera)
         cuenta = session.scalar(
             select(Cuenta).where(Cuenta.origen == "indexa", Cuenta.id_externo == numero)
         )
@@ -77,6 +156,8 @@ def sincronizar(session: Session, cliente: IndexaClient | None = None) -> list[C
                             tipo="inversion", origen="indexa", id_externo=numero)
             session.add(cuenta)
         cuenta.saldo, cuenta.saldo_fecha = total, date.today()
+        info = _opcional(cliente.cuenta, numero) or c
+        cuenta.detalle = json.dumps(detalle(cartera, _opcional(cliente.rentabilidad, numero), info), ensure_ascii=False)
         actualizadas.append(cuenta)
     session.commit()
     return actualizadas

@@ -125,6 +125,15 @@ def _cuenta(c: Cuenta) -> dict:
             if c.ultima_sincronizacion else None}
 
 
+@router.get("/indexa")
+def detalle_indexa(s: Session = SesionDB):
+    """Posiciones y rentabilidad de cada cuenta de Indexa (de la última sincronización)."""
+    import json
+    cuentas = s.scalars(select(Cuenta).where(Cuenta.origen == "indexa", Cuenta.activa).order_by(Cuenta.nombre))
+    return [{"cuenta_id": c.id, "nombre": c.nombre, "numero": c.id_externo, "fecha": f(c.saldo_fecha),
+             **json.loads(c.detalle or "{}")} for c in cuentas]
+
+
 @router.get("/cuentas")
 def listar_cuentas(s: Session = SesionDB):
     return [_cuenta(c) for c in s.scalars(select(Cuenta).where(Cuenta.activa).order_by(Cuenta.tipo, Cuenta.nombre))]
