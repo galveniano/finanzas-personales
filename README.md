@@ -81,6 +81,22 @@ En Vercel no hay un proceso siempre encendido: una tarea programada (`vercel.jso
 Sabadell e Indexa cada día a las 6:00 UTC, y el botón **Sincronizar** lo hace al momento. Cada
 vez que se fusiona algo en `main`, Vercel publica la versión nueva sola.
 
+## Asistente y facturas de Google Drive
+
+Los dos usan un modelo de IA: OpenAI por defecto, o Claude (Anthropic) si lo prefieres. La clave se
+pone desde la propia app, en **Conexiones → Asistente (IA)**, y se guarda cifrada en la base de datos
+(con `SESSION_SECRET`). Saca la clave en [platform.openai.com/api-keys](https://platform.openai.com/api-keys);
+es de pago por uso, aparte de cualquier suscripción. También vale ponerla en las variables de entorno
+(`OPENAI_API_KEY` o `ANTHROPIC_API_KEY`). Pon también `NOMBRE_TITULAR` y
+`NIF_TITULAR` para que distinga bien las facturas que emites de las que recibes.
+
+- **Asistente**: responde preguntas sobre tus finanzas con los datos de la app. Solo puede leer.
+- **Drive** (en Conexiones): necesita la app publicada con Google y la *Google Drive API*
+  habilitada en tu proyecto de Google Cloud. Busca PDF de facturas y justificantes de Hacienda:
+  tus facturas emitidas pasan a Autónomo, los justificantes a Hacienda y las facturas recibidas
+  quedan para que marques si son gasto de la actividad. El permiso de Drive es de solo lectura,
+  dura una hora y no se guarda.
+
 ## Primeros pasos
 
 1. **Inmuebles**: crea el piso alquilado con sus valores catastrales, la hipoteca, el contrato

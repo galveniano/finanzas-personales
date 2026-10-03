@@ -324,3 +324,30 @@ class Declaracion(Base):
     nombre_fichero: Mapped[str] = mapped_column(String(200), default="")
     pdf: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
     notas: Mapped[str] = mapped_column(Text, default="")
+
+
+class DocumentoDrive(Base):
+    """Fichero de Google Drive ya revisado: así no se vuelve a leer y se sabe qué se creó con él."""
+    __tablename__ = "documentos_drive"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    drive_id: Mapped[str] = mapped_column(String(80), unique=True)
+    nombre: Mapped[str] = mapped_column(String(250))
+    modificado: Mapped[str] = mapped_column(String(40), default="")
+    enlace: Mapped[str] = mapped_column(String(300), default="")
+    # emitida | recibida | aeat | otro
+    tipo: Mapped[str] = mapped_column(String(12), default="otro")
+    # importado | pendiente | ignorado | error
+    estado: Mapped[str] = mapped_column(String(12), default="pendiente")
+    mensaje: Mapped[str] = mapped_column(Text, default="")
+    datos: Mapped[str] = mapped_column(Text, default="{}")  # lo extraído, en JSON
+    factura_id: Mapped[int | None] = mapped_column(ForeignKey("facturas.id", ondelete="SET NULL"), nullable=True)
+    gasto_id: Mapped[int | None] = mapped_column(ForeignKey("gastos_autonomo.id", ondelete="SET NULL"), nullable=True)
+    declaracion_id: Mapped[int | None] = mapped_column(ForeignKey("declaraciones.id", ondelete="SET NULL"), nullable=True)
+    revisado: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class Ajuste(Base):
+    """Ajustes que se cambian desde la app (proveedor de IA, claves...). Las claves van cifradas."""
+    __tablename__ = "ajustes"
+    clave: Mapped[str] = mapped_column(String(60), primary_key=True)
+    valor: Mapped[str] = mapped_column(Text, default="")

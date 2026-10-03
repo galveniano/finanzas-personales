@@ -101,3 +101,23 @@ export interface CalculoNomina {
   neto_anual: number; neto_mes: number; neto_paga_extra: number | null
   meses: { mes: number; bruto: number; seguridad_social: number; irpf: number; neto: number; paga_extra: boolean }[]
 }
+export interface DocumentoDrive {
+  id: number; nombre: string; enlace: string; tipo: 'emitida' | 'recibida' | 'aeat' | 'otro'
+  estado: 'importado' | 'pendiente' | 'ignorado' | 'error'; mensaje: string; revisado: string
+  datos: { fecha?: string; contraparte?: string; concepto?: string; base?: number; tipo_iva?: number; total?: number; avisos?: string[] }
+}
+export interface DocumentosDrive { ia: boolean; google_client_id: string | null; documentos: DocumentoDrive[] }
+export interface MensajeChat { role: 'user' | 'assistant'; content: string }
+
+export interface AjustesIA {
+  proveedor: 'openai' | 'anthropic'
+  modelo: string
+  disponible: boolean
+  proveedores: Record<'openai' | 'anthropic', {
+    nombre: string
+    modelo_defecto: string
+    modelo: string
+    clave: string | null
+    origen_clave: 'app' | 'entorno' | null
+  }>
+}

@@ -15,7 +15,7 @@ from finanzas.hipoteca import cuota_mensual, intereses_anio, saldo_pendiente
 from finanzas.importers import aeat, sabadell
 from finanzas.integrations import enablebanking
 from finanzas.models import (
-    Activo, CambioRenta, Categoria, Cliente, ContratoAlquiler, Cuenta, Declaracion, Deuda, Factura, GastoAutonomo,
+    DocumentoDrive, Activo, CambioRenta, Categoria, Cliente, ContratoAlquiler, Cuenta, Declaracion, Deuda, Factura, GastoAutonomo,
     GastoInmueble, Instantanea, Movimiento, Nomina, Objetivo, PagoPrevisto, Valoracion,
 )
 
@@ -726,3 +726,133 @@ def pdf_declaracion(declaracion_id: int, s: Session = SesionDB):
         raise HTTPException(404, "Esta declaración no tiene PDF")
     return Response(d.pdf, media_type="application/pdf",
                     headers={"Content-Disposition": f'inline; filename="{d.modelo}-{d.periodo}-{d.ejercicio}.pdf"'})
+
+
+# --- Google Drive y asistente --------------------------------------------------
+
+class ImportarDriveIn(BaseModel):
+    access_token: str
+    desde: str = "2024-01-01"
+
+
+@router.post("/drive/importar")
+def importar_drive(datos: ImportarDriveIn, s: Session = SesionDB):
+    from finanzas.integrations import drive
+    try:
+        return drive.importar(s, datos.access_token, datos.desde)
+    except drive.ErrorDrive as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/drive/documentos")
+def listar_documentos_drive(s: Session = SesionDB):
+    import json
+    orden = {"pendiente": 0, "error": 1, "importado": 2, "ignorado": 3}
+    docs = sorted(s.scalars(select(DocumentoDrive)), key=lambda d: (orden.get(d.estado, 9), d.nombre))
+    from finanzas import ia
+    return {"ia": ia.disponible(s), "google_client_id": config.GOOGLE_CLIENT_ID or None,
+            "documentos": [{"id": d.id, "nombre": d.nombre, "enlace": d.enlace, "tipo": d.tipo, "estado": d.estado,
+                            "mensaje": d.mensaje, "datos": json.loads(d.datos or "{}"),
+                            "revisado": d.revisado.isoformat(timespec="minutes")} for d in docs]}
+
+
+class GastoDriveIn(BaseModel):
+    deducible_pct: Decimal = Decimal("100")
+    categoria: str | None = None
+
+
+@router.post("/drive/documentos/{doc_id}/gasto")
+def gasto_desde_drive(doc_id: int, datos: GastoDriveIn, s: Session = SesionDB):
+    from finanzas.integrations import drive
+    doc = _obtener(s, DocumentoDrive, doc_id)
+    if doc.gasto_id:
+        raise HTTPException(409, "Ya está apuntado como gasto")
+    drive.crear_gasto(s, doc, datos.deducible_pct, datos.categoria)
+    return {"ok": True}
+
+
+@router.post("/drive/documentos/{doc_id}/ignorar")
+def ignorar_documento_drive(doc_id: int, s: Session = SesionDB):
+    doc = _obtener(s, DocumentoDrive, doc_id)
+    doc.estado, doc.mensaje = "ignorado", "Descartado a mano"
+    s.commit()
+    return {"ok": True}
+
+
+class MensajeIn(BaseModel):
+    role: str
+    content: str
+
+
+class AsistenteIn(BaseModel):
+    mensajes: list[MensajeIn]
+
+
+@router.post("/asistente")
+def preguntar_asistente(datos: AsistenteIn, s: Session = SesionDB):
+    from finanzas import asistente, ia
+    if not datos.mensajes or datos.mensajes[-1].role != "user":
+        raise HTTPException(400, "Falta la pregunta")
+    try:
+        return asistente.responder(s, [m.model_dump() for m in datos.mensajes])
+    except ia.ErrorIA as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/asistente/estado")
+def estado_asistente(s: Session = SesionDB):
+    from finanzas import ia
+    cfg = ia.configuracion(s)
+    return {"disponible": cfg.lista, "proveedor": cfg.proveedor,
+            "proveedor_nombre": ia.PROVEEDORES[cfg.proveedor]["nombre"], "modelo": cfg.modelo}
+
+
+# --- Ajustes del asistente (IA) -------------------------------------------------
+
+def _ajustes_ia(s: Session) -> dict:
+    from finanzas import ajustes, ia
+    cfg = ia.configuracion(s)
+    proveedores = {}
+    for p, info in ia.PROVEEDORES.items():
+        en_app = ajustes.leer(s, f"{p}_api_key")
+        clave = en_app or ia._clave_entorno(p)
+        proveedores[p] = {"nombre": info["nombre"], "modelo_defecto": info["modelo"],
+                          "modelo": ajustes.leer(s, f"{p}_modelo"), "clave": ajustes.oculto(clave),
+                          "origen_clave": "app" if en_app else ("entorno" if clave else None)}
+    return {"proveedor": cfg.proveedor, "modelo": cfg.modelo, "disponible": cfg.lista, "proveedores": proveedores}
+
+
+@router.get("/ajustes/ia")
+def ver_ajustes_ia(s: Session = SesionDB):
+    return _ajustes_ia(s)
+
+
+class AjustesIAIn(BaseModel):
+    proveedor: str
+    clave: str | None = None  # None = no tocar; "" = borrar la guardada en la app
+    modelo: str | None = None
+
+
+@router.put("/ajustes/ia")
+def guardar_ajustes_ia(datos: AjustesIAIn, s: Session = SesionDB):
+    from finanzas import ajustes, ia
+    if datos.proveedor not in ia.PROVEEDORES:
+        raise HTTPException(400, "Proveedor desconocido")
+    ajustes.guardar(s, "ia_proveedor", datos.proveedor)
+    if datos.clave is not None:
+        ajustes.guardar(s, f"{datos.proveedor}_api_key", datos.clave.strip(), secreto=True)
+    if datos.modelo is not None:
+        ajustes.guardar(s, f"{datos.proveedor}_modelo", datos.modelo.strip()[:80])
+    return _ajustes_ia(s)
+
+
+@router.post("/ajustes/ia/probar")
+def probar_ajustes_ia(s: Session = SesionDB):
+    from finanzas import ia
+    cfg = ia.configuracion(s)
+    try:
+        respuesta = ia.probar(cfg)
+    except ia.ErrorIA as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "proveedor": ia.PROVEEDORES[cfg.proveedor]["nombre"], "modelo": cfg.modelo,
+            "respuesta": respuesta[:200]}

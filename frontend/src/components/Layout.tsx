@@ -1,13 +1,14 @@
 import { useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Briefcase, Building2, CalendarClock, Ellipsis, LayoutDashboard, Landmark, LogOut, PlugZap, RefreshCw, Scale, Wallet } from 'lucide-react'
+import { Briefcase, Building2, CalendarClock, Ellipsis, LayoutDashboard, Landmark, LogOut, PlugZap, RefreshCw, Scale, Sparkles, Wallet } from 'lucide-react'
 import { api, esDemo } from '../lib/api'
 import type { EstadoAuth, EstadoSync } from '../lib/tipos'
 import { Boton, useAccion } from './ui'
 
 const secciones: { a: string; texto: string; corto?: string; icono: typeof Wallet; movil?: boolean }[] = [
   { a: '/', texto: 'Panel', icono: LayoutDashboard, movil: true },
+  { a: '/asistente', texto: 'Asistente', icono: Sparkles },
   { a: '/cuentas', texto: 'Cuentas', icono: Wallet, movil: true },
   { a: '/autonomo', texto: 'Autónomo', icono: Briefcase, movil: true },
   { a: '/hacienda', texto: 'Hacienda', icono: Scale, movil: true },
