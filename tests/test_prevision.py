@@ -66,3 +66,15 @@ def test_autonomo_usa_la_prevision_en_lo_no_presentado():
         trimestres = c.get(f"/api/autonomo?anio={anio}").json()["trimestres"]
         no_presentados = [t for t in trimestres if t["iva_fuente"] != "presentado"]
         assert no_presentados and all(t["iva_fuente"] == "previsto" and t["base_prevista"] is not None for t in no_presentados)
+
+
+def test_facturado_y_neto_por_anio():
+    from datetime import date
+    with TestClient(app) as c:
+        c.post("/api/autonomo/facturas", json={"numero": "Y-1", "cliente": "Cliente Anual SL", "fecha": "2018-05-10",
+                                               "base": 10000, "tipo_iva": 21, "tipo_retencion": 15})
+        c.put("/api/prevision/supuestos", json=SUPUESTOS)
+        filas = {f["anio"]: f for f in c.get(f"/api/autonomo?anio={date.today().year}").json()["por_anio"]}
+        assert filas[2018]["facturado"] == 10000 and 0 < filas[2018]["neto"] < 10000 and not filas[2018]["previsto"]
+        actual = filas[date.today().year]
+        assert actual["previsto"] and actual["facturado"] >= 8800 * 11

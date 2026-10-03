@@ -311,6 +311,28 @@ def _casillas(d: Declaracion | None) -> dict:
         return {}
 
 
+def _autonomo_por_anio(s: Session, facturas, gastos, previsto: dict) -> list[dict]:
+    """Facturado y ganado neto (menos gastos e IRPF de la actividad) de cada año con facturas.
+    El año en curso, si hay previsión, se completa con lo previsto."""
+    from finanzas import prevision
+    cfg = prevision.leer(s)
+    anios = sorted({x.fecha.year for x in facturas} | {int(k[:4]) for k in previsto})
+    filas = []
+    for anio in anios:
+        facturado = float(sum((x.base for x in facturas if x.fecha.year == anio), CERO))
+        gasto = float(sum((g.base * g.deducible_pct / 100 for g in gastos if g.fecha.year == anio), CERO))
+        prev = [v for k, v in previsto.items() if k.startswith(f"{anio}-")]
+        es_previsto = bool(prev) and anio >= date.today().year
+        if es_previsto:
+            facturado = max(facturado, sum(v["base"] for v in prev))
+            gasto = max(gasto, float(cfg.get("gastos_autonomo_mes", 0)) * 12)
+        rendimiento = max(facturado - gasto, 0.0)
+        irpf = prevision.irpf_de_la_actividad(cfg, rendimiento)
+        filas.append({"anio": anio, "facturado": round(facturado, 2), "gastos": round(gasto, 2),
+                      "irpf": round(irpf, 2), "neto": round(facturado - gasto - irpf, 2), "previsto": es_previsto})
+    return filas
+
+
 @router.get("/autonomo")
 def ver_autonomo(anio: int | None = None, s: Session = SesionDB):
     """Lo presentado en Hacienda manda; las facturas sirven para estimar lo que aún no se ha presentado."""
@@ -349,10 +371,11 @@ def ver_autonomo(anio: int | None = None, s: Session = SesionDB):
             "notas": [] if d130 or p else m130.notas,
         })
     pagado = {m: n(sum((d.importe for (mod, _), d in presentadas.items() if mod == m), CERO)) for m in ("303", "130")}
+    por_anio = _autonomo_por_anio(s, facturas, gastos, previsto)
     del_anio = [x for x in facturas if x.fecha.year == anio]
     return {
         "anio": anio, "trimestres": trimestres,
-        "ingresos_declarados": ingresos_declarados, "ultimo_130": ultimo_130,
+        "ingresos_declarados": ingresos_declarados, "ultimo_130": ultimo_130, "por_anio": por_anio,
         "pagado_iva": pagado["303"], "pagado_irpf": pagado["130"],
         "total_facturado": n(sum((x.base for x in del_anio), CERO)),
         "por_cliente": [{"cliente": c, "base": n(b)} for c, b in sorted(
