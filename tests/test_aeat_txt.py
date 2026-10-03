@@ -63,3 +63,20 @@ def test_subir_varios_txt_y_luego_el_pdf(monkeypatch):
         # Y un .txt posterior ya no lo pisa
         r = c.post("/api/declaraciones/pdf", files=[ficheros[1]]).json()["resultados"]
         assert "justificante PDF" in r[0]["mensaje"] and len(de_2022(periodo="2T")) == 1
+
+
+def test_autonomo_usa_lo_presentado():
+    """Con el 130 y el 303 subidos, Autónomo enseña lo presentado aunque las facturas digan otra cosa."""
+    with TestClient(app) as c:
+        c.post("/api/autonomo/facturas", json={"numero": "F1", "cliente": "Cliente Ejemplo", "fecha": "2023-02-10",
+                                               "base": 1000, "tipo_iva": 21, "tipo_retencion": 0})
+        c.post("/api/declaraciones/pdf", files=[
+            ("ficheros", ("130.txt", fichero(ejercicio=2023, periodo="1T"), "text/plain")),
+            ("ficheros", ("303.txt", fichero(modelo="303", ejercicio=2023, periodo="1T", aux_importe=33300), "text/plain"))])
+        d = c.get("/api/autonomo?anio=2023").json()
+        t1, t2 = d["trimestres"][:2]
+        assert (t1["iva_fuente"], t1["iva_resultado"], t1["iva_estimado"]) == ("presentado", 333.0, 210.0)
+        assert (t1["irpf_fuente"], t1["irpf_resultado"]) == ("presentado", 150.0)
+        assert (t1["ingresos_acumulados"], t1["rendimiento_acumulado"], t1["retenciones_acumuladas"]) == (1234.56, 1000.0, 0.0)
+        assert t2["iva_fuente"] == "estimado" and t2["ingresos_acumulados"] is None
+        assert (d["ingresos_declarados"], d["ultimo_130"], d["pagado_iva"], d["pagado_irpf"]) == (1234.56, 1, 333.0, 150.0)

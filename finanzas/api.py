@@ -1,4 +1,5 @@
 """API JSON que consume el frontal (carpeta frontend/)."""
+import json
 from collections import defaultdict
 from datetime import date, timedelta
 from decimal import Decimal
@@ -85,6 +86,8 @@ def resumen(s: Session = SesionDB):
     t = autonomo.trimestre_de(hoy)
     m303 = autonomo.calcular_303(hoy.year, t, facturas, gastos)
     m130 = autonomo.calcular_130(hoy.year, t, facturas, gastos)
+    presentadas = _presentadas(s, hoy.year)
+    d303, d130 = presentadas.get(("303", t)), presentadas.get(("130", t))
     historico = s.scalars(select(Instantanea).order_by(Instantanea.fecha)).all()
     proximos = s.scalars(select(PagoPrevisto).where(~PagoPrevisto.pagado).order_by(PagoPrevisto.fecha).limit(6))
     return {
@@ -104,9 +107,11 @@ def resumen(s: Session = SesionDB):
                            for pp in proximos],
         "fiscal": {
             "trimestre": t, "anio": hoy.year,
-            "iva": {"resultado": n(m303.resultado), "repercutido": n(m303.iva_repercutido),
+            "iva": {"resultado": n(d303.importe if d303 else m303.resultado), "presentado": bool(d303),
+                    "repercutido": n(m303.iva_repercutido),
                     "soportado": n(m303.iva_soportado_deducible), "plazo": m303.plazo},
-            "irpf": {"resultado": n(m130.resultado), "exento": m130.exento, "notas": m130.notas, "plazo": m130.plazo},
+            "irpf": {"resultado": n(d130.importe if d130 else m130.resultado), "presentado": bool(d130),
+                     "exento": False if d130 else m130.exento, "notas": [] if d130 else m130.notas, "plazo": m130.plazo},
         },
         "sync": sync.estado(s),
     }
@@ -291,25 +296,58 @@ class GastoAutonomoIn(BaseModel):
     deducible_pct: Decimal = Decimal("100")
 
 
+def _presentadas(s: Session, anio: int) -> dict[tuple[str, int], Declaracion]:
+    """Los 303 y 130 presentados del año, por (modelo, trimestre). Si hay varias (complementarias), la última."""
+    decl = s.scalars(select(Declaracion).where(
+        Declaracion.ejercicio == anio, Declaracion.modelo.in_(("303", "130")),
+        Declaracion.periodo.in_(("1T", "2T", "3T", "4T"))).order_by(Declaracion.id)).all()
+    return {(d.modelo, int(d.periodo[0])): d for d in decl}
+
+
+def _casillas(d: Declaracion | None) -> dict:
+    try:
+        return json.loads(d.casillas) if d and d.casillas else {}
+    except ValueError:
+        return {}
+
+
 @router.get("/autonomo")
 def ver_autonomo(anio: int | None = None, s: Session = SesionDB):
+    """Lo presentado en Hacienda manda; las facturas sirven para estimar lo que aún no se ha presentado."""
     anio = anio or date.today().year
     facturas = s.scalars(select(Factura).order_by(Factura.fecha.desc())).all()
     gastos = s.scalars(select(GastoAutonomo).order_by(GastoAutonomo.fecha.desc())).all()
-    trimestres = []
+    hay_facturas = any(x.fecha.year == anio for x in facturas)
+    presentadas = _presentadas(s, anio)
+    trimestres, ingresos_declarados, ultimo_130 = [], None, None
     for t in range(1, 5):
         m303 = autonomo.calcular_303(anio, t, facturas, gastos)
         m130 = autonomo.calcular_130(anio, t, facturas, gastos)
+        d303, d130 = presentadas.get(("303", t)), presentadas.get(("130", t))
+        c130 = _casillas(d130)
+        if "ingresos" in c130:
+            ingresos_declarados, ultimo_130 = c130["ingresos"], t
         trimestres.append({
             "trimestre": t, "plazo": m303.plazo,
             "base": n(m303.base_repercutida), "iva_repercutido": n(m303.iva_repercutido),
-            "iva_soportado": n(m303.iva_soportado_deducible), "iva_resultado": n(m303.resultado),
-            "rendimiento_acumulado": n(m130.rendimiento_neto), "retenciones_acumuladas": n(m130.retenciones_acumuladas),
-            "irpf_resultado": n(m130.resultado), "exento_130": m130.exento, "notas": m130.notas,
+            "iva_soportado": n(m303.iva_soportado_deducible),
+            "iva_resultado": n(d303.importe) if d303 else n(m303.resultado),
+            "iva_fuente": "presentado" if d303 else "estimado",
+            "iva_estimado": n(m303.resultado) if hay_facturas else None,
+            "ingresos_acumulados": c130.get("ingresos"),
+            "rendimiento_acumulado": c130.get("rendimiento", n(m130.rendimiento_neto)),
+            "retenciones_acumuladas": c130.get("retenciones", n(m130.retenciones_acumuladas)),
+            "irpf_resultado": n(d130.importe) if d130 else n(m130.resultado),
+            "irpf_fuente": "presentado" if d130 else "estimado",
+            "irpf_estimado": n(m130.resultado) if hay_facturas else None,
+            "exento_130": False if d130 else m130.exento, "notas": [] if d130 else m130.notas,
         })
+    pagado = {m: n(sum((d.importe for (mod, _), d in presentadas.items() if mod == m), CERO)) for m in ("303", "130")}
     del_anio = [x for x in facturas if x.fecha.year == anio]
     return {
         "anio": anio, "trimestres": trimestres,
+        "ingresos_declarados": ingresos_declarados, "ultimo_130": ultimo_130,
+        "pagado_iva": pagado["303"], "pagado_irpf": pagado["130"],
         "total_facturado": n(sum((x.base for x in del_anio), CERO)),
         "por_cliente": [{"cliente": c, "base": n(b)} for c, b in sorted(
             {x.cliente.nombre: sum((y.base for y in del_anio if y.cliente_id == x.cliente_id), CERO)
@@ -828,6 +866,8 @@ def _guardar_txt(s: Session, contenido: bytes, nombre: str) -> str:
     d = existentes[0] if existentes else Declaracion(modelo=t.modelo, ejercicio=t.ejercicio, periodo=t.periodo,
                                                      justificante="")
     d.resultado, d.importe, d.nombre_fichero = t.resultado, t.importe, nombre[:200]
+    if t.casillas:
+        d.casillas = json.dumps({k: float(v) for k, v in t.casillas.items()})
     d.notas = "Importado del fichero .txt" + ("" if t.exacto else ": revisa el importe")
     s.add(d)
     s.commit()

@@ -19,8 +19,8 @@ export interface Resumen {
   proximos_pagos: { id: number; concepto: string; fecha: string; importe: number }[]
   fiscal: {
     trimestre: number; anio: number
-    iva: { resultado: number; repercutido: number; soportado: number; plazo: string }
-    irpf: { resultado: number; exento: boolean; notas: string[]; plazo: string }
+    iva: { resultado: number; presentado: boolean; repercutido: number; soportado: number; plazo: string }
+    irpf: { resultado: number; presentado: boolean; exento: boolean; notas: string[]; plazo: string }
   }
   sync: EstadoSync
 }
@@ -38,7 +38,10 @@ export interface Trimestre {
   trimestre: number; plazo: string; base: number; iva_repercutido: number; iva_soportado: number
   iva_resultado: number; rendimiento_acumulado: number; retenciones_acumuladas: number
   irpf_resultado: number; exento_130: boolean; notas: string[]
+  iva_fuente: Fuente; irpf_fuente: Fuente; iva_estimado: number | null; irpf_estimado: number | null
+  ingresos_acumulados: number | null
 }
+export type Fuente = 'presentado' | 'estimado'
 export interface Factura {
   id: number; numero: string; cliente: string; fecha: string; concepto: string; base: number
   tipo_iva: number; tipo_retencion: number; cuota_iva: number; retencion: number; total: number
@@ -50,6 +53,7 @@ export interface GastoAutonomo {
 }
 export interface Autonomo {
   anio: number; trimestres: Trimestre[]; total_facturado: number
+  ingresos_declarados: number | null; ultimo_130: number | null; pagado_iva: number; pagado_irpf: number
   por_cliente: { cliente: string; base: number }[]
   facturas: Factura[]; gastos: GastoAutonomo[]; clientes: string[]
 }

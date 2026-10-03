@@ -120,7 +120,7 @@ export default function Panel() {
       <div className="mt-4 grid gap-4 md:grid-cols-2">
         <Tarjeta titulo={`IVA ${trimestre}T · modelo 303`} accion={<Etiqueta tono="aviso">{iva.plazo}</Etiqueta>}>
           <Dato etiqueta={iva.resultado >= 0 ? 'A ingresar' : 'A compensar'} valor={eur(iva.resultado)} />
-          <p className="mt-3 text-sm text-muted">Repercutido {eur(iva.repercutido)} menos soportado {eur(iva.soportado)}.</p>
+          <p className="mt-3 text-sm text-muted">{iva.presentado ? 'Ya presentado en Hacienda.' : `Estimado: repercutido ${eur(iva.repercutido)} menos soportado ${eur(iva.soportado)}.`}</p>
         </Tarjeta>
         <Tarjeta titulo={`IRPF ${trimestre}T · modelo 130`} accion={<Etiqueta tono={irpf.exento ? 'bien' : 'aviso'}>{irpf.exento ? 'Exento' : irpf.plazo}</Etiqueta>}>
           <Dato etiqueta="A ingresar" valor={irpf.exento ? 'No presentas' : eur(irpf.resultado)} />
