@@ -192,7 +192,7 @@ export default function Prevision() {
               </tbody>
             </Tabla>
             <p className="mt-3 text-xs text-muted">Clientes es lo que cobras: base más IVA menos retención. El IVA y el 130 de cada trimestre se pagan el mes siguiente; la renta, en junio.
-              «Pagos» son los de Planificación (la casa, Concrescenta…).</p>
+              «Pagos» son los de Planificación (la casa nueva, llamadas de capital…).</p>
           </Tarjeta>
 
           <div className="mt-4 grid gap-4 md:grid-cols-2">
