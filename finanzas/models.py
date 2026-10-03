@@ -2,7 +2,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, LargeBinary, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from finanzas.db import Base
@@ -301,3 +301,26 @@ class Instantanea(Base):
     @property
     def neto(self) -> Decimal:
         return self.liquidez + self.inversiones + self.inmuebles + self.otros - self.deudas
+
+
+# --- Hacienda ---------------------------------------------------------------
+
+class Declaracion(Base):
+    """Modelo presentado a la Agencia Tributaria (303, 130, 100...), normalmente desde su justificante PDF."""
+    __tablename__ = "declaraciones"
+    __table_args__ = (UniqueConstraint("modelo", "ejercicio", "periodo", "justificante"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    modelo: Mapped[str] = mapped_column(String(5))
+    ejercicio: Mapped[int] = mapped_column()
+    # 1T..4T trimestral, 01..12 mensual, 0A anual
+    periodo: Mapped[str] = mapped_column(String(3))
+    # ingresar | devolver | compensar | negativa | cero | domiciliar | otro
+    resultado: Mapped[str] = mapped_column(String(12), default="ingresar")
+    # Importe con signo: positivo a pagar, negativo a devolver o compensar
+    importe: Mapped[Decimal] = mapped_column(Dinero, default=Decimal("0"))
+    fecha_presentacion: Mapped[date | None] = mapped_column(Date, nullable=True)
+    justificante: Mapped[str] = mapped_column(String(20), default="")
+    csv: Mapped[str] = mapped_column(String(20), default="")
+    nombre_fichero: Mapped[str] = mapped_column(String(200), default="")
+    pdf: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
+    notas: Mapped[str] = mapped_column(Text, default="")

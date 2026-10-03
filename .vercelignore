@@ -1,0 +1,6 @@
+.venv
+.env
+data
+secretos
+frontend/node_modules
+tests

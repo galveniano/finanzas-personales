@@ -4,8 +4,8 @@ Web local y privada para seguir tus finanzas: cuentas de Sabadell, fondos y plan
 Capital, nóminas, actividad como autónomo (IVA e IRPF trimestral), piso alquilado con hipoteca,
 casa de obra nueva, objetivos (bodas, viajes) y patrimonio neto.
 
-Todo se guarda en un fichero SQLite en `data/finanzas.db`, en tu ordenador. Lo único que sale
-de él son llamadas de solo lectura a Sabadell (vía Enable Banking) y a Indexa.
+En tu ordenador todo se guarda en un fichero SQLite en `data/finanzas.db`. Si la publicas en
+Vercel, los datos van a una base de datos Postgres y solo se entra con tu cuenta de Google.
 
 ## Arrancar
 
@@ -51,6 +51,36 @@ La primera sincronización trae los últimos 12 meses de movimientos y los categ
 En **Cuentas** también puedes importar el extracto (Excel o CSV) descargado de la web de
 Sabadell. Reimportar el mismo extracto no duplica movimientos.
 
+## Publicarla en Vercel
+
+Así la ves desde el móvil o cualquier ordenador. Solo entran las cuentas de Google que pongas en
+`EMAILS_PERMITIDOS`; sin sesión la API no devuelve ningún dato. Todo cabe en los planes gratuitos.
+
+1. **Proyecto**: en [vercel.com](https://vercel.com) entra con GitHub, *Add New > Project* e
+   importa `finanzas-personales`. No cambies nada de la configuración y despliega. Saldrá un
+   error porque falta la base de datos: es normal.
+2. **Base de datos**: en el proyecto, *Storage > Create Database > Neon (Postgres)*, región
+   Frankfurt, y conéctala al proyecto. Vercel añade `DATABASE_URL` sola.
+3. **Google**: en [Google Cloud Console](https://console.cloud.google.com/apis/credentials) crea
+   un proyecto, configura la pantalla de consentimiento (tipo *Externo*, en modo prueba, con tu
+   email como usuario de prueba) y después *Crear credenciales > ID de cliente de OAuth >
+   Aplicación web*. En *Orígenes de JavaScript autorizados* pon la URL de Vercel
+   (`https://tu-proyecto.vercel.app`). Copia el ID de cliente.
+4. **Variables** (*Settings > Environment Variables*):
+   - `GOOGLE_CLIENT_ID`: el ID del paso anterior.
+   - `EMAILS_PERMITIDOS`: tu Gmail.
+   - `SESSION_SECRET` y `CRON_SECRET`: dos cadenas aleatorias distintas (`openssl rand -hex 32`).
+   - `INDEXA_TOKEN`, `ENABLE_BANKING_APP_ID` y `ENABLE_BANKING_KEY` con el **contenido** del
+     `.pem` pegado tal cual.
+   - `ENABLE_BANKING_REDIRECT_URL=https://tu-proyecto.vercel.app/sabadell/vuelta` (añade esa
+     misma URL de vuelta en tu aplicación de Enable Banking). Así el banco vuelve directo a la
+     app y no hace falta pegar ninguna dirección.
+5. *Deployments > Redeploy*. Abre la URL y entra con Google.
+
+En Vercel no hay un proceso siempre encendido: una tarea programada (`vercel.json`) sincroniza
+Sabadell e Indexa cada día a las 6:00 UTC, y el botón **Sincronizar** lo hace al momento. Cada
+vez que se fusiona algo en `main`, Vercel publica la versión nueva sola.
+
 ## Primeros pasos
 
 1. **Inmuebles**: crea el piso alquilado con sus valores catastrales, la hipoteca, el contrato
@@ -59,11 +89,14 @@ Sabadell. Reimportar el mismo extracto no duplica movimientos.
 2. **Planificación**: apunta los pagos a la promotora y los objetivos (boda, viajes).
 3. **Autónomo**: registra facturas emitidas y gastos de la actividad para ver el 303 y el 130
    estimados de cada trimestre.
-4. **Nóminas**: registra las nóminas de Indra.
+4. **Hacienda**: sube los justificantes PDF de los modelos que ya has presentado (303, 130,
+   renta). La app lee el modelo, el periodo y el importe y los compara con lo que calcula.
+5. **Nóminas**: registra las nóminas de Indra.
 
 ## Privacidad
 
-- La app escucha solo en `127.0.0.1`.
+- En local la app escucha solo en `127.0.0.1` y no pide sesión (salvo que pongas `GOOGLE_CLIENT_ID`).
+- Publicada, solo entran los emails de `EMAILS_PERMITIDOS`.
 - Nunca subas `.env`, `secretos/` ni `data/`: ya están en `.gitignore`.
 - Las cifras fiscales son estimaciones orientativas. No sustituyen a la declaración ni a un
   asesor.

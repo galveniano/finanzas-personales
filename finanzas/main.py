@@ -1,18 +1,19 @@
-"""Aplicación local. Arranca con:  uvicorn finanzas.main:app
+"""Aplicación. En local:  uvicorn finanzas.main:app   En Vercel la carga index.py.
 
 Sirve la API JSON en /api y el frontal ya compilado (carpeta finanzas/web).
 """
+import hmac
 import logging
 import warnings
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import exc as sa_exc
 
-from finanzas import config, db, sync
+from finanzas import auth, config, db, sync
 from finanzas.api import router
 from finanzas.categorizar import sembrar_categorias
 from finanzas.integrations import enablebanking
@@ -36,12 +37,23 @@ async def lifespan(_app):
 
 
 app = FastAPI(title="Finanzas personales", lifespan=lifespan)
+app.include_router(auth.router)
 app.include_router(router)
 
 
-@app.get("/sabadell/vuelta")
+@app.get("/api/cron/sync")
+def cron_sync(request: Request):
+    """Tarea programada de Vercel (vercel.json). Vercel manda Authorization: Bearer CRON_SECRET."""
+    esperado = f"Bearer {config.CRON_SECRET}"
+    if not config.CRON_SECRET or not hmac.compare_digest(request.headers.get("authorization", ""), esperado):
+        raise HTTPException(401, "No autorizado")
+    with db.SessionLocal() as s:
+        return {"resultados": sync.sincronizar_todo(s)}
+
+
+@app.get("/sabadell/vuelta", dependencies=[Depends(auth.requiere_sesion)])
 def vuelta_sabadell(code: str = ""):
-    """Vuelta desde el banco, solo si sirves la app por https. Si no, se pega la URL en Conexiones."""
+    """Vuelta desde el banco cuando la app se sirve por https (Vercel). En local se pega la URL en Conexiones."""
     if not code:
         return RedirectResponse("/#/conexiones")
     with db.SessionLocal() as s:
