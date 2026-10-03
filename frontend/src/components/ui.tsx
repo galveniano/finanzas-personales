@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { X } from 'lucide-react'
+import { eur } from '../lib/format'
 
 const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(' ')
 
@@ -72,7 +73,7 @@ export function Dato({ etiqueta, valor, nota, tono }: { etiqueta: string; valor:
 
 export function Importe({ valor, signo = false, className }: { valor: number | null | undefined; signo?: boolean; className?: string }) {
   if (valor == null) return <span className={cx('cifra text-muted', className)}>—</span>
-  const txt = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }).format(valor)
+  const txt = eur(valor)
   return (
     <span className={cx('cifra whitespace-nowrap', signo && valor > 0 && 'text-pos', signo && valor < 0 && 'text-neg', className)}>
       {signo && valor > 0 ? '+' : ''}{txt}

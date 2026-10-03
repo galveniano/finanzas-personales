@@ -1,3 +1,4 @@
+import json
 import io
 from datetime import date
 from decimal import Decimal as D
@@ -75,3 +76,25 @@ def test_sincronizar_indexa():
     assert c.saldo == D("12345.68") and c.tipo == "inversion"
     indexa.sincronizar(s, cliente)
     assert s.query(Cuenta).filter_by(origen="indexa").count() == 1
+    assert json.loads(c.detalle)["posiciones"] == []  # sin rentabilidad ni posiciones, el saldo se actualiza igual
+
+
+def test_detalle_indexa():
+    """Posiciones y rentabilidad con la forma que devuelve la API (datos de ejemplo)."""
+    cartera = {"portfolio": {"total_amount": 10100, "cash_amount": 100, "instruments_amount": 10000},
+               "instrument_accounts": [{"positions": [
+                   {"instrument": {"identifier_name": "ISIN", "isin_code": "IE00TEST0001", "name": "Fondo RV Europa",
+                                   "asset_class": "equity_europe", "management_company_description": "Gestora A"},
+                    "titles": 100, "price": 30, "amount": 3000, "cost_amount": 2500, "weight_real": 0.3},
+                   {"instrument": {"identifier_name": "DGS", "dgs_code": "N5000", "dgs_fund_code": "F0001",
+                                   "name": "Fondo RF"}, "titles": 70, "price": 100, "amount": 7000, "cost_amount": 7100}]}]}
+    rentabilidad = {"return": {"time_return_annual": 0.0654, "time_return": 0.2, "money_return": 0.18},
+                    "plan_expected_return": 0.05, "volatility": 0.11}
+    d = indexa.detalle(cartera, rentabilidad, {"type": "pension", "profile": {"selected_risk": 6}})
+    assert d["producto"] == "Plan de pensiones" and d["perfil_riesgo"] == 6
+    assert d["total"] == 10100 and d["efectivo"] == 100 and d["invertido"] == 10000
+    assert d["coste"] == 9600 and d["plusvalia"] == 400
+    assert d["rentabilidad_anual"] == 6.54 and d["volatilidad"] == 11 and d["rentabilidad_esperada"] == 5
+    rf, rv = d["posiciones"]
+    assert rf["codigo"] == "N5000 - F0001" and rf["peso"] == 69.31  # sin weight_real: valor / total
+    assert rv["codigo"] == "IE00TEST0001" and rv["peso"] == 30

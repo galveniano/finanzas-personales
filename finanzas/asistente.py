@@ -28,6 +28,9 @@ HERRAMIENTAS = [
      "parameters": {"type": "object", "properties": {}}},
     {"name": "inversiones", "description": "Inversiones privadas (private equity, p. ej. Concrescenta): compromiso, "
      "desembolsado, NAV, TVPI y calendario de llamadas de capital.", "parameters": {"type": "object", "properties": {}}},
+    {"name": "indexa", "description": "Cartera de Indexa Capital: fondos con su peso, valor, coste y plusvalía; "
+     "rentabilidad anualizada, total y esperada, volatilidad y perfil de riesgo.",
+     "parameters": {"type": "object", "properties": {}}},
     {"name": "hacienda", "description": "Modelos presentados a Hacienda (303, 130, renta) con sus importes.",
      "parameters": {"type": "object", "properties": {}}},
     {"name": "calcular_sueldo", "description": "Neto mensual a partir de un bruto anual, o bruto necesario para un neto.",
@@ -50,6 +53,8 @@ def _ejecutar(s: Session, nombre: str, args: dict):
         return api.ver_planificacion(s=s)
     if nombre == "inversiones":
         return api.listar_inversiones(s=s)
+    if nombre == "indexa":
+        return api.detalle_indexa(s=s)
     if nombre == "hacienda":
         return api.ver_declaraciones(s=s)
     if nombre == "calcular_sueldo":

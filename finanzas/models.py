@@ -31,6 +31,8 @@ class Cuenta(Base):
     conexion_id: Mapped[int | None] = mapped_column(ForeignKey("conexiones_bancarias.id"), nullable=True)
     uid_externo: Mapped[str | None] = mapped_column(String(80), nullable=True)
     ultima_sincronizacion: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Detalle de la última sincronización (Indexa: posiciones, rentabilidad...), en JSON
+    detalle: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     movimientos: Mapped[list["Movimiento"]] = relationship(back_populates="cuenta")
 
