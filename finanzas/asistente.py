@@ -42,7 +42,8 @@ HERRAMIENTAS = [
 
 def _ejecutar(s: Session, nombre: str, args: dict):
     if nombre == "movimientos":
-        return api.listar_movimientos(q=args.get("texto", ""), limite=min(int(args.get("limite") or 50), 300), s=s)
+        return api.listar_movimientos(q=args.get("texto", ""), limite=min(int(args.get("limite") or 50), 300),
+                                      solo_tuyas=True, s=s)
     if nombre == "autonomo":
         return api.ver_autonomo(anio=args["anio"], s=s)
     if nombre == "nominas":

@@ -30,11 +30,21 @@ class Cuenta(Base):
     # Conexión bancaria de la que viene (Enable Banking) y su id de cuenta en esa sesión
     conexion_id: Mapped[int | None] = mapped_column(ForeignKey("conexiones_bancarias.id"), nullable=True)
     uid_externo: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    # Hasta qué fecha hacia atrás se han traído ya movimientos del banco (la carga inicial va por tramos)
+    historico_desde: Mapped[date | None] = mapped_column(Date, nullable=True)
     ultima_sincronizacion: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Parte de la cuenta que es tuya, en %: 100 tuya, 50 compartida a medias, 0 no es tuya (se ve pero no cuenta).
+    # Vacío = 100 (bases de datos anteriores).
+    participacion: Mapped[Decimal | None] = mapped_column(Porcentaje, nullable=True)
     # Detalle de la última sincronización (Indexa: posiciones, rentabilidad...), en JSON
     detalle: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     movimientos: Mapped[list["Movimiento"]] = relationship(back_populates="cuenta")
+
+    @property
+    def parte(self) -> Decimal:
+        """Fracción tuya (0 a 1)."""
+        return (Decimal("100") if self.participacion is None else self.participacion) / 100
 
 
 class Categoria(Base):

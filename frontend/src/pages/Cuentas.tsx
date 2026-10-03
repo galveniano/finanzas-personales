@@ -38,6 +38,28 @@ function Importar({ cuenta, onCerrar }: { cuenta: Cuenta; onCerrar: () => void }
   )
 }
 
+/** De quién es la cuenta: tuya, compartida (cuenta tu parte) o de otra persona (se ve pero no cuenta). */
+function Titularidad({ c }: { c: Cuenta }) {
+  const cambiar = useAccion((participacion: number) => api.patch(`/cuentas/${c.id}`, { participacion }), 'Cuenta actualizada')
+  const fijas = [100, 50, 0]
+  return (
+    <select value={c.participacion} disabled={cambiar.isPending} aria-label="De quién es la cuenta"
+      onChange={(e) => {
+        if (e.target.value === 'otro') {
+          const v = num(prompt('¿Qué parte de la cuenta es tuya? (en %)', String(c.participacion)) ?? undefined)
+          if (v != null && v >= 0 && v <= 100) cambiar.mutate(v)
+        } else cambiar.mutate(Number(e.target.value))
+      }}
+      className="max-w-full rounded-lg border border-line bg-panel px-2 py-1 text-xs">
+      <option value={100}>Mía</option>
+      <option value={50}>Compartida a medias</option>
+      <option value={0}>No es mía (no cuenta)</option>
+      {!fijas.includes(c.participacion) && <option value={c.participacion}>Mía al {c.participacion} %</option>}
+      <option value="otro">Otro porcentaje…</option>
+    </select>
+  )
+}
+
 export default function Cuentas() {
   const [filtro, setFiltro] = useState({ cuenta: '', categoria: '', q: '' })
   const [nueva, setNueva] = useState(false)
@@ -48,16 +70,17 @@ export default function Cuentas() {
   if (filtro.cuenta) params.set('cuenta_id', filtro.cuenta)
   if (filtro.categoria) params.set('categoria_id', filtro.categoria)
   if (filtro.q) params.set('q', filtro.q)
+  if (!filtro.cuenta) params.set('solo_tuyas', 'true')  // las cuentas que no son tuyas, solo si las eliges
   const qs = params.toString()
   const movs = useQuery({ queryKey: ['movimientos', qs], queryFn: () => api.get<Movimiento[]>(`/movimientos${qs ? `?${qs}` : ''}`) })
   const crear = useAccion((d: Record<string, string>) => api.post('/cuentas', { ...d, saldo: num(d.saldo) ?? 0 }).then(() => setNueva(false)), 'Cuenta creada')
   const categorizar = useAccion(({ id, cat }: { id: number; cat: string }) => api.patch(`/movimientos/${id}`, { categoria_id: cat ? Number(cat) : null }))
 
-  const total = (cuentas.data ?? []).filter((c) => c.tipo !== 'tarjeta').reduce((s, c) => s + c.saldo, 0)
+  const total = (cuentas.data ?? []).filter((c) => c.tipo !== 'tarjeta').reduce((s, c) => s + c.saldo_tuyo, 0)
 
   return (
     <>
-      <Cabecera titulo="Cuentas" subtitulo={cuentas.data ? `${cuentas.data.length} cuentas · ${eur(total)} en total` : undefined}>
+      <Cabecera titulo="Cuentas" subtitulo={cuentas.data ? `${cuentas.data.length} cuentas · ${eur(total)} tuyos` : undefined}>
         <Boton onClick={() => setNueva(true)}><Plus size={16} />Nueva cuenta</Boton>
       </Cabecera>
 
@@ -66,7 +89,7 @@ export default function Cuentas() {
           {cuentas.data?.map((c) => {
             const o = ORIGEN[c.origen] ?? ORIGEN.manual
             return (
-              <Tarjeta key={c.id}>
+              <Tarjeta key={c.id} className={c.participacion === 0 ? 'opacity-60' : undefined}>
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     <div className="truncate font-semibold">{c.nombre}</div>
@@ -75,6 +98,11 @@ export default function Cuentas() {
                   <Etiqueta tono={o.tono}>{o.texto}</Etiqueta>
                 </div>
                 <div className="cifra mt-4 text-2xl font-medium">{eur(c.saldo)}</div>
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted">
+                  <Titularidad c={c} />
+                  {c.participacion > 0 && c.participacion < 100 && <span>Tuyo: <span className="cifra">{eur(c.saldo_tuyo)}</span></span>}
+                  {c.participacion === 0 && <span>No suma en tu patrimonio ni en tus gastos</span>}
+                </div>
                 <div className="mt-1 flex items-center justify-between gap-2 text-xs text-muted">
                   <span>{c.ultima_sincronizacion ? `Sincronizada ${fecha(c.ultima_sincronizacion, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}` : `Saldo a ${fecha(c.saldo_fecha)}`}</span>
                   {c.origen !== 'indexa' && (
