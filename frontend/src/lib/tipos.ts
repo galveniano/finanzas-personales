@@ -53,6 +53,7 @@ export interface GastoAutonomo {
 }
 export interface Autonomo {
   anio: number; trimestres: Trimestre[]; total_facturado: number
+  por_anio: { anio: number; facturado: number; gastos: number; irpf: number; neto: number; previsto: boolean }[]
   ingresos_declarados: number | null; ultimo_130: number | null; pagado_iva: number; pagado_irpf: number
   por_cliente: { cliente: string; base: number }[]
   facturas: Factura[]; gastos: GastoAutonomo[]; clientes: string[]

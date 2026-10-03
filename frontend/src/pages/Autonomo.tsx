@@ -2,8 +2,9 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Plus, Trash2 } from 'lucide-react'
 import { api } from '../lib/api'
-import { eur, fecha, hoyISO } from '../lib/format'
+import { eur, eurK, fecha, hoyISO } from '../lib/format'
 import { Link } from 'react-router-dom'
+import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import type { Autonomo as Datos, Fuente, Prevision } from '../lib/tipos'
 import { Boton, Cabecera, Campo, Cargando, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio, num, opc, useAccion } from '../components/ui'
 
@@ -123,6 +124,27 @@ export default function Autonomo() {
               </Tarjeta>
             ))}
           </div>
+          {d.por_anio.length > 0 && (
+            <Tarjeta className="mt-4" titulo="Facturado y ganado neto por año">
+              <div className="h-60">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={d.por_anio.map((a) => ({ ...a, etiqueta: a.previsto ? `${a.anio} (previsto)` : String(a.anio) }))}
+                    margin={{ top: 8, right: 4, left: 4, bottom: 0 }}>
+                    <CartesianGrid vertical={false} stroke="var(--line)" />
+                    <XAxis dataKey="etiqueta" tick={{ fill: 'var(--muted)', fontSize: 11 }} axisLine={false} tickLine={false} />
+                    <YAxis tickFormatter={eurK} tick={{ fill: 'var(--muted)', fontSize: 11 }} axisLine={false} tickLine={false} width={68} />
+                    <Tooltip contentStyle={{ background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 12, fontSize: 12 }}
+                      cursor={{ fill: 'var(--panel-2)' }} formatter={(v, n) => [eur(Number(v)), n === 'facturado' ? 'Facturado (sin IVA)' : 'Neto tras gastos e IRPF']} />
+                    <Legend formatter={(v) => (v === 'facturado' ? 'Facturado (sin IVA)' : 'Neto tras gastos e IRPF')} wrapperStyle={{ fontSize: 12 }} />
+                    <Bar dataKey="facturado" fill="var(--chart-2)" radius={[4, 4, 0, 0]} maxBarSize={36} />
+                    <Bar dataKey="neto" fill="var(--chart-1)" radius={[4, 4, 0, 0]} maxBarSize={36} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+              <p className="mt-2 text-xs text-muted">Neto = facturado menos gastos deducibles y el IRPF que se lleva la actividad encima de tu nómina (tu tipo marginal).
+                El IVA no cuenta: lo cobras y se lo das a Hacienda. El año en curso usa la previsión del año completo (o lo ya facturado, si es más).</p>
+            </Tarjeta>
+          )}
           <Tarjeta className="mt-4" titulo={`Renta ${anio} (se paga en junio de ${anio + 1})`}
             accion={<Link to="/prevision" className="text-xs font-medium text-accent">Ver previsión</Link>}>
             {renta ? (

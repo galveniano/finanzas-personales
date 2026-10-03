@@ -183,6 +183,15 @@ def _renta(cfg: dict, nom: dict, facturado: float, retenciones: float, pagos_130
             "tipo_medio": round(cuota / base * 100, 2) if base else 0.0}
 
 
+def irpf_de_la_actividad(cfg: dict, actividad: float) -> float:
+    """IRPF que se lleva la actividad: la cuota con ella menos la cuota solo con la nómina (tipo marginal)."""
+    nom = _nomina_anual(cfg.get("nomina"))
+    trabajo = max(nom["bruto"] - nom["ss"] - calc_nomina.OTROS_GASTOS, 0.0)
+    minimo = calc_nomina.MINIMO_PERSONAL
+    return max(_escala(trabajo + actividad) - _escala(trabajo), 0.0) if trabajo > minimo else \
+        max(_escala(trabajo + actividad) - _escala(minimo), 0.0)
+
+
 def _presentado(s: Session, modelo: str, anio: int, trimestre: int) -> float | None:
     d = s.scalar(select(Declaracion).where(Declaracion.modelo == modelo, Declaracion.ejercicio == anio,
                                            Declaracion.periodo == f"{trimestre}T").order_by(Declaracion.id.desc()))
