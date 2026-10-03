@@ -94,3 +94,23 @@ def test_extraer_code_rechaza_basura():
     import pytest
     with pytest.raises(eb.EnableBankingError):
         eb.extraer_code("esto no es un código")
+
+
+def test_vuelta_del_banco_ensenya_el_error(monkeypatch):
+    """Si algo inesperado falla al volver del banco, se vuelve a Conexiones con el motivo (no un 500)."""
+    from fastapi.testclient import TestClient
+    from finanzas.main import app
+
+    def roto(s, code, cliente=None):
+        raise KeyError("uid")
+    monkeypatch.setattr(eb, "completar_autorizacion", roto)
+    with TestClient(app) as c:
+        r = c.get("/sabadell/vuelta?state=x&code=abc", follow_redirects=False)
+        assert r.status_code == 307 and "sabadell_error=KeyError" in r.headers["location"]
+
+    sincronizado = []
+    monkeypatch.setattr(eb, "completar_autorizacion", lambda s, code, cliente=None: None)
+    monkeypatch.setattr(sync, "sincronizar_sabadell", lambda s, cliente=None: sincronizado.append(1))
+    with TestClient(app) as c:
+        r = c.get("/sabadell/vuelta?state=x&code=abc", follow_redirects=False)
+        assert r.headers["location"].endswith("sabadell=ok") and sincronizado
