@@ -1,11 +1,11 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Plus } from 'lucide-react'
+import { Plus, Upload } from 'lucide-react'
 import { api } from '../lib/api'
 import { eur, fecha, hoyISO } from '../lib/format'
 import type { Inmueble } from '../lib/tipos'
-import { Barra, Boton, Cabecera, Campo, Cargando, Dato, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio, num, opc, useAccion } from '../components/ui'
+import { Barra, Boton, Cabecera, Campo, Cargando, Dato, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio, num, opc, useAccion, useAvisos } from '../components/ui'
 
 type Accion = { tipo: 'valoracion' | 'hipoteca' | 'contrato' | 'renta' | 'gasto' | 'nuevo'; inmueble?: Inmueble; contratoId?: number }
 
@@ -17,8 +17,12 @@ function Fila({ etiqueta, valor, fuerte }: { etiqueta: ReactNode; valor: number;
   )
 }
 
+const pct = (v: number | null) => (v === null ? '—' : `${v.toLocaleString('es-ES', { maximumFractionDigits: 2 })} %`)
+
 function Ficha({ i, abrir }: { i: Inmueble; abrir: (a: Accion) => void }) {
   const enObra = i.tipo === 'inmueble_en_construccion'
+  const coche = i.tipo === 'vehiculo'
+  const ren = i.rentabilidad
   const totalObra = i.pagos.reduce((s, p) => s + p.importe, 0)
   const pagado = i.pagos.filter((p) => p.pagado).reduce((s, p) => s + p.importe, 0)
   const r = i.rendimiento
@@ -28,7 +32,7 @@ function Ficha({ i, abrir }: { i: Inmueble; abrir: (a: Accion) => void }) {
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-lg font-semibold">{i.nombre}</h2>
-            <Etiqueta tono={enObra ? 'aviso' : 'acento'}>{enObra ? 'En construcción' : i.uso === 'alquiler' ? 'Alquilado' : i.uso === 'vivienda_habitual' ? 'Vivienda habitual' : 'Inmueble'}</Etiqueta>
+            <Etiqueta tono={enObra ? 'aviso' : 'acento'}>{coche ? 'Coche' : enObra ? 'En construcción' : i.uso === 'alquiler' ? 'Alquilado' : i.uso === 'vivienda_habitual' ? 'Vivienda habitual' : 'Inmueble'}</Etiqueta>
           </div>
           <p className="mt-1 text-xs text-muted">
             {i.fecha_compra ? `Comprado el ${fecha(i.fecha_compra)} por ${eur(i.precio_compra)}` : enObra ? `Precio ${eur(i.precio_compra)}` : 'Sin fecha de compra'}
@@ -37,17 +41,18 @@ function Ficha({ i, abrir }: { i: Inmueble; abrir: (a: Accion) => void }) {
         </div>
         <div className="flex flex-wrap gap-1.5">
           {!enObra && <Boton variante="secundario" className="px-2.5 py-1.5 text-xs" onClick={() => abrir({ tipo: 'valoracion', inmueble: i })}>Valorar</Boton>}
-          <Boton variante="secundario" className="px-2.5 py-1.5 text-xs" onClick={() => abrir({ tipo: 'hipoteca', inmueble: i })}>Hipoteca</Boton>
-          {!enObra && <Boton variante="secundario" className="px-2.5 py-1.5 text-xs" onClick={() => abrir({ tipo: 'contrato', inmueble: i })}>Contrato</Boton>}
-          <Boton variante="secundario" className="px-2.5 py-1.5 text-xs" onClick={() => abrir({ tipo: 'gasto', inmueble: i })}>Gasto</Boton>
+          {!coche && <Boton variante="secundario" className="px-2.5 py-1.5 text-xs" onClick={() => abrir({ tipo: 'hipoteca', inmueble: i })}>Hipoteca</Boton>}
+          {!enObra && !coche && <Boton variante="secundario" className="px-2.5 py-1.5 text-xs" onClick={() => abrir({ tipo: 'contrato', inmueble: i })}>Contrato</Boton>}
+          {!coche && <Boton variante="secundario" className="px-2.5 py-1.5 text-xs" onClick={() => abrir({ tipo: 'gasto', inmueble: i })}>Gasto</Boton>}
         </div>
       </div>
 
       <div className="mt-5 grid gap-6 sm:grid-cols-3">
         <Dato etiqueta={enObra ? 'Pagado' : 'Valor'} valor={eur(i.valor)} nota={i.valor_detalle} />
-        <Dato etiqueta="Hipoteca pendiente" valor={eur(i.deuda)} />
-        <Dato etiqueta="Es tuyo" valor={eur(i.equity)} tono={i.equity >= 0 ? undefined : 'neg'} />
+        {!coche && <Dato etiqueta="Hipoteca pendiente" valor={eur(i.deuda)} />}
+        {!coche && <Dato etiqueta="Es tuyo" valor={eur(i.equity)} tono={i.equity >= 0 ? undefined : 'neg'} />}
       </div>
+      {i.notas && <p className="mt-3 text-xs text-muted">{i.notas}</p>}
 
       <div className="mt-6 grid gap-6 lg:grid-cols-2 [&>*]:min-w-0">
         {enObra && (
@@ -91,6 +96,23 @@ function Ficha({ i, abrir }: { i: Inmueble; abrir: (a: Accion) => void }) {
             </ol>
           </div>
         ))}
+
+        {ren && (
+          <div>
+            <h3 className="mb-2 text-sm font-semibold">Rentabilidad del alquiler</h3>
+            <div className="mb-3 flex flex-wrap gap-x-8 gap-y-2">
+              <Dato etiqueta="Bruta" valor={pct(ren.bruta)} />
+              <Dato etiqueta="Neta" valor={pct(ren.neta)} />
+              <Dato etiqueta="Sobre lo que pusiste" valor={pct(ren.sobre_aportado)} />
+            </div>
+            <Fila etiqueta="Renta al año" valor={ren.renta_anual} />
+            <Fila etiqueta="Gastos (últimos 12 meses)" valor={-ren.gastos_anuales} />
+            <Fila etiqueta="Cuotas de hipoteca al año" valor={-ren.cuotas_anuales} />
+            <Fila etiqueta="Te queda al año" valor={ren.flujo_caja_anual} fuerte />
+            <p className="mt-2 text-xs text-muted">Bruta y neta sobre lo que costó ({eur(ren.coste)}); sobre el valor actual la neta es {pct(ren.neta_sobre_valor)}.
+              «Sobre lo que pusiste» descuenta los intereses y compara con tu dinero sin la hipoteca ({eur(ren.aportado)}).</p>
+          </div>
+        )}
 
         {r && (
           <div>
@@ -180,7 +202,7 @@ function Formularios({ a, cerrar }: { a: Accion; cerrar: () => void }) {
         valor_catastral_construccion: num(d.valor_catastral_construccion) ?? 0, porcentaje_propiedad: num(d.porcentaje_propiedad) ?? 100 })}>
         <Campo etiqueta="Nombre" name="nombre" required placeholder="Piso alquilado" />
         <Selector etiqueta="Estado" name="tipo" defaultValue="inmueble">
-          <option value="inmueble">Ya es mío</option><option value="inmueble_en_construccion">Obra nueva en construcción</option>
+          <option value="inmueble">Ya es mío</option><option value="inmueble_en_construccion">Obra nueva en construcción</option><option value="vehiculo">Coche</option>
         </Selector>
         <Selector etiqueta="Uso" name="uso" defaultValue="alquiler">
           <option value="alquiler">Alquiler</option><option value="vivienda_habitual">Vivienda habitual</option><option value="otro">Otro</option>
@@ -197,16 +219,27 @@ function Formularios({ a, cerrar }: { a: Accion; cerrar: () => void }) {
 
 const TITULOS: Record<Accion['tipo'], string> = {
   valoracion: 'Nueva valoración', hipoteca: 'Añadir hipoteca', contrato: 'Contrato de alquiler',
-  renta: 'Actualizar renta', gasto: 'Añadir gasto', nuevo: 'Nuevo inmueble',
+  renta: 'Actualizar renta', gasto: 'Añadir gasto', nuevo: 'Nuevo inmueble o coche',
 }
 
 export default function Inmuebles() {
   const [accion, setAccion] = useState<Accion | null>(null)
   const { data, isLoading, error } = useQuery({ queryKey: ['inmuebles'], queryFn: () => api.get<{ anio: number; inmuebles: Inmueble[] }>('/inmuebles') })
+  const avisar = useAvisos()
+  const input = useRef<HTMLInputElement>(null)
+  const importar = useAccion(async (f: File) => {
+    const fd = new FormData()
+    fd.append('fichero', f)
+    const r = await api.post<{ mensajes: string[] }>('/importar/datos', fd)
+    r.mensajes.forEach((m) => avisar(m))
+  })
   return (
     <>
-      <Cabecera titulo="Inmuebles" subtitulo="El piso alquilado, la casa nueva y sus hipotecas">
-        <Boton onClick={() => setAccion({ tipo: 'nuevo' })}><Plus size={16} />Inmueble</Boton>
+      <Cabecera titulo="Bienes" subtitulo="Pisos, la casa nueva, hipotecas y coche">
+        <input ref={input} type="file" accept=".json,application/json" className="hidden"
+          onChange={(e) => { const f = e.target.files?.[0]; if (f) importar.mutate(f); e.target.value = '' }} />
+        <Boton variante="secundario" onClick={() => input.current?.click()} disabled={importar.isPending}><Upload size={16} />Importar datos</Boton>
+        <Boton onClick={() => setAccion({ tipo: 'nuevo' })}><Plus size={16} />Añadir</Boton>
       </Cabecera>
       {isLoading ? <Cargando /> : error ? <ErrorCarga error={error} /> :
         data?.inmuebles.length ? data.inmuebles.map((i) => <Ficha key={i.id} i={i} abrir={setAccion} />)

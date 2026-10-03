@@ -53,9 +53,16 @@ def cuadro_amortizacion(deuda: Deuda) -> list[Cuota]:
 
 
 def saldo_pendiente(deuda: Deuda, a_fecha: date) -> Decimal:
-    if deuda.saldo_pendiente_manual is not None:
-        return deuda.saldo_pendiente_manual
     cuadro = cuadro_amortizacion(deuda)
+    if deuda.saldo_pendiente_manual is not None:
+        # El saldo real que diste en una fecha; desde ahí sigue bajando con cada cuota del cuadro
+        pendiente = deuda.saldo_pendiente_manual
+        if deuda.saldo_fecha:
+            i = deuda.tipo_interes_anual / 100 / 12
+            for c in cuadro:
+                if deuda.saldo_fecha < c.fecha <= a_fecha and pendiente > 0:
+                    pendiente -= min(c.cuota - (pendiente * i).quantize(CENT), pendiente)
+        return pendiente
     if not cuadro:
         return deuda.capital_inicial
     pendiente = deuda.capital_inicial

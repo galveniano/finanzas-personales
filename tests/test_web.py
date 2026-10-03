@@ -35,8 +35,11 @@ def test_flujo_completo_api():
         c.post(f"/api/inmuebles/{piso['id']}/hipotecas", json={"capital_inicial": 120000, "tipo_interes_anual": 2.5,
                                                                  "fecha_inicio": "2020-01-15", "plazo_meses": 300})
         c.post(f"/api/inmuebles/{piso['id']}/contratos", json={"fecha_inicio": "2021-01-01", "renta_mensual": 600})
-        c.post("/api/contratos/1/rentas", json={"desde": "2026-01-01", "renta_mensual": 650})
-        ficha = c.get("/api/inmuebles?anio=2026").json()["inmuebles"][0]
+        fichas = c.get("/api/inmuebles?anio=2026").json()["inmuebles"]
+        contrato = next(i for i in fichas if i["nombre"] == "Piso alquilado")["contratos"][0]["id"]
+        c.post(f"/api/contratos/{contrato}/rentas", json={"desde": "2026-01-01", "renta_mensual": 650})
+        fichas = c.get("/api/inmuebles?anio=2026").json()["inmuebles"]
+        ficha = next(i for i in fichas if i["nombre"] == "Piso alquilado")
         assert ficha["contratos"][0]["renta_actual"] == 650
         assert ficha["rendimiento"]["ingresos"] == 7800
 

@@ -500,6 +500,30 @@ class GastoInmuebleIn(BaseModel):
     concepto: str = ""
 
 
+def _pct(parte: Decimal, total: Decimal) -> float | None:
+    return round(float(parte / total * 100), 2) if total > 0 else None
+
+
+def _rentabilidad(a: Activo, contratos, gastos, deudas, valor: Decimal, hoy: date) -> dict | None:
+    """Rentabilidad del alquiler con la renta de hoy y los gastos de los últimos 12 meses.
+    Bruta y neta sobre lo que costó (precio + gastos de compra); también sobre el dinero que pusiste tú."""
+    vigentes = [c for c in contratos if c.fecha_inicio <= hoy and (not c.fecha_fin or c.fecha_fin >= hoy)]
+    if a.tipo != "inmueble" or not vigentes:
+        return None
+    renta = sum((c.renta_en(hoy) for c in vigentes), CERO) * 12
+    coste = a.precio_compra + a.gastos_compra
+    gastos_anio = sum((g.importe for g in gastos if g.tipo != "intereses" and g.fecha > hoy - timedelta(days=365)), CERO)
+    intereses = sum((intereses_anio(d, hoy.year) for d in deudas), CERO)
+    cuotas = sum((cuota_mensual(d.capital_inicial, d.tipo_interes_anual, d.plazo_meses) * 12
+                  for d in deudas if saldo_pendiente(d, hoy) > 0), CERO)
+    aportado = coste - sum((d.capital_inicial for d in deudas), CERO)
+    neto = renta - gastos_anio
+    return {"renta_anual": n(renta), "gastos_anuales": n(gastos_anio), "intereses_anuales": n(intereses),
+            "cuotas_anuales": n(cuotas), "coste": n(coste), "aportado": n(aportado),
+            "bruta": _pct(renta, coste), "neta": _pct(neto, coste), "neta_sobre_valor": _pct(neto, valor),
+            "sobre_aportado": _pct(neto - intereses, aportado), "flujo_caja_anual": n(neto - cuotas)}
+
+
 @router.get("/inmuebles")
 def listar_inmuebles(anio: int | None = None, s: Session = SesionDB):
     anio = anio or date.today().year
@@ -529,6 +553,7 @@ def listar_inmuebles(anio: int | None = None, s: Session = SesionDB):
             valor, detalle = patrimonio.valor_activo(a, hoy)
         deuda_total = sum((saldo_pendiente(d, hoy) for d in deudas), CERO)
         fichas.append({
+            "rentabilidad": _rentabilidad(a, contratos, gastos, deudas, valor, hoy), "notas": a.notas,
             "id": a.id, "nombre": a.nombre, "tipo": a.tipo, "uso": a.uso, "fecha_compra": f(a.fecha_compra),
             "precio_compra": n(a.precio_compra), "gastos_compra": n(a.gastos_compra),
             "valor_catastral": n(a.valor_catastral), "valor_catastral_construccion": n(a.valor_catastral_construccion),
@@ -602,6 +627,17 @@ def crear_gasto_inmueble(activo_id: int, datos: GastoInmuebleIn, s: Session = Se
     s.add(GastoInmueble(activo_id=activo_id, **datos.model_dump()))
     s.commit()
     return {"ok": True}
+
+
+@router.post("/importar/datos")
+async def importar_datos(fichero: UploadFile = File(...), s: Session = SesionDB):
+    """Fichero JSON con inmuebles, coches e inversiones privadas (ver importers/datos_json.py)."""
+    from finanzas.importers import datos_json
+    try:
+        datos = json.loads(await fichero.read())
+        return {"mensajes": datos_json.importar(s, datos)}
+    except (ValueError, KeyError, TypeError, AttributeError) as e:
+        raise HTTPException(400, f"No se ha podido importar: {e}")
 
 
 # --- Planificación ----------------------------------------------------------

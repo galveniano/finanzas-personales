@@ -45,15 +45,24 @@ class Patrimonio:
         return grupos
 
 
+# Depreciación anual típica de un coche de más de 3 años en el mercado de segunda mano
+DEPRECIACION_COCHE = Decimal("0.09")
+
+
 def valor_activo(activo: Activo, a_fecha: date) -> tuple[Decimal, str]:
     """Última valoración anterior a la fecha; si no hay, precio de compra.
     Para obra nueva sin entregar, lo ya pagado a la promotora."""
     vals = [v for v in activo.valoraciones if v.fecha <= a_fecha]
     if vals:
         v = vals[-1]
-        valor, detalle = v.valor, f"valoración {v.fecha:%d/%m/%Y}"
+        valor, detalle, desde = v.valor, f"valoración {v.fecha:%d/%m/%Y}", v.fecha
     else:
-        valor, detalle = activo.precio_compra, "precio de compra"
+        valor, detalle, desde = activo.precio_compra, "precio de compra", activo.fecha_compra
+    if activo.tipo == "vehiculo" and desde and a_fecha > desde:
+        # Un coche pierde valor solo: se estima desde la última cifra conocida
+        anios = Decimal((a_fecha - desde).days) / Decimal("365.25")
+        valor = (valor * (1 - DEPRECIACION_COCHE) ** anios).quantize(Decimal("1"))
+        detalle = f"estimado (−{DEPRECIACION_COCHE * 100:.0f} %/año desde {detalle})"
     return (valor * activo.porcentaje_propiedad / 100), detalle
 
 
@@ -84,8 +93,8 @@ def calcular(session: Session, a_fecha: date | None = None) -> Patrimonio:
             p.activos.append(Linea(a.nombre, "Inmuebles", pagado, "pagado a la promotora"))
             continue
         valor, detalle = valor_activo(a, a_fecha)
-        p.activos.append(Linea(a.nombre, "Inmuebles" if a.tipo.startswith("inmueble") else "Otros",
-                               valor, detalle))
+        grupo = "Inmuebles" if a.tipo.startswith("inmueble") else "Vehículos" if a.tipo == "vehiculo" else "Otros"
+        p.activos.append(Linea(a.nombre, grupo, valor, detalle))
 
     for inv in session.scalars(select(InversionPrivada)):
         detalle = f"NAV a {inv.nav_fecha:%d/%m/%Y}" if inv.nav_fecha else "NAV"
