@@ -1,10 +1,11 @@
 import { useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { FileText, Plus, Trash2, Upload } from 'lucide-react'
+import { FileText, Plus, Upload } from 'lucide-react'
 import { api } from '../lib/api'
-import { eur, fecha } from '../lib/format'
-import type { Declaracion, Declaraciones } from '../lib/tipos'
-import { Boton, Cabecera, Campo, Cargando, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio, num, opc, useAccion, useAvisos } from '../components/ui'
+import { fecha } from '../lib/format'
+import type { Autonomo, Declaracion, Declaraciones, Fuente, Prevision } from '../lib/tipos'
+import { RentaEstimada, RentaPresentada } from '../components/Renta'
+import { BorrarEnDosPasos, Boton, Cabecera, Campo, Cargando, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio, num, opc, useAccion, useAvisos } from '../components/ui'
 
 const RESULTADO: Record<Declaracion['resultado'], { texto: string; tono: 'neutro' | 'bien' | 'aviso' | 'mal' }> = {
   ingresar: { texto: 'A ingresar', tono: 'aviso' }, domiciliar: { texto: 'Domiciliado', tono: 'aviso' },
@@ -14,14 +15,65 @@ const RESULTADO: Record<Declaracion['resultado'], { texto: string; tono: 'neutro
 
 const periodoTexto = (p: string) => (p === '0A' ? 'Anual' : p.endsWith('T') ? `${p[0]}º trim.` : p)
 
-function Diferencia({ d }: { d: Declaracion }) {
-  if (d.estimado == null) return <span className="text-muted">—</span>
-  const dif = d.importe - d.estimado
-  if (Math.abs(dif) < 1) return <Etiqueta tono="bien">Cuadra</Etiqueta>
-  return <span className="cifra text-xs text-muted" title={`La app calcula ${eur(d.estimado)}`}>{dif > 0 ? '+' : ''}{eur(dif)}</span>
+function Modelo({ nombre, valor, fuente, exento }: { nombre: string; valor: number; fuente: Fuente; exento?: boolean }) {
+  return (
+    <div className="flex items-start justify-between gap-2">
+      <dt className="whitespace-nowrap">{nombre}
+        <span className={`block text-xs ${fuente === 'presentado' ? 'text-pos' : 'text-muted'}`}>{fuente === 'presentado' ? 'Presentado' : fuente === 'previsto' ? 'Previsto' : 'Estimado'}</span></dt>
+      <dd className="font-semibold">{exento ? <span className="font-normal text-muted">Exento</span> : <Importe valor={valor} />}</dd>
+    </div>
+  )
 }
 
-export default function Hacienda() {
+function Trimestres() {
+  const actual = new Date().getFullYear()
+  const [anio, setAnio] = useState(actual)
+  const { data: d } = useQuery({ queryKey: ['autonomo', anio], queryFn: () => api.get<Autonomo>(`/autonomo?anio=${anio}`) })
+  const trimActual = anio === actual ? Math.floor(new Date().getMonth() / 3) + 1 : 0
+  return (
+    <section>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h2 className="text-lg font-semibold">IVA e IRPF por trimestre</h2>
+        <Selector value={anio} onChange={(e) => setAnio(Number(e.target.value))} aria-label="Año" className="!w-28">
+          {[actual + 1, actual, actual - 1, actual - 2].map((a) => <option key={a} value={a}>{a}</option>)}
+        </Selector>
+      </div>
+      {d ? <>
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          {d.trimestres.map((t) => (
+            <Tarjeta key={t.trimestre} className={t.trimestre === trimActual ? 'ring-2 ring-accent' : ''}
+              titulo={`${t.trimestre}º trimestre`} accion={<span className="text-xs text-muted">{t.plazo}</span>}>
+              <dl className="space-y-2 text-sm">
+                <Modelo nombre="IVA · 303" valor={t.iva_resultado} fuente={t.iva_fuente} />
+                <Modelo nombre="IRPF · 130" valor={t.irpf_resultado} fuente={t.irpf_fuente} exento={t.exento_130} />
+              </dl>
+            </Tarjeta>
+          ))}
+        </div>
+        <p className="mt-3 text-sm text-muted">El 130 es el 20 % de lo que ganas en el año menos retenciones y lo ya pagado; el resto se ajusta en la renta.
+          Lo no presentado se prevé con tus tarifas y los días que trabajas.</p>
+        {d.trimestres[3].notas.map((n) => <p key={n} className="mt-2 text-sm text-muted">{n}</p>)}
+      </> : <Cargando />}
+    </section>
+  )
+}
+
+function Rentas() {
+  const { data: d } = useQuery({ queryKey: ['prevision'], queryFn: () => api.get<Prevision>('/prevision') })
+  if (!d || (!d.renta_presentada && !d.anios.length)) return null
+  return (
+    <section className="mt-8">
+      <h2 className="mb-3 text-lg font-semibold">Renta</h2>
+      <div className={`grid gap-4 md:grid-cols-2 ${d.renta_presentada && d.anios.length > 1 ? 'xl:grid-cols-3' : ''}`}>
+        {d.renta_presentada && <RentaPresentada r={d.renta_presentada} />}
+        {d.anios.map((r) => <RentaEstimada key={r.anio} r={r} />)}
+      </div>
+      <p className="mt-3 text-xs text-muted">Estimada con la escala general del IRPF, tu nómina, lo que facturas y el alquiler, ajustada con tu última renta presentada. El borrador real puede variar.</p>
+    </section>
+  )
+}
+
+export default function Impuestos() {
   const avisar = useAvisos()
   const input = useRef<HTMLInputElement>(null)
   const [manual, setManual] = useState(false)
@@ -50,41 +102,26 @@ export default function Hacienda() {
 
   return (
     <>
-      <Cabecera titulo="Hacienda" subtitulo="Los modelos que ya has presentado: IVA, IRPF y renta">
+      <Cabecera titulo="Impuestos" subtitulo="IVA e IRPF de cada trimestre, la renta y lo que ya has presentado">
         <Boton variante="secundario" onClick={() => setManual(true)}><Plus size={16} />A mano</Boton>
         <Boton onClick={() => input.current?.click()} disabled={subir.isPending}><Upload size={16} />{subir.isPending ? 'Leyendo…' : 'Subir declaraciones'}</Boton>
       </Cabecera>
       <input ref={input} type="file" accept="application/pdf,.pdf,.txt,text/plain" multiple hidden onChange={(e) => { elegir(e.target.files); e.target.value = '' }} />
 
-      <div
+      <Trimestres />
+      <Rentas />
+
+      <div className="mt-8"
         onDragOver={(e) => { e.preventDefault(); setArrastrando(true) }}
         onDragLeave={() => setArrastrando(false)}
-        onDrop={(e) => { e.preventDefault(); setArrastrando(false); elegir(e.dataTransfer.files) }}
-        className={`mb-6 rounded-2xl border-2 border-dashed px-5 py-6 text-sm transition ${arrastrando ? 'border-accent bg-accent-soft' : 'border-line'}`}>
-        <p className="font-medium">Arrastra aquí los justificantes PDF o los ficheros .txt de tus declaraciones, todos a la vez</p>
-        <p className="mt-1 text-muted">
-          Se leen solos el modelo, el periodo y el importe (y del PDF, también la fecha y el CSV). Si subes el .txt y luego el
-          justificante PDF del mismo trimestre, se queda el PDF. Hacienda no tiene una API para particulares: los antiguos se
-          descargan en la sede con Cl@ve, en <em>Mis expedientes</em> o <em>Consulta de declaraciones</em>.
-        </p>
-      </div>
-
+        onDrop={(e) => { e.preventDefault(); setArrastrando(false); elegir(e.dataTransfer.files) }}>
       {isLoading ? <Cargando /> : error ? <ErrorCarga error={error} /> : d && (
         <>
-          {d.por_anio.length > 0 && (
-            <div className="mb-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              {d.por_anio.slice(0, 4).map((a) => (
-                <Tarjeta key={a.ejercicio} titulo={`Ejercicio ${a.ejercicio}`}>
-                  <div className="cifra text-xl font-medium">{eur(a.pagado)}</div>
-                  <div className="text-xs text-muted">pagado{a.devuelto > 0 && ` · ${eur(a.devuelto)} devuelto`}</div>
-                </Tarjeta>
-              ))}
-            </div>
-          )}
-          <Tarjeta titulo="Presentadas">
+          <Tarjeta titulo="Presentadas" className={arrastrando ? 'ring-2 ring-accent' : ''}
+            accion={<span className="text-xs text-muted">Arrastra aquí los PDF o .txt de Hacienda</span>}>
             {d.declaraciones.length ? (
               <Tabla>
-                <thead><tr><th>Modelo</th><th>Periodo</th><th>Presentada</th><th>Resultado</th><th className="num">Importe</th><th className="num">Frente a la app</th><th /></tr></thead>
+                <thead><tr><th>Modelo</th><th>Periodo</th><th>Presentada</th><th>Resultado</th><th className="num">Importe</th><th /></tr></thead>
                 <tbody>
                   {d.declaraciones.map((x) => (
                     <tr key={x.id}>
@@ -93,22 +130,22 @@ export default function Hacienda() {
                       <td className="cifra whitespace-nowrap text-muted">{x.fecha_presentacion ? fecha(x.fecha_presentacion) : '—'}</td>
                       <td><Etiqueta tono={RESULTADO[x.resultado].tono}>{RESULTADO[x.resultado].texto}</Etiqueta></td>
                       <td className="num font-medium"><Importe valor={x.importe} /></td>
-                      <td className="num"><Diferencia d={x} /></td>
                       <td className="whitespace-nowrap text-right">
                         {x.tiene_pdf && (
                           <a href={`/api/declaraciones/${x.id}/pdf`} target="_blank" rel="noreferrer" aria-label="Ver justificante"
                             className="inline-flex rounded-lg p-1.5 text-muted hover:bg-panel-2 hover:text-ink"><FileText size={15} /></a>
                         )}
-                        <Boton variante="fantasma" className="px-1.5 py-1.5" aria-label="Borrar" onClick={() => borrar.mutate(x.id)}><Trash2 size={14} /></Boton>
+                        <BorrarEnDosPasos onBorrar={() => borrar.mutate(x.id)} />
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </Tabla>
-            ) : <Vacio>Sube los justificantes de tus 303, 130 y la renta para tenerlos aquí y compararlos con lo que calcula la app.</Vacio>}
+            ) : <Vacio>Sube los justificantes de tus 303, 130 y la renta (PDF o .txt). Los antiguos se descargan en la sede de Hacienda con Cl@ve, en «Mis expedientes».</Vacio>}
           </Tarjeta>
         </>
       )}
+      </div>
 
       <Dialogo abierto={manual} onCerrar={() => setManual(false)} titulo="Añadir declaración a mano">
         <Formulario onEnviar={(v) => crear.mutateAsync(v)}>

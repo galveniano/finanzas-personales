@@ -1,23 +1,21 @@
 import { useState } from 'react'
-import { NavLink, Outlet, useLocation } from 'react-router-dom'
+import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Briefcase, TrendingUp, Building2, CalendarClock, Ellipsis, LayoutDashboard, Landmark, LogOut, PlugZap, RefreshCw, Scale, Sparkles, Wallet } from 'lucide-react'
+import { Briefcase, Building2, CalendarClock, Ellipsis, LayoutDashboard, LogOut, RefreshCw, Scale, Settings, Sparkles, Wallet } from 'lucide-react'
 import { api, esDemo } from '../lib/api'
 import type { EstadoAuth, EstadoSync } from '../lib/tipos'
 import { Boton, useAccion } from './ui'
 
-const secciones: { a: string; texto: string; corto?: string; icono: typeof Wallet; movil?: boolean }[] = [
-  { a: '/', texto: 'Panel', icono: LayoutDashboard, movil: true },
-  { a: '/asistente', texto: 'Asistente', icono: Sparkles },
+const secciones: { a: string; texto: string; icono: typeof Wallet; movil?: boolean }[] = [
+  { a: '/', texto: 'Inicio', icono: LayoutDashboard, movil: true },
   { a: '/cuentas', texto: 'Cuentas', icono: Wallet, movil: true },
-  { a: '/autonomo', texto: 'Autónomo', icono: Briefcase, movil: true },
-  { a: '/hacienda', texto: 'Hacienda', icono: Scale, movil: true },
-  { a: '/nominas', texto: 'Nóminas', icono: Landmark },
-  { a: '/inmuebles', texto: 'Bienes', corto: 'Bienes', icono: Building2 },
-  { a: '/prevision', texto: 'Previsión', icono: TrendingUp },
-  { a: '/planificacion', texto: 'Planificación', corto: 'Planes', icono: CalendarClock, movil: true },
-  { a: '/conexiones', texto: 'Conexiones', corto: 'Bancos', icono: PlugZap },
+  { a: '/ingresos', texto: 'Ingresos', icono: Briefcase, movil: true },
+  { a: '/impuestos', texto: 'Impuestos', icono: Scale },
+  { a: '/inmuebles', texto: 'Bienes', icono: Building2 },
+  { a: '/plan', texto: 'Plan', icono: CalendarClock, movil: true },
 ]
+const ajustes = { a: '/ajustes', texto: 'Ajustes', icono: Settings }
+const asistente = { a: '/asistente', texto: 'Asistente', icono: Sparkles }
 
 function EstadoConexiones() {
   const { data } = useQuery({ queryKey: ['sync'], queryFn: () => api.get<EstadoSync>('/sync') })
@@ -56,7 +54,7 @@ function Sesion({ compacto }: { compacto?: boolean }) {
 function NavMovil() {
   const [mas, setMas] = useState(false)
   const { pathname } = useLocation()
-  const resto = secciones.filter((x) => !x.movil)
+  const resto = [...secciones.filter((x) => !x.movil), asistente, ajustes]
   const enResto = resto.some((x) => x.a === pathname)
   const clase = (activo: boolean) => `flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-lg py-1 text-[10px] ${activo ? 'text-accent' : 'text-muted'}`
   return (
@@ -75,9 +73,9 @@ function NavMovil() {
         </div>
       )}
       <nav className="fixed inset-x-0 bottom-0 z-30 flex justify-around border-t border-line bg-panel px-1 pt-1.5 md:hidden" style={{ paddingBottom: 'calc(6px + env(safe-area-inset-bottom, 0px))' }}>
-        {secciones.filter((x) => x.movil).map(({ a, texto, corto, icono: Icono }) => (
+        {secciones.filter((x) => x.movil).map(({ a, texto, icono: Icono }) => (
           <NavLink key={a} to={a} end={a === '/'} onClick={() => setMas(false)} className={({ isActive }) => clase(isActive)}>
-            <Icono size={20} /><span className="max-w-full truncate">{corto ?? texto}</span>
+            <Icono size={20} /><span className="max-w-full truncate">{texto}</span>
           </NavLink>
         ))}
         <button className={clase(enResto || mas)} onClick={() => setMas(!mas)} aria-expanded={mas}>
@@ -106,14 +104,24 @@ export default function Layout() {
             </NavLink>
           ))}
         </nav>
-        <p className="mt-auto px-2 text-xs leading-relaxed text-muted">Las cifras fiscales son estimaciones.</p>
+        <nav className="mt-auto flex flex-col gap-1">
+          {[asistente, ajustes].map(({ a, texto, icono: Icono }) => (
+            <NavLink key={a} to={a}
+              className={({ isActive }) => `flex items-center gap-3 rounded-xl px-3 py-2 text-sm transition ${isActive ? 'bg-accent-soft font-semibold text-accent' : 'text-muted hover:bg-panel-2 hover:text-ink'}`}>
+              <Icono size={18} />{texto}
+            </NavLink>
+          ))}
+        </nav>
         <Sesion />
       </aside>
 
       <div className="min-w-0 pb-24 md:pb-0">
         <div className="sticky z-20 flex items-center justify-between gap-3 border-b border-line bg-bg/85 px-4 py-3 backdrop-blur sm:px-8" style={{ top: 'env(safe-area-inset-top, 0px)' }}>
           <span className="font-semibold md:invisible">Finanzas</span>
-          <EstadoConexiones />
+          <div className="flex items-center gap-2">
+            <Link to="/asistente" aria-label="Asistente" className="rounded-xl border border-line bg-panel p-2 text-muted hover:text-ink md:hidden"><Sparkles size={16} /></Link>
+            <EstadoConexiones />
+          </div>
         </div>
         {esDemo && (
           <div className="mx-4 mt-4 rounded-xl border border-dashed border-accent px-4 py-2.5 text-sm text-muted sm:mx-8">

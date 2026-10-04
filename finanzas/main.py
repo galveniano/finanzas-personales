@@ -56,9 +56,9 @@ def cron_sync(request: Request):
 
 @app.get("/sabadell/vuelta", dependencies=[Depends(auth.requiere_sesion)])
 def vuelta_sabadell(code: str = ""):
-    """Vuelta desde el banco cuando la app se sirve por https (Vercel). En local se pega la URL en Conexiones."""
+    """Vuelta desde el banco cuando la app se sirve por https (Vercel). En local se pega la URL en Ajustes."""
     if not code:
-        return RedirectResponse("/#/conexiones")
+        return RedirectResponse("/#/ajustes")
     db.asegurar_tablas()
     with db.SessionLocal() as s:
         try:
@@ -67,15 +67,15 @@ def vuelta_sabadell(code: str = ""):
             s.rollback()
             log.exception("Fallo al completar la autorización de Sabadell")
             motivo = str(e) if isinstance(e, enablebanking.EnableBankingError) else f"{type(e).__name__}: {e}"
-            return RedirectResponse("/#/conexiones?" + urlencode({"sabadell_error": motivo[:300]}))
-        # La conexión ya está guardada; si la primera carga falla, queda registrada en Conexiones
+            return RedirectResponse("/#/ajustes?" + urlencode({"sabadell_error": motivo[:300]}))
+        # La conexión ya está guardada; si la primera carga falla, queda registrada en Ajustes
         sync.sincronizar_sabadell(s)
         try:
             sync.guardar_instantanea(s)
         except Exception:
             s.rollback()
             log.exception("Fallo al guardar la foto del patrimonio")
-    return RedirectResponse("/#/conexiones?sabadell=ok")
+    return RedirectResponse("/#/ajustes?sabadell=ok")
 
 
 if (WEB / "index.html").exists():

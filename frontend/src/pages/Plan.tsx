@@ -1,28 +1,21 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Check, Pencil, Plus } from 'lucide-react'
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { Link } from 'react-router-dom'
+import { Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { api } from '../lib/api'
-import { diasHasta, eur, eurK, fecha, hoyISO, mesCorto } from '../lib/format'
-import type { Planificacion as Datos } from '../lib/tipos'
-import { Barra, BorrarEnDosPasos, Boton, Cabecera, Campo, Cargando, Dato, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tarjeta, Vacio, num, useAccion } from '../components/ui'
+import { diasHasta, eur, eurK, fecha, hoyISO } from '../lib/format'
+import type { Planificacion as Datos, Prevision } from '../lib/tipos'
+import { Barra, BorrarEnDosPasos, Boton, Cabecera, Campo, Cargando, Dato, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio, num, useAccion } from '../components/ui'
 
+const nombreMes = (clave: string) => fecha(`${clave}-01`, { month: 'short', year: '2-digit' })
 const TIPO: Record<string, string> = { boda: 'Boda', viaje: 'Viaje', casa: 'Casa', colchon: 'Colchón', otro: 'Objetivo' }
 
-function pagosPorMes(d: Datos) {
-  const meses = new Map<string, number>()
-  for (const p of d.pagos) {
-    if (p.pagado) continue
-    const k = p.fecha.slice(0, 7)
-    meses.set(k, (meses.get(k) ?? 0) + p.importe)
-  }
-  return [...meses.entries()].sort().map(([mes, importe]) => ({ mes, importe }))
-}
-
-export default function Planificacion() {
+export default function Plan() {
   const [dialogo, setDialogo] = useState<'objetivo' | 'pago' | null>(null)
   const [editando, setEditando] = useState<Datos['objetivos'][number] | null>(null)
   const { data: d, isLoading, error } = useQuery({ queryKey: ['planificacion'], queryFn: () => api.get<Datos>('/planificacion') })
+  const { data: prev } = useQuery({ queryKey: ['prevision'], queryFn: () => api.get<Prevision>('/prevision') })
   const guardarObjetivo = useAccion((v: Record<string, string>) => {
     const datos = { nombre: v.nombre, tipo: v.tipo, fecha_objetivo: v.fecha_objetivo || null,
       importe_objetivo: num(v.importe_objetivo) ?? 0, ahorrado: num(v.ahorrado) ?? 0 }
@@ -41,35 +34,42 @@ export default function Planificacion() {
   if (isLoading) return <Cargando />
   if (error) return <ErrorCarga error={error} />
   if (!d) return null
-  const porMes = pagosPorMes(d)
-  const margen = d.liquidez - d.pendiente_12_meses
+  const sinSupuestos = prev && !prev.supuestos.nomina && !prev.supuestos.clientes.length
+  const ultimo = prev?.meses[prev.meses.length - 1]
+  const impuestos = prev?.meses.reduce((s, m) => s + m.total_impuestos, 0) ?? 0
 
   return (
     <>
-      <Cabecera titulo="Planificación" subtitulo="Bodas, viajes, la casa nueva y lo que viene">
+      <Cabecera titulo="Plan" subtitulo="El dinero que tendrás, tus objetivos y los pagos que vienen">
         <Boton variante="secundario" onClick={() => setDialogo('pago')}><Plus size={16} />Pago previsto</Boton>
         <Boton onClick={() => setDialogo('objetivo')}><Plus size={16} />Objetivo</Boton>
       </Cabecera>
 
       <Tarjeta>
-        <div className="grid gap-6 sm:grid-cols-3">
-          <Dato etiqueta="Liquidez hoy" valor={eur(d.liquidez)} nota="Cuentas corrientes y de ahorro" />
+        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+          <Dato etiqueta="Tienes hoy" valor={eur(d.liquidez)} nota="Cuentas corrientes y de ahorro" />
           <Dato etiqueta="Pagos en 12 meses" valor={eur(d.pendiente_12_meses)}
-            nota={d.financiado_hipoteca ? `Sin los ${eur(d.financiado_hipoteca)} que pone la hipoteca prevista` : undefined} />
-          <Dato etiqueta="Margen" valor={eur(margen)} tono={margen < 0 ? 'neg' : 'pos'}
-            nota={margen < 0 ? 'Con lo que tienes hoy no llegas: cuenta con lo que ahorres estos meses.' : 'Te sobra aunque no ahorres nada más.'} />
+            nota={d.financiado_hipoteca ? `Sin los ${eur(d.financiado_hipoteca)} que pone la hipoteca prevista` : 'Los de abajo'} />
+          <Dato etiqueta="Impuestos en 12 meses" valor={sinSupuestos || !prev ? '—' : eur(impuestos)} nota="IVA, 130 y renta" />
+          {ultimo && !sinSupuestos
+            ? <Dato etiqueta={`Tendrás en ${fecha(`${ultimo.mes}-01`, { month: 'long', year: 'numeric' })}`} valor={eur(ultimo.liquidez)}
+                tono={ultimo.liquidez < 0 ? 'neg' : 'pos'} nota={`Ahorrando unos ${eur((ultimo.liquidez - prev!.liquidez_hoy) / prev!.meses.length)} al mes`} />
+            : <Dato etiqueta="Tendrás en un año" valor="—" nota={<Link to="/ingresos" className="text-accent">Pon tu sueldo y tarifas</Link>} />}
         </div>
-        {porMes.length > 0 && (
-          <div className="mt-6 h-48">
+        {prev && !sinSupuestos && (
+          <div className="mt-6 h-56">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={porMes} margin={{ top: 8, right: 4, left: 4, bottom: 0 }}>
+              <ComposedChart data={prev.meses} margin={{ top: 8, right: 4, left: 4, bottom: 0 }}>
                 <CartesianGrid vertical={false} stroke="var(--line)" />
-                <XAxis dataKey="mes" tickFormatter={(m) => `${mesCorto(m)} ${m.slice(2, 4)}`} tick={{ fill: 'var(--muted)', fontSize: 11 }} axisLine={false} tickLine={false} />
-                <YAxis tickFormatter={eurK} tick={{ fill: 'var(--muted)', fontSize: 11 }} axisLine={false} tickLine={false} width={68} />
+                <XAxis dataKey="mes" tickFormatter={nombreMes} tick={{ fill: 'var(--muted)', fontSize: 11 }} axisLine={false} tickLine={false} />
+                <YAxis yAxisId="l" tickFormatter={eurK} tick={{ fill: 'var(--muted)', fontSize: 11 }} axisLine={false} tickLine={false} width={68} />
+                <YAxis yAxisId="n" orientation="right" hide />
                 <Tooltip contentStyle={{ background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 12, fontSize: 12 }}
-                  cursor={{ fill: 'var(--panel-2)' }} formatter={(v) => [eur(Number(v)), 'Pagos pendientes']} labelFormatter={(m) => `${mesCorto(String(m))} ${String(m).slice(0, 4)}`} />
-                <Bar dataKey="importe" fill="var(--chart-3)" radius={[4, 4, 0, 0]} maxBarSize={36} />
-              </BarChart>
+                  cursor={{ fill: 'var(--panel-2)' }} labelFormatter={(v) => nombreMes(String(v))}
+                  formatter={(v, n) => [eur(Number(v)), n === 'neto' ? 'Ahorro del mes' : 'Dinero disponible']} />
+                <Bar yAxisId="n" dataKey="neto" fill="var(--chart-2)" radius={[4, 4, 0, 0]} maxBarSize={24} />
+                <Line yAxisId="l" dataKey="liquidez" stroke="var(--chart-1)" strokeWidth={2} dot={false} />
+              </ComposedChart>
             </ResponsiveContainer>
           </div>
         )}
@@ -134,6 +134,40 @@ export default function Planificacion() {
           </ol>
         ) : <Vacio>Apunta aquí los plazos de la obra nueva, la señal de la boda o el viaje.</Vacio>}
       </Tarjeta>
+
+
+      {prev && !sinSupuestos && (
+        <details className="mt-8 rounded-2xl border border-line bg-panel p-5">
+          <summary className="cursor-pointer text-[15px] font-semibold">Mes a mes</summary>
+          <div className="mt-4">
+            <Tabla>
+              <thead><tr><th>Mes</th><th className="num">Nómina</th><th className="num">Clientes</th><th className="num">Alquiler</th>
+                <th className="num">Gastos</th><th className="num">Pagos</th><th>Impuestos</th><th className="num">Ahorro</th><th className="num">Liquidez</th></tr></thead>
+              <tbody>
+                {prev.meses.map((m) => (
+                  <tr key={m.mes}>
+                    <td className="whitespace-nowrap capitalize">{nombreMes(m.mes)}</td>
+                    <td className="num"><Importe valor={m.nomina} /></td>
+                    <td className="num" title={`Facturado ${eur(m.facturado)} + IVA ${eur(m.iva)} − retención ${eur(m.retenciones)}`}><Importe valor={m.cobros} /></td>
+                    <td className="num"><Importe valor={m.alquiler} /></td>
+                    <td className="num"><Importe valor={-m.gastos} /></td>
+                    <td className="num">{m.pagos_previstos ? <Importe valor={-m.pagos_previstos} /> : ''}</td>
+                    <td className="text-xs">{m.impuestos.map((i) => (
+                      <div key={i.concepto} className="flex justify-between gap-2 whitespace-nowrap">
+                        <span className="text-muted">{i.concepto}{i.presentado && <> <Etiqueta tono="bien">Presentado</Etiqueta></>}</span>
+                        <Importe valor={-i.importe} />
+                      </div>))}</td>
+                    <td className="num font-medium"><Importe valor={m.neto} /></td>
+                    <td className="num"><Importe valor={m.liquidez} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </Tabla>
+            <p className="mt-3 text-xs text-muted">Clientes es lo que cobras: base más IVA menos retención. El IVA y el 130 de cada trimestre se pagan el mes siguiente; la renta, en junio.
+              «Pagos» son los pagos previstos de arriba.</p>
+          </div>
+        </details>
+      )}
 
       <Dialogo abierto={dialogo === 'objetivo'} onCerrar={() => { setDialogo(null); setEditando(null) }} titulo={editando ? 'Editar objetivo' : 'Nuevo objetivo'}>
         {dialogo === 'objetivo' && <Formulario key={editando?.id ?? 'nuevo'} onEnviar={(v) => guardarObjetivo.mutateAsync(v)}>

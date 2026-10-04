@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import type { ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ExternalLink, RefreshCw } from 'lucide-react'
+import { ExternalLink, RefreshCw, Upload } from 'lucide-react'
 import { api } from '../lib/api'
 import { diasHasta, fecha } from '../lib/format'
 import type { EstadoSync, UltimaSync } from '../lib/tipos'
@@ -143,7 +143,28 @@ function useVueltaBanco() {
   }, [errorBanco, ok, avisar, setParams])
 }
 
-export default function Conexiones() {
+function ImportarDatos() {
+  const avisar = useAvisos()
+  const input = useRef<HTMLInputElement>(null)
+  const importar = useAccion(async (f: File) => {
+    const fd = new FormData()
+    fd.append('fichero', f)
+    const r = await api.post<{ mensajes: string[] }>('/importar/datos', fd)
+    r.mensajes.forEach((m) => avisar(m))
+  })
+  return (
+    <Tarjeta titulo="Importar datos">
+      <p className="text-sm text-muted">Carga de golpe tus bienes, hipotecas, inversiones y supuestos desde un fichero .json.
+        Si algo ya existe, se actualiza en vez de duplicarse.</p>
+      <input ref={input} type="file" accept=".json,application/json" className="hidden"
+        onChange={(e) => { const f = e.target.files?.[0]; if (f) importar.mutate(f); e.target.value = '' }} />
+      <Boton variante="secundario" className="mt-4" onClick={() => input.current?.click()} disabled={importar.isPending}>
+        <Upload size={16} />{importar.isPending ? 'Importando…' : 'Elegir fichero'}</Boton>
+    </Tarjeta>
+  )
+}
+
+export default function Ajustes() {
   useVueltaBanco()
   const { data, isLoading, error } = useQuery({ queryKey: ['sync'], queryFn: () => api.get<EstadoSync>('/sync') })
   if (isLoading) return <Cargando />
@@ -151,7 +172,7 @@ export default function Conexiones() {
   if (!data) return null
   return (
     <>
-      <Cabecera titulo="Conexiones" subtitulo={data.en_vercel ? 'Se sincroniza sola cada día de madrugada. También puedes hacerlo ahora con el botón de cada banco.' : data.cada_horas > 0
+      <Cabecera titulo="Ajustes" subtitulo={data.en_vercel ? 'Bancos, asistente e importación. Los bancos se sincronizan solos cada madrugada.' : data.cada_horas > 0
         ? `Mientras la app está abierta se sincroniza sola al arrancar y cada ${data.cada_horas} horas.`
         : 'La sincronización automática está desactivada (SYNC_HORAS=0).'} />
       <div className="grid gap-4 lg:grid-cols-2">
@@ -159,6 +180,7 @@ export default function Conexiones() {
         <Indexa s={data.indexa} enVercel={!!data.en_vercel} />
         <div className="lg:col-span-2"><AjustesIA /></div>
         <div className="lg:col-span-2"><DriveImport /></div>
+        <div className="lg:col-span-2"><ImportarDatos /></div>
       </div>
     </>
   )

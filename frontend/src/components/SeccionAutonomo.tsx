@@ -4,10 +4,9 @@ import { CalendarDays, Plus } from 'lucide-react'
 import PlanificadorFactura from './PlanificadorFactura'
 import { api } from '../lib/api'
 import { eur, eurK, fecha, hoyISO } from '../lib/format'
-import { Link } from 'react-router-dom'
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import type { Autonomo as Datos, Fuente, Prevision } from '../lib/tipos'
-import { BorrarEnDosPasos, Boton, Cabecera, Campo, Cargando, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio, num, opc, useAccion } from '../components/ui'
+import type { Autonomo as Datos } from '../lib/tipos'
+import { BorrarEnDosPasos, Boton, Campo, Cargando, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio, num, opc, useAccion } from './ui'
 
 function FormFactura({ clientes, onHecho }: { clientes: string[]; onHecho: () => void }) {
   const [tipo, setTipo] = useState<'nacional' | 'extranjero'>('nacional')
@@ -61,66 +60,32 @@ function FormGasto({ onHecho }: { onHecho: () => void }) {
   )
 }
 
-/** Resultado de un modelo: lo presentado manda; si las facturas dan otra cifra, se enseña debajo. */
-function Modelo({ nombre, valor, fuente, estimado, exento }: { nombre: string; valor: number; fuente: Fuente; estimado: number | null; exento?: boolean }) {
-  const distinto = fuente !== 'estimado' && estimado !== null && Math.abs(estimado - valor) >= 1
-  return (
-    <div>
-      <div className="flex items-center justify-between gap-2">
-        <dt className="flex items-center gap-1.5 text-muted">{nombre}
-          {fuente === 'presentado' ? <Etiqueta tono="bien">Presentado</Etiqueta> : fuente === 'previsto' ? <Etiqueta tono="acento">Previsto</Etiqueta> : <Etiqueta>Estimado</Etiqueta>}</dt>
-        <dd className="font-semibold">{exento ? <Etiqueta tono="bien">Exento</Etiqueta> : <Importe valor={valor} />}</dd>
-      </div>
-      {distinto && <p className="mt-0.5 text-right text-xs text-muted">Con tus facturas saldría <Importe valor={estimado} /></p>}
-    </div>
-  )
-}
-
-export default function Autonomo() {
+export default function SeccionAutonomo() {
   const actual = new Date().getFullYear()
   const [anio, setAnio] = useState(actual)
   const [dialogo, setDialogo] = useState<'factura' | 'gasto' | 'planificar' | null>(null)
   const { data: d, isLoading, error } = useQuery({ queryKey: ['autonomo', anio], queryFn: () => api.get<Datos>(`/autonomo?anio=${anio}`) })
-  const { data: prev } = useQuery({ queryKey: ['prevision'], queryFn: () => api.get<Prevision>('/prevision') })
-  const renta = prev?.anios.find((r) => r.anio === anio)
   const borrar = useAccion(({ tipo, id }: { tipo: string; id: number }) => api.del(`/autonomo/${tipo}/${id}`), 'Borrado')
-  const trimActual = anio === actual ? Math.floor(new Date().getMonth() / 3) + 1 : 0
   const maxCliente = Math.max(1, ...(d?.por_cliente.map((c) => c.base) ?? [1]))
 
   return (
     <>
-      <Cabecera titulo="Autónomo" subtitulo={d ? (d.ingresos_declarados !== null
-        ? `${eur(d.ingresos_declarados)} de ingresos declarados en ${anio} (130 hasta el ${d.ultimo_130}T)`
-        : `${eur(d.total_facturado)} facturados en ${anio}`) : undefined}>
-        <Selector value={anio} onChange={(e) => setAnio(Number(e.target.value))} aria-label="Año" className="w-28">
-          {[actual + 1, actual, actual - 1, actual - 2].map((a) => <option key={a} value={a}>{a}</option>)}
-        </Selector>
-        <Boton variante="secundario" onClick={() => setDialogo('planificar')}><CalendarDays size={16} />Planificar factura</Boton>
-        <Boton variante="secundario" onClick={() => setDialogo('gasto')}><Plus size={16} />Gasto</Boton>
-        <Boton onClick={() => setDialogo('factura')}><Plus size={16} />Factura</Boton>
-      </Cabecera>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-muted">{d ? `${eur(d.total_facturado)} facturados en ${anio}` : ''}</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <Selector value={anio} onChange={(e) => setAnio(Number(e.target.value))} aria-label="Año" className="!w-28">
+            {[actual + 1, actual, actual - 1, actual - 2].map((a) => <option key={a} value={a}>{a}</option>)}
+          </Selector>
+          <Boton variante="secundario" onClick={() => setDialogo('planificar')}><CalendarDays size={16} />Planificar</Boton>
+          <Boton variante="secundario" onClick={() => setDialogo('gasto')}><Plus size={16} />Gasto</Boton>
+          <Boton onClick={() => setDialogo('factura')}><Plus size={16} />Factura</Boton>
+        </div>
+      </div>
 
       {isLoading ? <Cargando /> : error ? <ErrorCarga error={error} /> : d && (
         <>
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            {d.trimestres.map((t) => (
-              <Tarjeta key={t.trimestre} className={t.trimestre === trimActual ? 'ring-2 ring-accent' : ''}
-                titulo={`${t.trimestre}º trimestre`} accion={<span className="text-xs text-muted">{t.plazo}</span>}>
-                <dl className="space-y-2 text-sm">
-                  <Modelo nombre="IVA (303)" valor={t.iva_resultado} fuente={t.iva_fuente} estimado={t.iva_estimado} />
-                  <Modelo nombre="IRPF (130)" valor={t.irpf_resultado} fuente={t.irpf_fuente} estimado={t.irpf_estimado} exento={t.exento_130} />
-                  {t.ingresos_acumulados !== null
-                    ? <div className="flex justify-between gap-2 border-t border-line pt-2 text-xs"><dt className="text-muted">Ingresos acumulados (130)</dt><dd><Importe valor={t.ingresos_acumulados} /></dd></div>
-                    : t.base_prevista !== null
-                      ? <div className="flex justify-between gap-2 border-t border-line pt-2 text-xs"><dt className="text-muted">Facturación prevista</dt><dd><Importe valor={t.base_prevista} /></dd></div>
-                      : <div className="flex justify-between gap-2 border-t border-line pt-2 text-xs"><dt className="text-muted">Facturado</dt><dd><Importe valor={t.base} /></dd></div>}
-                  <div className="flex justify-between gap-2 border-t border-line pt-2 text-xs"><dt className="text-muted">Retenciones acumuladas</dt><dd><Importe valor={t.retenciones_acumuladas} /></dd></div>
-                </dl>
-              </Tarjeta>
-            ))}
-          </div>
           {d.por_anio.length > 0 && (
-            <Tarjeta className="mt-4" titulo="Facturado y ganado neto por año">
+            <Tarjeta titulo="Facturado y ganado neto por año">
               <div className="h-60">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={d.por_anio.map((a) => ({ ...a, etiqueta: a.previsto ? `${a.anio} (previsto)` : String(a.anio) }))}
@@ -140,26 +105,7 @@ export default function Autonomo() {
                 El IVA no cuenta: lo cobras y se lo das a Hacienda. El año en curso usa la previsión del año completo (o lo ya facturado, si es más).</p>
             </Tarjeta>
           )}
-          <Tarjeta className="mt-4" titulo={`Renta ${anio} (se paga en junio de ${anio + 1})`}
-            accion={<Link to="/prevision" className="text-xs font-medium text-accent">Ver previsión</Link>}>
-            {renta ? (
-              <div className="flex flex-wrap items-end gap-x-10 gap-y-3">
-                <div>
-                  <p className="text-xs text-muted">{renta.resultado > 0 ? 'Estimas pagar' : 'Estimas que te devuelvan'}</p>
-                  <p className="cifra text-2xl font-semibold"><Importe valor={Math.abs(renta.resultado)} /></p>
-                </div>
-                <p className="max-w-xl text-sm text-muted">Cuota de unos {eur(renta.cuota)} ({String(renta.tipo_medio).replace('.', ',')} % de media) menos lo ya retenido en la nómina
-                  ({eur(renta.retenciones_nomina)}), en tus facturas ({eur(renta.retenciones_facturas)}) y los pagos del 130 ({eur(renta.pagos_130)}).
-                  Cuenta el año entero con tu sueldo, tus clientes y el alquiler.</p>
-              </div>
-            ) : <p className="text-sm text-muted">Pon tu sueldo y tus tarifas en <Link to="/prevision" className="text-accent">Previsión</Link> y aquí verás lo que te tocará pagar.</p>}
-          </Tarjeta>
-          {(d.pagado_iva !== 0 || d.pagado_irpf !== 0) && (
-            <p className="mt-3 text-sm text-muted">Presentado en Hacienda en {anio}: <Importe valor={d.pagado_iva} /> de IVA y <Importe valor={d.pagado_irpf} /> de IRPF.
-              Lo que aún no has presentado se prevé con tu sueldo, tus tarifas y los días del último mes (en Previsión).</p>)}
-          {d.trimestres[3].notas.map((n) => <p key={n} className="mt-3 text-sm text-muted">{n}</p>)}
-
-          <div className="mt-6 grid gap-4 xl:grid-cols-3">
+          <div className="mt-4 grid gap-4 xl:grid-cols-3">
             <Tarjeta titulo="Por cliente">
               {d.por_cliente.length ? (
                 <ul className="space-y-3">

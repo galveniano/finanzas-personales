@@ -5,10 +5,10 @@ import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxi
 import { api } from '../lib/api'
 import { eur, eurK, fecha, hoyISO } from '../lib/format'
 import type { Nominas as Datos, Prevision } from '../lib/tipos'
-import CalculadoraSueldo from '../components/CalculadoraSueldo'
-import { Boton, Cabecera, Campo, Cargando, Dato, Dialogo, ErrorCarga, Formulario, Importe, Tabla, Tarjeta, Vacio, num, useAccion } from '../components/ui'
+import CalculadoraSueldo from './CalculadoraSueldo'
+import { Boton, Campo, Cargando, Dato, Dialogo, ErrorCarga, Formulario, Importe, Tabla, Tarjeta, Vacio, num, useAccion } from './ui'
 
-export default function Nominas() {
+export default function SeccionNomina() {
   const [abierto, setAbierto] = useState(false)
   const { data: d, isLoading, error } = useQuery({ queryKey: ['nominas'], queryFn: () => api.get<Datos>('/nominas') })
   const { data: prev } = useQuery({ queryKey: ['prevision'], queryFn: () => api.get<Prevision>('/prevision') })
@@ -27,9 +27,10 @@ export default function Nominas() {
 
   return (
     <>
-      <Cabecera titulo="Nóminas" subtitulo={`Trabajo por cuenta ajena en ${d.anio}`}>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-muted">Trabajo por cuenta ajena en {d.anio}</p>
         <Boton onClick={() => setAbierto(true)}><Plus size={16} />Nómina</Boton>
-      </Cabecera>
+      </div>
       <Tarjeta>
         {d.fuente === 'banco' && d.estimado_banco && (
           <p className="mb-4 text-sm text-muted">Sacado de los ingresos de nómina de tus cuentas: el banco solo da el neto, así que
@@ -62,7 +63,6 @@ export default function Nominas() {
         </Tarjeta>
       )}
 
-      <CalculadoraSueldo key={brutoSupuesto ?? d.bruto_12_meses ?? 0} brutoInicial={d.bruto_12_meses || brutoSupuesto} />
 
       {d.banco.length > 0 && (
         <Tarjeta className="mt-4" titulo="Cobros de nómina en el banco">
@@ -101,6 +101,8 @@ export default function Nominas() {
           </Tabla>
         ) : <Vacio>{d.banco.length ? 'Con los cobros del banco basta; registra alguna nómina si quieres el bruto y la retención exactos.' : 'Sincroniza el banco o registra tus nóminas para saber cuánto te han retenido.'}</Vacio>}
       </Tarjeta>
+
+      <CalculadoraSueldo key={brutoSupuesto ?? d.bruto_12_meses ?? 0} brutoInicial={d.bruto_12_meses || brutoSupuesto} />
 
       <Dialogo abierto={abierto} onCerrar={() => setAbierto(false)} titulo="Registrar nómina">
         <Formulario onEnviar={(v) => crear.mutateAsync(v)}>

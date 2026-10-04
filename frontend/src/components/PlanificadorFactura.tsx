@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { eur } from '../lib/format'
 import type { Prevision } from '../lib/tipos'
-import { Boton, Campo, Importe, Selector, useAccion } from '../components/ui'
+import { Boton, Campo, Importe, Selector, useAccion } from './ui'
 
 const DIAS_SEMANA = ['L', 'M', 'X', 'J', 'V', 'S', 'D']
 const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
@@ -78,7 +78,7 @@ export default function PlanificadorFactura({ onHecho }: { onHecho: () => void }
     concepto: `${String(dias)} días × ${String(h).replace('.', ',')} h × ${eur(t)}/h (${MESES[m - 1]} ${anio})`,
   }).then(onHecho), 'Factura registrada')
 
-  if (!clientes.length) return <p className="text-sm text-muted">Añade tus clientes y su tarifa en Previsión › Supuestos para planificar facturas.</p>
+  if (!clientes.length) return <p className="text-sm text-muted">Añade tus clientes y su tarifa en Ingresos › Sueldo y tarifas para planificar facturas.</p>
 
   return (
     <div className="space-y-4">
