@@ -2,10 +2,11 @@ import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import type { ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ExternalLink, RefreshCw, Upload } from 'lucide-react'
+import { Download, ExternalLink, LogOut, RefreshCw, Upload } from 'lucide-react'
 import { api } from '../lib/api'
 import { diasHasta, fechaHora } from '../lib/format'
-import type { EstadoSync, UltimaSync } from '../lib/tipos'
+import type { DocumentosDrive, EstadoSync, UltimaSync } from '../lib/tipos'
+import { permisoDrive, subirADrive } from '../lib/google'
 import AjustesIA from '../components/AjustesIA'
 import DriveImport from '../components/DriveImport'
 import { useAccion, useAvisos } from '../lib/utilidades'
@@ -165,6 +166,56 @@ function ImportarDatos() {
   )
 }
 
+const claseEnlace = 'inline-flex items-center gap-2 rounded-xl border border-line bg-panel px-4 py-2 text-sm font-medium hover:bg-panel-2'
+
+function CopiaSeguridad() {
+  const avisar = useAvisos()
+  const { data: drive } = useQuery({ queryKey: ['drive'], queryFn: () => api.get<DocumentosDrive>('/drive/documentos') })
+  const [subiendo, setSubiendo] = useState(false)
+  const aDrive = async () => {
+    if (!drive?.google_client_id) return
+    setSubiendo(true)
+    try {
+      const token = await permisoDrive(drive.google_client_id, 'drive.file')
+      const r = await fetch('/api/exportar')
+      if (!r.ok) throw new Error(`No se pudo preparar la copia (error ${r.status})`)
+      await subirADrive(token, `finanzas-${new Date().toISOString().slice(0, 10)}.json`, await r.blob())
+      await api.post('/exportar/hecha')
+      avisar('Copia guardada en tu Google Drive')
+    } catch (e) {
+      avisar((e as Error).message, 'error')
+    } finally {
+      setSubiendo(false)
+    }
+  }
+  return (
+    <Tarjeta titulo="Copia de seguridad">
+      <p className="text-sm text-muted">Todos tus datos en un .json que puedes volver a cargar en «Importar datos» de otra instalación.
+        Las claves de API no salen. Si pasa un mes sin copia, te aviso en Inicio.</p>
+      <div className="mt-4 flex flex-wrap gap-2">
+        <a className={claseEnlace} href="/api/exportar" download><Download size={16} />Descargar copia</a>
+        <a className={claseEnlace} href="/api/exportar?pdfs=true" download><Download size={16} />Con los PDF de Hacienda</a>
+        <a className={claseEnlace} href="/api/exportar/movimientos.xlsx" download><Download size={16} />Movimientos en Excel</a>
+        {drive?.google_client_id && (
+          <Boton variante="secundario" onClick={aDrive} disabled={subiendo}><Upload size={16} />{subiendo ? 'Guardando…' : 'Guardar en Google Drive'}</Boton>
+        )}
+      </div>
+    </Tarjeta>
+  )
+}
+
+function Sesiones() {
+  const salir = useAccion(() => api.post('/auth/salir-en-todos').then(() => window.location.reload()))
+  return (
+    <Tarjeta titulo="Sesiones">
+      <p className="text-sm text-muted">Si has entrado desde un ordenador que no es tuyo o has perdido el móvil, cierra la sesión en todos los dispositivos.
+        Tendrás que volver a entrar con Google aquí también.</p>
+      <Boton variante="secundario" className="mt-4" onClick={() => salir.mutate(undefined)} disabled={salir.isPending}>
+        <LogOut size={16} />Cerrar sesión en todos</Boton>
+    </Tarjeta>
+  )
+}
+
 export default function Ajustes() {
   useVueltaBanco()
   const { data, isLoading, error } = useQuery({ queryKey: ['sync'], queryFn: () => api.get<EstadoSync>('/sync') })
@@ -182,6 +233,8 @@ export default function Ajustes() {
         <div className="lg:col-span-2"><AjustesIA /></div>
         <div className="lg:col-span-2"><DriveImport /></div>
         <div className="lg:col-span-2"><ImportarDatos /></div>
+        <CopiaSeguridad />
+        <Sesiones />
       </div>
     </>
   )

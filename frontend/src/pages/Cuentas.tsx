@@ -8,7 +8,7 @@ import ComoGastas, { FlujoMensual } from '../components/Gastos'
 import CarteraIndexa from '../components/CarteraIndexa'
 import InversionesPrivadas from '../components/InversionesPrivadas'
 import { num, useAccion, useAvisos } from '../lib/utilidades'
-import { Boton, Cabecera, Campo, Cargando, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio } from '../components/ui'
+import { BorrarEnDosPasos, Boton, Cabecera, Campo, Cargando, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio } from '../components/ui'
 
 const ORIGEN: Record<string, { texto: string; tono: 'acento' | 'neutro' | 'bien' }> = {
   enable_banking: { texto: 'Sincronizada', tono: 'bien' },
@@ -87,7 +87,17 @@ export default function Cuentas() {
   const gastos = useQuery({ queryKey: ['gastos-recientes'], queryFn: () => api.get<GastosRecientes>('/gastos/recientes') })
   const resumen = useQuery({ queryKey: ['resumen'], queryFn: () => api.get<Resumen>('/resumen') })
   const crear = useAccion((d: Record<string, string>) => api.post('/cuentas', { ...d, saldo: num(d.saldo) ?? 0 }).then(() => setNueva(false)), 'Cuenta creada')
-  const categorizar = useAccion(({ id, cat }: { id: number; cat: string }) => api.patch(`/movimientos/${id}`, { categoria_id: cat ? Number(cat) : null }))
+  const avisar = useAvisos()
+  const [aprendido, setAprendido] = useState<{ id: number; patron: string; parecidos: number; categoria: string } | null>(null)
+  const categorizar = useAccion(({ id, cat }: { id: number; cat: string }) =>
+    api.patch<{ patron: string | null; parecidos: number }>(`/movimientos/${id}`, { categoria_id: cat ? Number(cat) : null }).then((r) => {
+      const nombre = categorias.data?.find((c) => String(c.id) === cat)?.nombre ?? ''
+      setAprendido(r.patron && cat ? { id, patron: r.patron, parecidos: r.parecidos, categoria: nombre } : null)
+    }))
+  const aplicar = useAccion((id: number) => api.post<{ cambiados: number }>(`/movimientos/${id}/aplicar-a-parecidos`, {})
+    .then((r) => { setAprendido(null); avisar(`${r.cambiados} movimientos cambiados`) }))
+  const borrarCuenta = useAccion((id: number) => api.del<{ oculta: boolean }>(`/cuentas/${id}`)
+    .then((r) => avisar(r.oculta ? 'Cuenta oculta; vuelve si la reconectas en Ajustes' : 'Cuenta borrada con sus movimientos')))
 
   const total = (cuentas.data ?? []).filter((c) => c.tipo !== 'tarjeta').reduce((s, c) => s + c.saldo_tuyo, 0)
 
@@ -118,9 +128,13 @@ export default function Cuentas() {
                 </div>
                 <div className="mt-1 flex items-center justify-between gap-2 text-xs text-muted">
                   <span>{c.ultima_sincronizacion ? `Sincronizada ${fechaHora(c.ultima_sincronizacion)}` : `Saldo a ${fecha(c.saldo_fecha)}`}</span>
-                  {c.origen !== 'indexa' && (
-                    <button className="font-medium text-accent" onClick={() => setImportando(c)}>Importar extracto</button>
-                  )}
+                  <span className="flex items-center gap-2">
+                    {c.origen !== 'indexa' && (
+                      <button className="font-medium text-accent" onClick={() => setImportando(c)}>Importar extracto</button>
+                    )}
+                    <BorrarEnDosPasos etiqueta={c.origen === 'enable_banking' || c.origen === 'indexa' ? c.nombre : `${c.nombre} con sus movimientos`}
+                      disabled={borrarCuenta.isPending} onBorrar={() => borrarCuenta.mutate(c.id)} />
+                  </span>
                 </div>
               </Tarjeta>
             )
@@ -151,6 +165,17 @@ export default function Cuentas() {
               className="w-full rounded-xl border border-line bg-panel py-2 pr-3 pl-9 text-sm" />
           </label>
         </div>
+        {aprendido && (
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-accent-soft px-4 py-3 text-sm">
+            <span>Desde ahora, lo que contenga «{aprendido.patron}» irá a {aprendido.categoria}.
+              {aprendido.parecidos > 0 && ` Hay ${aprendido.parecidos} movimientos anteriores parecidos con otra categoría.`}</span>
+            <span className="flex gap-2">
+              {aprendido.parecidos > 0 && <Boton className="px-3 py-1.5 text-xs" disabled={aplicar.isPending} onClick={() => aplicar.mutate(aprendido.id)}>
+                Cambiar los {aprendido.parecidos}</Boton>}
+              <Boton variante="fantasma" className="px-3 py-1.5 text-xs" onClick={() => setAprendido(null)}>Cerrar</Boton>
+            </span>
+          </div>
+        )}
         {movs.error && !movs.data ? <ErrorCarga error={movs.error} /> : movs.data?.length ? (
           <>
           <Tabla>

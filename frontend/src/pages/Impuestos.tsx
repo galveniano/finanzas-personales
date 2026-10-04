@@ -2,9 +2,10 @@ import { useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { FileText, Plus, Upload } from 'lucide-react'
 import { api } from '../lib/api'
-import { fecha } from '../lib/format'
+import { eur, fecha } from '../lib/format'
 import type { Autonomo, Declaracion, Declaraciones, Fuente, Prevision } from '../lib/tipos'
 import { RentaEstimada, RentaPresentada } from '../components/Renta'
+import SeccionHacienda from '../components/Hacienda'
 import { num, opc, useAccion, useAvisos } from '../lib/utilidades'
 import { BorrarEnDosPasos, Boton, Cabecera, Campo, Cargando, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio } from '../components/ui'
 
@@ -138,6 +139,7 @@ export default function Impuestos() {
       <input ref={input} type="file" accept="application/pdf,.pdf,.txt,text/plain" multiple hidden onChange={(e) => { elegir(e.target.files); e.target.value = '' }} />
 
       <Trimestres />
+      <SeccionHacienda />
       <Rentas />
 
       <div className="mt-8"
@@ -161,6 +163,7 @@ export default function Impuestos() {
                     </div>
                     <dl className="mt-2 space-y-1">
                       <div className="flex justify-between gap-3"><dt className="text-muted">Importe</dt><dd className="font-medium"><Importe valor={x.importe} /></dd></div>
+                      {x.estimado != null && <div className="flex justify-between gap-3"><dt className="text-muted">La app calculaba</dt><dd><Importe valor={x.estimado} /></dd></div>}
                       <div className="flex justify-between gap-3"><dt className="text-muted">Presentada</dt><dd className="cifra">{x.fecha_presentacion ? fecha(x.fecha_presentacion) : '—'}</dd></div>
                     </dl>
                     <div className="mt-1 flex justify-end gap-1">
@@ -183,7 +186,8 @@ export default function Impuestos() {
                       <td className="whitespace-nowrap">{periodoTexto(x.periodo)} {x.ejercicio}</td>
                       <td className="cifra whitespace-nowrap text-muted">{x.fecha_presentacion ? fecha(x.fecha_presentacion) : '—'}</td>
                       <td><Etiqueta tono={RESULTADO[x.resultado].tono}>{RESULTADO[x.resultado].texto}</Etiqueta></td>
-                      <td className="num font-medium"><Importe valor={x.importe} /></td>
+                      <td className="num font-medium"><Importe valor={x.importe} />
+                        {x.estimado != null && <span className="block text-xs font-normal text-muted">la app calculaba {eur(x.estimado)}</span>}</td>
                       <td className="whitespace-nowrap text-right">
                         {x.tiene_pdf && (
                           <a href={`/api/declaraciones/${x.id}/pdf`} target="_blank" rel="noreferrer" aria-label="Ver justificante"

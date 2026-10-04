@@ -65,7 +65,12 @@ class Modelo130:
 
     @property
     def rendimiento_neto(self) -> Decimal:
-        return self.ingresos_acumulados - self.gastos_acumulados
+        """Estimación directa simplificada: el rendimiento previo menos un 5 % de gastos de difícil
+        justificación, con un máximo de 2.000 € al año (igual que en la previsión)."""
+        previo = self.ingresos_acumulados - self.gastos_acumulados
+        if previo <= 0:
+            return previo
+        return previo - min((previo * Decimal("0.05")).quantize(CENT), Decimal("2000"))
 
     @property
     def resultado(self) -> Decimal:
@@ -116,6 +121,15 @@ def porcentaje_con_retencion(facturas: Iterable[Factura], anio: int) -> Decimal 
     return (con_ret * 100 / total).quantize(CENT)
 
 
+def _sin_dificil_justificacion(rendimiento: Decimal) -> Decimal:
+    """Los gastos de un 130 presentado ya llevan el 5 % de difícil justificación: se deshace para
+    volver a aplicarlo sobre el acumulado del año."""
+    if rendimiento <= 0:
+        return rendimiento
+    sin_tope = (rendimiento / Decimal("0.95")).quantize(CENT)
+    return sin_tope if sin_tope * Decimal("0.05") <= 2000 else rendimiento + 2000
+
+
 def calcular_130(
     anio: int, trimestre: int, facturas: Iterable[Factura], gastos: Iterable[GastoAutonomo],
     presentados: dict[int, tuple[Decimal, dict]] | None = None,
@@ -148,7 +162,8 @@ def calcular_130(
             importe, casillas = presentados[t]
             pagos_previos += importe
             if "ingresos" in casillas:
-                base = tuple(Decimal(str(casillas.get(k, 0))) for k in ("ingresos", "gastos", "retenciones"))
+                ing, gas, ret = (Decimal(str(casillas.get(k, 0))) for k in ("ingresos", "gastos", "retenciones"))
+                base = (ing, ing - _sin_dificil_justificacion(ing - gas), ret)
                 desde = fin
         else:
             pagos_previos += m.resultado

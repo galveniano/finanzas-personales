@@ -1,41 +1,44 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { CalendarDays, Plus } from 'lucide-react'
+import { CalendarDays, Pencil, Plus } from 'lucide-react'
 import PlanificadorFactura from './PlanificadorFactura'
 import { api } from '../lib/api'
 import { eur, eurK, fecha, hoyISO } from '../lib/format'
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import type { Autonomo as Datos } from '../lib/tipos'
+import type { Autonomo as Datos, Factura } from '../lib/tipos'
 import { num, opc, useAccion } from '../lib/utilidades'
 import { BorrarEnDosPasos, Boton, Campo, Cargando, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio } from './ui'
 
-function FormFactura({ clientes, onHecho }: { clientes: string[]; onHecho: () => void }) {
-  const [tipo, setTipo] = useState<'nacional' | 'extranjero'>('nacional')
-  const crear = useAccion((d: Record<string, string>) => api.post('/autonomo/facturas', {
-    numero: d.numero, cliente: d.cliente, fecha: d.fecha, concepto: d.concepto, base: num(d.base),
-    tipo_iva: tipo === 'extranjero' ? 0 : num(d.tipo_iva) ?? 21,
-    tipo_retencion: tipo === 'extranjero' ? 0 : num(d.tipo_retencion) ?? 15,
-    fecha_cobro: opc(d.fecha_cobro),
-  }).then(onHecho), 'Factura registrada')
+function FormFactura({ clientes, onHecho, f }: { clientes: string[]; onHecho: () => void; f?: Factura }) {
+  const [tipo, setTipo] = useState<'nacional' | 'extranjero'>(f && f.tipo_iva === 0 && f.tipo_retencion === 0 ? 'extranjero' : 'nacional')
+  const crear = useAccion((d: Record<string, string>) => {
+    const datos = {
+      numero: d.numero, cliente: d.cliente, fecha: d.fecha, concepto: d.concepto, base: num(d.base),
+      tipo_iva: tipo === 'extranjero' ? 0 : num(d.tipo_iva) ?? 21,
+      tipo_retencion: tipo === 'extranjero' ? 0 : num(d.tipo_retencion) ?? 15,
+      fecha_cobro: opc(d.fecha_cobro) ?? null,
+    }
+    return (f ? api.put(`/autonomo/facturas/${f.id}`, datos) : api.post('/autonomo/facturas', datos)).then(onHecho)
+  }, f ? 'Factura actualizada' : 'Factura registrada')
   return (
     <Formulario onEnviar={(d) => crear.mutateAsync(d)}>
       <Selector etiqueta="Tipo de cliente" value={tipo} onChange={(e) => setTipo(e.target.value as typeof tipo)} className="sm:col-span-2">
         <option value="nacional">Empresa española (IVA y retención)</option>
         <option value="extranjero">Empresa de fuera de España (sin IVA ni retención)</option>
       </Selector>
-      <Campo etiqueta="Número" name="numero" required />
+      <Campo etiqueta="Número" name="numero" required defaultValue={f?.numero} />
       <label className="flex flex-col gap-1.5 text-xs font-medium text-muted">Cliente
-        <input name="cliente" list="clientes" required className="w-full rounded-xl border border-line bg-panel px-3 py-2 text-sm text-ink" />
+        <input name="cliente" list="clientes" required defaultValue={f?.cliente} className="w-full rounded-xl border border-line bg-panel px-3 py-2 text-sm text-ink" />
         <datalist id="clientes">{clientes.map((c) => <option key={c} value={c} />)}</datalist>
       </label>
-      <Campo etiqueta="Fecha" name="fecha" type="date" defaultValue={hoyISO()} required />
-      <Campo etiqueta="Base imponible (€)" name="base" inputMode="decimal" required />
+      <Campo etiqueta="Fecha" name="fecha" type="date" defaultValue={f?.fecha ?? hoyISO()} required />
+      <Campo etiqueta="Base imponible (€)" name="base" inputMode="decimal" required defaultValue={f ? String(f.base) : undefined} />
       {tipo === 'nacional' && <>
-        <Campo etiqueta="IVA %" name="tipo_iva" defaultValue="21" inputMode="decimal" />
-        <Campo etiqueta="Retención IRPF %" name="tipo_retencion" defaultValue="15" inputMode="decimal" />
+        <Campo etiqueta="IVA %" name="tipo_iva" defaultValue={f && f.tipo_iva ? String(f.tipo_iva) : '21'} inputMode="decimal" />
+        <Campo etiqueta="Retención IRPF %" name="tipo_retencion" defaultValue={f && f.tipo_iva ? String(f.tipo_retencion) : '15'} inputMode="decimal" />
       </>}
-      <Campo etiqueta="Concepto" name="concepto" placeholder="Consultoría" />
-      <Campo etiqueta="Cobrada el" name="fecha_cobro" type="date" />
+      <Campo etiqueta="Concepto" name="concepto" placeholder="Consultoría" defaultValue={f?.concepto} />
+      <Campo etiqueta="Cobrada el" name="fecha_cobro" type="date" defaultValue={f?.fecha_cobro ?? ''} />
     </Formulario>
   )
 }
@@ -67,6 +70,7 @@ export default function SeccionAutonomo() {
   const [actual] = useState(anioActual)
   const [anio, setAnio] = useState(actual)
   const [dialogo, setDialogo] = useState<'factura' | 'gasto' | 'planificar' | null>(null)
+  const [editando, setEditando] = useState<Factura | null>(null)
   const { data: d, isLoading, error } = useQuery({ queryKey: ['autonomo', anio], queryFn: () => api.get<Datos>(`/autonomo?anio=${anio}`) })
   const borrar = useAccion(({ tipo, id }: { tipo: string; id: number }) => api.del(`/autonomo/${tipo}/${id}`), 'Borrado')
   const maxCliente = Math.max(1, ...(d?.por_cliente.map((c) => c.base) ?? [1]))
@@ -132,7 +136,7 @@ export default function SeccionAutonomo() {
                           <div className="truncate font-medium">{f.cliente}{f.tipo_iva === 0 && <span className="ml-2"><Etiqueta>No sujeta</Etiqueta></span>}</div>
                           <div className="cifra text-xs text-muted">{fecha(f.fecha, { day: '2-digit', month: 'short' })} · Nº {f.numero}</div>
                         </div>
-                        <BorrarEnDosPasos etiqueta={`la factura ${f.numero}`} disabled={borrar.isPending} onBorrar={() => borrar.mutate({ tipo: 'facturas', id: f.id })} />
+                        <span className="flex"><Boton variante="fantasma" className="px-2 py-1" onClick={() => setEditando(f)} aria-label={`Editar la factura ${f.numero}`}><Pencil size={14} /></Boton><BorrarEnDosPasos etiqueta={`la factura ${f.numero}`} disabled={borrar.isPending} onBorrar={() => borrar.mutate({ tipo: 'facturas', id: f.id })} /></span>
                       </div>
                       <dl className="mt-2 space-y-1">
                         <div className="flex justify-between gap-3"><dt className="text-muted">Base</dt><dd><Importe valor={f.base} /></dd></div>
@@ -156,7 +160,7 @@ export default function SeccionAutonomo() {
                         <td className="num"><Importe valor={f.cuota_iva} /></td>
                         <td className="num"><Importe valor={-f.retencion} /></td>
                         <td className="num font-medium"><Importe valor={f.total} /></td>
-                        <td className="text-right"><BorrarEnDosPasos etiqueta={`la factura ${f.numero}`} disabled={borrar.isPending} onBorrar={() => borrar.mutate({ tipo: 'facturas', id: f.id })} /></td>
+                        <td className="whitespace-nowrap text-right"><Boton variante="fantasma" className="px-2 py-1" onClick={() => setEditando(f)} aria-label={`Editar la factura ${f.numero}`}><Pencil size={14} /></Boton><BorrarEnDosPasos etiqueta={`la factura ${f.numero}`} disabled={borrar.isPending} onBorrar={() => borrar.mutate({ tipo: 'facturas', id: f.id })} /></td>
                       </tr>
                     ))}
                   </tbody>
@@ -211,6 +215,9 @@ export default function SeccionAutonomo() {
 
       <Dialogo abierto={dialogo === 'factura'} onCerrar={() => setDialogo(null)} titulo="Registrar factura">
         <FormFactura clientes={d?.clientes ?? []} onHecho={() => setDialogo(null)} />
+      </Dialogo>
+      <Dialogo abierto={!!editando} onCerrar={() => setEditando(null)} titulo={`Editar factura ${editando?.numero ?? ''}`}>
+        {editando && <FormFactura key={editando.id} f={editando} clientes={d?.clientes ?? []} onHecho={() => setEditando(null)} />}
       </Dialogo>
       <Dialogo abierto={dialogo === 'planificar'} onCerrar={() => setDialogo(null)} titulo="Planificar factura por días">
         {dialogo === 'planificar' && <PlanificadorFactura onHecho={() => setDialogo(null)} />}

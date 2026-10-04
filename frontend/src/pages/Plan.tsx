@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Check, Pencil, Plus } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { Bar, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { api } from '../lib/api'
 import { diasHasta, eur, eurK, fecha, hoyISO } from '../lib/format'
 import type { Planificacion as Datos, Prevision } from '../lib/tipos'
@@ -40,6 +40,8 @@ export default function Plan() {
   const sinSupuestos = prev && !prev.supuestos.nomina && !prev.supuestos.clientes.length
   const ultimo = prev?.meses[prev.meses.length - 1]
   const impuestos = prev?.meses.reduce((s, m) => s + m.total_impuestos, 0) ?? 0
+  const bajoColchon = prev?.meses.find((m) => m.bajo_colchon)
+  const ya = prev?.meses[0]?.ya_este_mes
 
   return (
     <>
@@ -72,9 +74,17 @@ export default function Plan() {
                   formatter={(v, n) => [eur(Number(v)), n === 'neto' ? 'Ahorro del mes' : 'Dinero disponible']} />
                 <Bar yAxisId="n" dataKey="neto" fill="var(--chart-2)" radius={[4, 4, 0, 0]} maxBarSize={24} />
                 <Line yAxisId="l" dataKey="liquidez" stroke="var(--chart-1)" strokeWidth={2} dot={false} />
+                {prev.colchon > 0 && <ReferenceLine yAxisId="l" y={prev.colchon} stroke="var(--neg)" strokeDasharray="4 4"
+                  label={{ value: 'Colchón', fill: 'var(--muted)', fontSize: 11, position: 'insideTopLeft' }} />}
               </ComposedChart>
             </ResponsiveContainer>
           </div>
+        )}
+        {bajoColchon && (
+          <p className="mt-4 rounded-xl bg-panel-2 px-4 py-3 text-sm">
+            En {fecha(`${bajoColchon.mes}-01`, { month: 'long', year: 'numeric' })} bajarías
+            a {eur(bajoColchon.liquidez)}, por debajo de tu colchón de {eur(prev!.colchon)}.
+          </p>
         )}
       </Tarjeta>
 
@@ -147,7 +157,7 @@ export default function Plan() {
               <li key={m.mes} className="py-3 text-sm first:pt-0">
                 <div className="mb-1.5 flex items-baseline justify-between gap-2">
                   <span className="font-medium capitalize">{nombreMes(m.mes)}</span>
-                  <span className="text-xs text-muted">Liquidez <Importe valor={m.liquidez} /></span>
+                  <span className={`text-xs ${m.bajo_colchon ? 'text-neg' : 'text-muted'}`}>Liquidez <Importe valor={m.liquidez} /></span>
                 </div>
                 <dl className="space-y-1">
                   {m.nomina ? <div className="flex justify-between gap-3"><dt className="text-muted">Nómina</dt><dd><Importe valor={m.nomina} /></dd></div> : null}
@@ -155,6 +165,9 @@ export default function Plan() {
                   {m.alquiler ? <div className="flex justify-between gap-3"><dt className="text-muted">Alquiler</dt><dd><Importe valor={m.alquiler} /></dd></div> : null}
                   <div className="flex justify-between gap-3"><dt className="text-muted">Gastos</dt><dd><Importe valor={-m.gastos} /></dd></div>
                   {m.pagos_previstos ? <div className="flex justify-between gap-3"><dt className="text-muted">Pagos</dt><dd><Importe valor={-m.pagos_previstos} /></dd></div> : null}
+                  {m.objetivos.map((o) => (
+                    <div key={o.concepto} className="flex justify-between gap-3"><dt className="text-muted">{o.concepto}</dt><dd><Importe valor={-o.importe} /></dd></div>
+                  ))}
                   {m.impuestos.map((i) => (
                     <div key={i.concepto} className="flex justify-between gap-3">
                       <dt className="text-muted">{i.concepto}{i.presentado && <> <Etiqueta tono="bien">Presentado</Etiqueta></>}</dt>
@@ -178,14 +191,15 @@ export default function Plan() {
                     <td className="num" title={`Facturado ${eur(m.facturado)} + IVA ${eur(m.iva)} − retención ${eur(m.retenciones)}`}><Importe valor={m.cobros} /></td>
                     <td className="num"><Importe valor={m.alquiler} /></td>
                     <td className="num"><Importe valor={-m.gastos} /></td>
-                    <td className="num">{m.pagos_previstos ? <Importe valor={-m.pagos_previstos} /> : ''}</td>
+                    <td className="num" title={m.objetivos.map((o) => `${o.concepto}: ${eur(o.importe)}`).join('\n')}>
+                      {m.pagos_previstos + m.total_objetivos ? <Importe valor={-(m.pagos_previstos + m.total_objetivos)} /> : ''}</td>
                     <td className="text-xs">{m.impuestos.map((i) => (
                       <div key={i.concepto} className="flex justify-between gap-2 whitespace-nowrap">
                         <span className="text-muted">{i.concepto}{i.presentado && <> <Etiqueta tono="bien">Presentado</Etiqueta></>}</span>
                         <Importe valor={-i.importe} />
                       </div>))}</td>
                     <td className="num font-medium"><Importe valor={m.neto} /></td>
-                    <td className="num"><Importe valor={m.liquidez} /></td>
+                    <td className={`num ${m.bajo_colchon ? 'bg-panel-2' : ''}`} title={m.bajo_colchon ? 'Por debajo de tu colchón' : undefined}><Importe valor={m.liquidez} /></td>
                   </tr>
                 ))}
               </tbody>
@@ -193,7 +207,11 @@ export default function Plan() {
           </div>
           <div>
             <p className="mt-3 text-xs text-muted">Clientes es lo que cobras: base más IVA menos retención. El IVA y el 130 de cada trimestre se pagan el mes siguiente; la renta, en junio.
-              «Pagos» son los pagos previstos de arriba.</p>
+              «Pagos» son los pagos previstos de arriba y los objetivos con fecha que no tienen pagos apuntados.</p>
+            {ya && (
+              <p className="mt-2 text-xs text-muted">Este mes ya han pasado por tus cuentas {eur(ya.nomina + ya.cobros + ya.alquiler)} de ingresos,
+                {' '}{eur(ya.gastos)} de gastos y {eur(ya.impuestos)} de impuestos. Ya están en el saldo de hoy, así que el mes en curso solo cuenta lo que falta.</p>
+            )}
           </div>
         </details>
       )}

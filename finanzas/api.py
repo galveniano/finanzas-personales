@@ -709,7 +709,7 @@ def listar_inmuebles(anio: int | None = None, s: Session = SesionDB):
             "valor_catastral": n(a.valor_catastral), "valor_catastral_construccion": n(a.valor_catastral_construccion),
             "porcentaje_propiedad": n(a.porcentaje_propiedad),
             "valor": n(valor), "valor_detalle": detalle, "deuda": n(deuda_total), "equity": n(valor - deuda_total),
-            "valoraciones": [{"fecha": f(v.fecha), "valor": n(v.valor)} for v in a.valoraciones],
+            "valoraciones": [{"id": v.id, "fecha": f(v.fecha), "valor": n(v.valor)} for v in a.valoraciones],
             "hipotecas": [{"id": d.id, "nombre": d.nombre, "entidad": d.entidad, "capital_inicial": n(d.capital_inicial),
                            "tipo_interes_anual": n(d.tipo_interes_anual), "plazo_meses": d.plazo_meses,
                            "fecha_inicio": f(d.fecha_inicio),
