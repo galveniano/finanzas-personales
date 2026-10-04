@@ -1,8 +1,8 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Trash2, X } from 'lucide-react'
 import { eur } from '../lib/format'
+import { AvisosCtx } from '../lib/utilidades'
 
 const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(' ')
 
@@ -173,19 +173,9 @@ export function Formulario({ onEnviar, children, textoBoton = 'Guardar' }: {
   )
 }
 
-/** Convierte '1.234,56' o '1234.56' a número; vacío → undefined. */
-export function num(v: string | undefined): number | undefined {
-  if (v == null || v.trim() === '') return undefined
-  const t = v.includes(',') ? v.replace(/\./g, '').replace(',', '.') : v
-  const n = Number(t)
-  return Number.isFinite(n) ? n : undefined
-}
-export const opc = (v: string | undefined) => (v && v.trim() !== '' ? v : undefined)
-
 // --- Avisos ------------------------------------------------------------------
 
 type Aviso = { id: number; texto: string; tipo: 'ok' | 'error' }
-const AvisosCtx = createContext<(texto: string, tipo?: 'ok' | 'error') => void>(() => {})
 
 export function ProveedorAvisos({ children }: { children: ReactNode }) {
   const [avisos, setAvisos] = useState<Aviso[]>([])
@@ -197,30 +187,21 @@ export function ProveedorAvisos({ children }: { children: ReactNode }) {
   return (
     <AvisosCtx.Provider value={avisar}>
       {children}
-      <div className="pointer-events-none fixed inset-x-0 z-50 flex flex-col items-center gap-2 px-4" style={{ bottom: 'calc(84px + env(safe-area-inset-bottom, 0px))' }} aria-live="polite">
+      {/* En móvil, por encima de la barra de navegación inferior */}
+      <div className="pointer-events-none fixed inset-x-0 bottom-[calc(84px+env(safe-area-inset-bottom,0px))] z-50 flex flex-col items-center gap-2 px-4 md:bottom-6">
         {avisos.map((a) => (
-          <div key={a.id} className={cx('pointer-events-auto max-w-md rounded-xl px-4 py-2.5 text-sm shadow-lg', a.tipo === 'ok' ? 'bg-ink text-bg' : 'bg-neg text-white')}>
+          <div
+            key={a.id}
+            role={a.tipo === 'error' ? 'alert' : 'status'}
+            aria-live={a.tipo === 'error' ? 'assertive' : 'polite'}
+            className={cx('pointer-events-auto max-w-md rounded-xl px-4 py-2.5 text-sm shadow-lg', a.tipo === 'ok' ? 'bg-ink text-bg' : 'bg-neg text-white')}
+          >
             {a.texto}
           </div>
         ))}
       </div>
     </AvisosCtx.Provider>
   )
-}
-export const useAvisos = () => useContext(AvisosCtx)
-
-/** Mutación que, al terminar, refresca los datos y avisa. */
-export function useAccion<T>(fn: (v: T) => Promise<unknown>, mensajeOk?: string) {
-  const qc = useQueryClient()
-  const avisar = useAvisos()
-  return useMutation({
-    mutationFn: fn,
-    onSuccess: () => {
-      qc.invalidateQueries()
-      if (mensajeOk) avisar(mensajeOk)
-    },
-    onError: (e: Error) => avisar(e.message, 'error'),
-  })
 }
 
 export function Cargando() {
@@ -235,9 +216,11 @@ export function ErrorCarga({ error }: { error: Error }) {
   return <Vacio>No se han podido cargar los datos: {error.message}</Vacio>
 }
 
-export function BorrarEnDosPasos({ onBorrar }: { onBorrar: () => void }) {
+/** Papelera que pide confirmar. `etiqueta` completa el aria-label («Borrar <etiqueta>»); `texto` se ve junto al icono. */
+export function BorrarEnDosPasos({ onBorrar, etiqueta, texto: visible, disabled }: { onBorrar: () => void; etiqueta?: string; texto?: string; disabled?: boolean }) {
   const [seguro, setSeguro] = useState(false)
+  const texto = etiqueta ? `Borrar ${etiqueta}` : 'Borrar'
   return seguro
-    ? <Boton variante="peligro" className="px-2 py-1 text-xs" onClick={onBorrar} onBlur={() => setSeguro(false)} autoFocus>Confirmar</Boton>
-    : <Boton variante="fantasma" className="px-2 py-1" onClick={() => setSeguro(true)} aria-label="Borrar"><Trash2 size={14} /></Boton>
+    ? <Boton variante="peligro" className="px-2 py-1 text-xs" onClick={() => { setSeguro(false); onBorrar() }} onBlur={() => setSeguro(false)} disabled={disabled} aria-label={`Confirmar: ${texto.toLowerCase()}`} autoFocus>Confirmar</Boton>
+    : <Boton variante="fantasma" className={cx('px-2 py-1', visible && 'text-xs')} onClick={() => setSeguro(true)} disabled={disabled} aria-label={texto} title={texto}><Trash2 size={14} />{visible}</Boton>
 }

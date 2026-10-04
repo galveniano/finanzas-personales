@@ -6,9 +6,12 @@ import { Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, 
 import { api } from '../lib/api'
 import { diasHasta, eur, eurK, fecha, hoyISO } from '../lib/format'
 import type { Planificacion as Datos, Prevision } from '../lib/tipos'
-import { Barra, BorrarEnDosPasos, Boton, Cabecera, Campo, Cargando, Dato, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio, num, useAccion } from '../components/ui'
+import { num, useAccion } from '../lib/utilidades'
+import { Barra, BorrarEnDosPasos, Boton, Cabecera, Campo, Cargando, Dato, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio } from '../components/ui'
 
 const nombreMes = (clave: string) => fecha(`${clave}-01`, { month: 'short', year: '2-digit' })
+const cuandoVence = (dias: number) => (dias < 0 ? 'Vencido' : dias === 0 ? 'Hoy' : dias === 1 ? 'Mañana' : `${dias} días`)
+const ahorroTexto = (v: number) => (v < 0 ? `Gastando unos ${eur(-v)} más de lo que entra al mes` : `Ahorrando unos ${eur(v)} al mes`)
 const TIPO: Record<string, string> = { boda: 'Boda', viaje: 'Viaje', casa: 'Casa', colchon: 'Colchón', otro: 'Objetivo' }
 
 export default function Plan() {
@@ -53,7 +56,7 @@ export default function Plan() {
           <Dato etiqueta="Impuestos en 12 meses" valor={sinSupuestos || !prev ? '—' : eur(impuestos)} nota="IVA, 130 y renta" />
           {ultimo && !sinSupuestos
             ? <Dato etiqueta={`Tendrás en ${fecha(`${ultimo.mes}-01`, { month: 'long', year: 'numeric' })}`} valor={eur(ultimo.liquidez)}
-                tono={ultimo.liquidez < 0 ? 'neg' : 'pos'} nota={`Ahorrando unos ${eur((ultimo.liquidez - prev!.liquidez_hoy) / prev!.meses.length)} al mes`} />
+                tono={ultimo.liquidez < 0 ? 'neg' : 'pos'} nota={ahorroTexto((ultimo.liquidez - prev!.liquidez_hoy) / prev!.meses.length)} />
             : <Dato etiqueta="Tendrás en un año" valor="—" nota={<Link to="/ingresos" className="text-accent">Pon tu sueldo y tarifas</Link>} />}
         </div>
         {prev && !sinSupuestos && (
@@ -90,7 +93,7 @@ export default function Plan() {
                   <div className="flex shrink-0 items-center gap-1">
                     <Etiqueta tono="acento">{TIPO[o.tipo] ?? o.tipo}</Etiqueta>
                     <Boton variante="fantasma" className="px-2 py-1" aria-label="Editar" onClick={() => { setEditando(o); setDialogo('objetivo') }}><Pencil size={14} /></Boton>
-                    <BorrarEnDosPasos onBorrar={() => borrarObjetivo.mutate(o.id)} />
+                    <BorrarEnDosPasos etiqueta={`el objetivo ${o.nombre}`} disabled={borrarObjetivo.isPending} onBorrar={() => borrarObjetivo.mutate(o.id)} />
                   </div>
                 </div>
                 <div className="mt-4 flex items-baseline justify-between gap-2">
@@ -121,12 +124,12 @@ export default function Plan() {
                     <div className="text-xs text-muted">{fecha(p.fecha, { day: 'numeric', month: 'long', year: 'numeric' })}{(p.inmueble || p.objetivo || p.inversion) && ` · ${p.inmueble ?? p.objetivo ?? p.inversion}`}</div>
                   </div>
                   <div className="flex items-center gap-2">
-                    {!p.pagado && <Etiqueta tono={dias < 0 ? 'mal' : dias <= 30 ? 'aviso' : 'neutro'}>{dias < 0 ? 'Vencido' : `${dias} días`}</Etiqueta>}
+                    {!p.pagado && <Etiqueta tono={dias < 0 ? 'mal' : dias <= 30 ? 'aviso' : 'neutro'}>{cuandoVence(dias)}</Etiqueta>}
                     <Importe valor={p.importe} />
-                    <Boton variante={p.pagado ? 'secundario' : 'fantasma'} className="px-2 py-1 text-xs" onClick={() => marcar.mutate({ id: p.id, pagado: !p.pagado })}>
+                    <Boton variante={p.pagado ? 'secundario' : 'fantasma'} className="px-2 py-1 text-xs" disabled={marcar.isPending} onClick={() => marcar.mutate({ id: p.id, pagado: !p.pagado })}>
                       <Check size={14} />{p.pagado ? 'Pagado' : 'Marcar'}
                     </Boton>
-                    <BorrarEnDosPasos onBorrar={() => borrarPago.mutate(p.id)} />
+                    <BorrarEnDosPasos etiqueta={`el pago ${p.concepto}`} disabled={borrarPago.isPending} onBorrar={() => borrarPago.mutate(p.id)} />
                   </div>
                 </li>
               )
@@ -139,7 +142,31 @@ export default function Plan() {
       {prev && !sinSupuestos && (
         <details className="mt-8 rounded-2xl border border-line bg-panel p-5">
           <summary className="cursor-pointer text-[15px] font-semibold">Mes a mes</summary>
-          <div className="mt-4">
+          <ul className="mt-4 divide-y divide-line sm:hidden">
+            {prev.meses.map((m) => (
+              <li key={m.mes} className="py-3 text-sm first:pt-0">
+                <div className="mb-1.5 flex items-baseline justify-between gap-2">
+                  <span className="font-medium capitalize">{nombreMes(m.mes)}</span>
+                  <span className="text-xs text-muted">Liquidez <Importe valor={m.liquidez} /></span>
+                </div>
+                <dl className="space-y-1">
+                  {m.nomina ? <div className="flex justify-between gap-3"><dt className="text-muted">Nómina</dt><dd><Importe valor={m.nomina} /></dd></div> : null}
+                  {m.cobros ? <div className="flex justify-between gap-3"><dt className="text-muted">Clientes</dt><dd><Importe valor={m.cobros} /></dd></div> : null}
+                  {m.alquiler ? <div className="flex justify-between gap-3"><dt className="text-muted">Alquiler</dt><dd><Importe valor={m.alquiler} /></dd></div> : null}
+                  <div className="flex justify-between gap-3"><dt className="text-muted">Gastos</dt><dd><Importe valor={-m.gastos} /></dd></div>
+                  {m.pagos_previstos ? <div className="flex justify-between gap-3"><dt className="text-muted">Pagos</dt><dd><Importe valor={-m.pagos_previstos} /></dd></div> : null}
+                  {m.impuestos.map((i) => (
+                    <div key={i.concepto} className="flex justify-between gap-3">
+                      <dt className="text-muted">{i.concepto}{i.presentado && <> <Etiqueta tono="bien">Presentado</Etiqueta></>}</dt>
+                      <dd><Importe valor={-i.importe} /></dd>
+                    </div>
+                  ))}
+                  <div className="flex justify-between gap-3 font-medium"><dt>Ahorro</dt><dd><Importe valor={m.neto} /></dd></div>
+                </dl>
+              </li>
+            ))}
+          </ul>
+          <div className="mt-4 hidden sm:block">
             <Tabla>
               <thead><tr><th>Mes</th><th className="num">Nómina</th><th className="num">Clientes</th><th className="num">Alquiler</th>
                 <th className="num">Gastos</th><th className="num">Pagos</th><th>Impuestos</th><th className="num">Ahorro</th><th className="num">Liquidez</th></tr></thead>
@@ -163,6 +190,8 @@ export default function Plan() {
                 ))}
               </tbody>
             </Tabla>
+          </div>
+          <div>
             <p className="mt-3 text-xs text-muted">Clientes es lo que cobras: base más IVA menos retención. El IVA y el 130 de cada trimestre se pagan el mes siguiente; la renta, en junio.
               «Pagos» son los pagos previstos de arriba.</p>
           </div>

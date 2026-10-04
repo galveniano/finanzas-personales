@@ -3,7 +3,8 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { eur } from '../lib/format'
 import type { Prevision } from '../lib/tipos'
-import { Boton, Campo, Importe, Selector, useAccion } from './ui'
+import { num, useAccion } from '../lib/utilidades'
+import { Boton, Campo, Importe, Selector } from './ui'
 
 const DIAS_SEMANA = ['L', 'M', 'X', 'J', 'V', 'S', 'D']
 const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
@@ -56,9 +57,12 @@ export default function PlanificadorFactura({ onHecho }: { onHecho: () => void }
   const [marcados, setMarcados] = useState<Set<number>>(() => laborables(mesActual()))
   const [numero, setNumero] = useState('')
   const c = clientes[cliente]
-  const [tarifa, setTarifa] = useState<number | null>(null)
-  const [horas, setHoras] = useState<number | null>(null)
-  const t = tarifa ?? c?.tarifa_hora ?? 0, h = horas ?? c?.horas_dia ?? 8
+  // Texto tal cual lo escribes (admite «,» y vacío); null = lo del cliente
+  const [tarifa, setTarifa] = useState<string | null>(null)
+  const [horas, setHoras] = useState<string | null>(null)
+  const t = tarifa != null ? num(tarifa) ?? 0 : c?.tarifa_hora ?? 0
+  const h = horas != null ? num(horas) ?? 0 : c?.horas_dia ?? 8
+  const comoTexto = (v: number) => String(v).replace('.', ',')
   const iva = c?.iva ?? 21, ret = c?.retencion ?? 15
 
   const [anio, m] = mes.split('-').map(Number)
@@ -87,14 +91,14 @@ export default function PlanificadorFactura({ onHecho }: { onHecho: () => void }
           {clientes.map((x, i) => <option key={x.nombre} value={i}>{x.nombre}</option>)}
         </Selector>
         <Campo etiqueta="Mes" type="month" value={mes} onChange={(e) => e.target.value && cambiarMes(e.target.value)} />
-        <Campo etiqueta="€ por hora" inputMode="decimal" value={t} onChange={(e) => setTarifa(Number(e.target.value.replace(',', '.')) || 0)} />
-        <Campo etiqueta="Horas al día" inputMode="decimal" value={h} onChange={(e) => setHoras(Number(e.target.value.replace(',', '.')) || 0)} />
+        <Campo etiqueta="€ por hora" type="text" inputMode="decimal" value={tarifa ?? comoTexto(t)} onChange={(e) => setTarifa(e.target.value)} />
+        <Campo etiqueta="Horas al día" type="text" inputMode="decimal" value={horas ?? comoTexto(h)} onChange={(e) => setHoras(e.target.value)} />
       </div>
 
       <div>
-        <div className="mb-2 flex items-center justify-between text-xs text-muted">
-          <span>Toca los días para marcarlos o quitarlos. Los festivos de España y de Murcia vienen quitados.</span>
-          <span className="flex gap-2">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs text-muted">
+          <span className="min-w-0 flex-1 basis-60">Toca los días para marcarlos o quitarlos. Los festivos de España y de Murcia vienen quitados.</span>
+          <span className="flex shrink-0 gap-3">
             <button type="button" className="font-medium text-accent" onClick={() => setMarcados(laborables(mes))}>Laborables</button>
             <button type="button" className="font-medium text-accent" onClick={() => setMarcados(new Set())}>Ninguno</button>
           </span>

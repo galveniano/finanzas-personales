@@ -6,7 +6,8 @@ import { api } from '../lib/api'
 import { eur, eurK, fecha, hoyISO } from '../lib/format'
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import type { Autonomo as Datos } from '../lib/tipos'
-import { BorrarEnDosPasos, Boton, Campo, Cargando, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio, num, opc, useAccion } from './ui'
+import { num, opc, useAccion } from '../lib/utilidades'
+import { BorrarEnDosPasos, Boton, Campo, Cargando, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio } from './ui'
 
 function FormFactura({ clientes, onHecho }: { clientes: string[]; onHecho: () => void }) {
   const [tipo, setTipo] = useState<'nacional' | 'extranjero'>('nacional')
@@ -60,8 +61,10 @@ function FormGasto({ onHecho }: { onHecho: () => void }) {
   )
 }
 
+const anioActual = () => new Date().getFullYear()
+
 export default function SeccionAutonomo() {
-  const actual = new Date().getFullYear()
+  const [actual] = useState(anioActual)
   const [anio, setAnio] = useState(actual)
   const [dialogo, setDialogo] = useState<'factura' | 'gasto' | 'planificar' | null>(null)
   const { data: d, isLoading, error } = useQuery({ queryKey: ['autonomo', anio], queryFn: () => api.get<Datos>(`/autonomo?anio=${anio}`) })
@@ -120,7 +123,27 @@ export default function SeccionAutonomo() {
             </Tarjeta>
 
             <Tarjeta className="xl:col-span-2" titulo="Facturas emitidas">
-              {d.facturas.length ? (
+              {d.facturas.length ? (<>
+                <ul className="divide-y divide-line sm:hidden">
+                  {d.facturas.map((f) => (
+                    <li key={f.id} className="py-3 text-sm first:pt-0 last:pb-0">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="truncate font-medium">{f.cliente}{f.tipo_iva === 0 && <span className="ml-2"><Etiqueta>No sujeta</Etiqueta></span>}</div>
+                          <div className="cifra text-xs text-muted">{fecha(f.fecha, { day: '2-digit', month: 'short' })} · Nº {f.numero}</div>
+                        </div>
+                        <BorrarEnDosPasos etiqueta={`la factura ${f.numero}`} disabled={borrar.isPending} onBorrar={() => borrar.mutate({ tipo: 'facturas', id: f.id })} />
+                      </div>
+                      <dl className="mt-2 space-y-1">
+                        <div className="flex justify-between gap-3"><dt className="text-muted">Base</dt><dd><Importe valor={f.base} /></dd></div>
+                        <div className="flex justify-between gap-3"><dt className="text-muted">IVA</dt><dd><Importe valor={f.cuota_iva} /></dd></div>
+                        <div className="flex justify-between gap-3"><dt className="text-muted">Retención</dt><dd><Importe valor={-f.retencion} /></dd></div>
+                        <div className="flex justify-between gap-3 font-medium"><dt>Cobras</dt><dd><Importe valor={f.total} /></dd></div>
+                      </dl>
+                    </li>
+                  ))}
+                </ul>
+                <div className="hidden sm:block">
                 <Tabla>
                   <thead><tr><th>Fecha</th><th>Nº</th><th>Cliente</th><th className="num">Base</th><th className="num">IVA</th><th className="num">Retención</th><th className="num">Cobras</th><th /></tr></thead>
                   <tbody>
@@ -133,17 +156,37 @@ export default function SeccionAutonomo() {
                         <td className="num"><Importe valor={f.cuota_iva} /></td>
                         <td className="num"><Importe valor={-f.retencion} /></td>
                         <td className="num font-medium"><Importe valor={f.total} /></td>
-                        <td className="text-right"><BorrarEnDosPasos onBorrar={() => borrar.mutate({ tipo: 'facturas', id: f.id })} /></td>
+                        <td className="text-right"><BorrarEnDosPasos etiqueta={`la factura ${f.numero}`} disabled={borrar.isPending} onBorrar={() => borrar.mutate({ tipo: 'facturas', id: f.id })} /></td>
                       </tr>
                     ))}
                   </tbody>
                 </Tabla>
-              ) : <Vacio>Registra tus facturas para ver el IVA y el IRPF de cada trimestre.</Vacio>}
+                </div>
+              </>) : <Vacio>Registra tus facturas para ver el IVA y el IRPF de cada trimestre.</Vacio>}
             </Tarjeta>
           </div>
 
           <Tarjeta className="mt-4" titulo="Gastos de la actividad">
-            {d.gastos.length ? (
+            {d.gastos.length ? (<>
+              <ul className="divide-y divide-line sm:hidden">
+                {d.gastos.map((g) => (
+                  <li key={g.id} className="py-3 text-sm first:pt-0 last:pb-0">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="truncate font-medium">{g.proveedor || g.concepto}</div>
+                        <div className="text-xs text-muted"><span className="cifra">{fecha(g.fecha, { day: '2-digit', month: 'short' })}</span> · {g.categoria.replace('_', ' ')}</div>
+                      </div>
+                      <BorrarEnDosPasos etiqueta={`el gasto ${g.proveedor || g.concepto}`} disabled={borrar.isPending} onBorrar={() => borrar.mutate({ tipo: 'gastos', id: g.id })} />
+                    </div>
+                    <dl className="mt-2 space-y-1">
+                      <div className="flex justify-between gap-3"><dt className="text-muted">Base</dt><dd><Importe valor={g.base} /></dd></div>
+                      <div className="flex justify-between gap-3"><dt className="text-muted">IVA</dt><dd><Importe valor={g.cuota_iva} /></dd></div>
+                      <div className="flex justify-between gap-3"><dt className="text-muted">Deducible</dt><dd><span className="cifra">{g.deducible_pct} %</span></dd></div>
+                    </dl>
+                  </li>
+                ))}
+              </ul>
+              <div className="hidden sm:block">
               <Tabla>
                 <thead><tr><th>Fecha</th><th>Proveedor</th><th>Categoría</th><th className="num">Base</th><th className="num">IVA</th><th className="num">Deducible</th><th /></tr></thead>
                 <tbody>
@@ -155,12 +198,13 @@ export default function SeccionAutonomo() {
                       <td className="num"><Importe valor={g.base} /></td>
                       <td className="num"><Importe valor={g.cuota_iva} /></td>
                       <td className="num cifra">{g.deducible_pct} %</td>
-                      <td className="text-right"><BorrarEnDosPasos onBorrar={() => borrar.mutate({ tipo: 'gastos', id: g.id })} /></td>
+                      <td className="text-right"><BorrarEnDosPasos etiqueta={`el gasto ${g.proveedor || g.concepto}`} disabled={borrar.isPending} onBorrar={() => borrar.mutate({ tipo: 'gastos', id: g.id })} /></td>
                     </tr>
                   ))}
                 </tbody>
               </Tabla>
-            ) : <Vacio>Apunta la cuota de autónomos, la gestoría o el software: bajan tu IRPF y, si llevan IVA, también el 303.</Vacio>}
+              </div>
+            </>) : <Vacio>Apunta la cuota de autónomos, la gestoría o el software: bajan tu IRPF y, si llevan IVA, también el 303.</Vacio>}
           </Tarjeta>
         </>
       )}

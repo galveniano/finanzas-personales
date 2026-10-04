@@ -4,17 +4,18 @@ import type { ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ExternalLink, RefreshCw, Upload } from 'lucide-react'
 import { api } from '../lib/api'
-import { diasHasta, fecha } from '../lib/format'
+import { diasHasta, fechaHora } from '../lib/format'
 import type { EstadoSync, UltimaSync } from '../lib/tipos'
 import AjustesIA from '../components/AjustesIA'
 import DriveImport from '../components/DriveImport'
-import { Boton, Cabecera, Cargando, Etiqueta, ErrorCarga, Tarjeta, useAccion, useAvisos } from '../components/ui'
+import { useAccion, useAvisos } from '../lib/utilidades'
+import { Boton, Cabecera, Cargando, Etiqueta, ErrorCarga, Tarjeta } from '../components/ui'
 
 function Ultima({ u }: { u: UltimaSync | null }) {
   if (!u) return <p className="text-sm text-muted">Todavía no se ha sincronizado.</p>
   return (
     <p className={`text-sm ${u.ok ? 'text-muted' : 'text-neg'}`}>
-      {u.ok ? 'Última sincronización' : 'Falló la última vez'} el {fecha(u.fecha, { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}: {u.mensaje}
+      {u.ok ? 'Última sincronización' : 'Falló la última vez'} el {fechaHora(u.fecha, { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}: {u.mensaje}
     </p>
   )
 }

@@ -3,7 +3,8 @@ import { useQuery } from '@tanstack/react-query'
 import { PlugZap, Save } from 'lucide-react'
 import { api } from '../lib/api'
 import type { AjustesIA as Ajustes } from '../lib/tipos'
-import { Boton, Campo, Etiqueta, Selector, Tarjeta, useAccion, useAvisos } from './ui'
+import { useAccion, useAvisos } from '../lib/utilidades'
+import { Boton, Campo, ErrorCarga, Etiqueta, Selector, Tarjeta } from './ui'
 
 type Proveedor = Ajustes['proveedor']
 
@@ -14,7 +15,8 @@ const AYUDA: Record<Proveedor, { url: string; texto: string }> = {
 
 /** Elige el modelo de IA del asistente y de la lectura de facturas, y guarda su clave (cifrada) en la app. */
 export default function AjustesIA() {
-  const { data: d } = useQuery({ queryKey: ['ajustes-ia'], queryFn: () => api.get<Ajustes>('/ajustes/ia') })
+  const { data: d, error } = useQuery({ queryKey: ['ajustes-ia'], queryFn: () => api.get<Ajustes>('/ajustes/ia') })
+  if (error && !d) return <Tarjeta titulo="Asistente (IA)"><ErrorCarga error={error} /></Tarjeta>
   if (!d) return null
   // La clave hace que el formulario vuelva a empezar con lo guardado cada vez que cambia
   return <Formulario key={`${d.proveedor}:${d.proveedores[d.proveedor].modelo}`} d={d} />
@@ -25,6 +27,7 @@ function Formulario({ d }: { d: Ajustes }) {
   const [proveedor, setProveedor] = useState<Proveedor>(d.proveedor)
   const [clave, setClave] = useState('')
   const [modelo, setModelo] = useState(d.proveedores[d.proveedor].modelo)
+  const [seguroBorrar, setSeguroBorrar] = useState(false)
 
   const guardar = useAccion(() => api.put('/ajustes/ia', { proveedor, modelo, clave: clave || undefined })
     .then(() => setClave('')), 'Asistente guardado')
@@ -69,7 +72,10 @@ function Formulario({ d }: { d: Ajustes }) {
           <PlugZap size={15} className={probar.isPending ? 'animate-pulse' : ''} />{probar.isPending ? 'Probando…' : 'Probar'}
         </Boton>
         {p.origen_clave === 'app' && proveedor === d.proveedor && (
-          <Boton variante="fantasma" onClick={() => borrar.mutate(undefined)} disabled={borrar.isPending}>Borrar clave</Boton>
+          <Boton variante={seguroBorrar ? 'peligro' : 'fantasma'} disabled={borrar.isPending} onBlur={() => setSeguroBorrar(false)}
+            onClick={() => { if (!seguroBorrar) { setSeguroBorrar(true); return } setSeguroBorrar(false); borrar.mutate(undefined) }}>
+            {seguroBorrar ? '¿Seguro? Borrar la clave' : 'Borrar clave'}
+          </Boton>
         )}
       </div>
     </Tarjeta>

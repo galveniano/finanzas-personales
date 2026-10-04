@@ -2,7 +2,8 @@ import { useState } from 'react'
 import { Plus } from 'lucide-react'
 import { api } from '../lib/api'
 import type { SupuestosPrevision } from '../lib/tipos'
-import { Boton, Campo, Formulario, Selector, num, useAccion } from './ui'
+import { num, useAccion } from '../lib/utilidades'
+import { Boton, Campo, Formulario, Selector } from './ui'
 
 const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
 

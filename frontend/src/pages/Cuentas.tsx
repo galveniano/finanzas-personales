@@ -1,13 +1,14 @@
-import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { Plus, Search, Upload } from 'lucide-react'
 import { api } from '../lib/api'
-import { eur, fecha } from '../lib/format'
+import { eur, fecha, fechaHora } from '../lib/format'
 import type { Categoria, Cuenta, GastosRecientes, Movimiento, Resumen } from '../lib/tipos'
 import ComoGastas, { FlujoMensual } from '../components/Gastos'
 import CarteraIndexa from '../components/CarteraIndexa'
 import InversionesPrivadas from '../components/InversionesPrivadas'
-import { Boton, Cabecera, Campo, Cargando, Dialogo, Etiqueta, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio, num, useAccion, useAvisos } from '../components/ui'
+import { num, useAccion, useAvisos } from '../lib/utilidades'
+import { Boton, Cabecera, Campo, Cargando, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio } from '../components/ui'
 
 const ORIGEN: Record<string, { texto: string; tono: 'acento' | 'neutro' | 'bien' }> = {
   enable_banking: { texto: 'Sincronizada', tono: 'bien' },
@@ -65,15 +66,24 @@ export default function Cuentas() {
   const [filtro, setFiltro] = useState({ cuenta: '', categoria: '', q: '' })
   const [nueva, setNueva] = useState(false)
   const [importando, setImportando] = useState<Cuenta | null>(null)
+  const [q, setQ] = useState('')  // la búsqueda espera a que dejes de teclear
+  useEffect(() => {
+    const t = setTimeout(() => setQ(filtro.q.trim()), 300)
+    return () => clearTimeout(t)
+  }, [filtro.q])
   const cuentas = useQuery({ queryKey: ['cuentas'], queryFn: () => api.get<Cuenta[]>('/cuentas') })
   const categorias = useQuery({ queryKey: ['categorias'], queryFn: () => api.get<Categoria[]>('/categorias') })
   const params = new URLSearchParams()
   if (filtro.cuenta) params.set('cuenta_id', filtro.cuenta)
   if (filtro.categoria) params.set('categoria_id', filtro.categoria)
-  if (filtro.q) params.set('q', filtro.q)
+  if (q) params.set('q', q)
   if (!filtro.cuenta) params.set('solo_tuyas', 'true')  // las cuentas que no son tuyas, solo si las eliges
   const qs = params.toString()
-  const movs = useQuery({ queryKey: ['movimientos', qs], queryFn: () => api.get<Movimiento[]>(`/movimientos${qs ? `?${qs}` : ''}`) })
+  const movs = useQuery({
+    queryKey: ['movimientos', qs],
+    queryFn: () => api.get<Movimiento[]>(`/movimientos${qs ? `?${qs}` : ''}`),
+    placeholderData: keepPreviousData,
+  })
   const gastos = useQuery({ queryKey: ['gastos-recientes'], queryFn: () => api.get<GastosRecientes>('/gastos/recientes') })
   const resumen = useQuery({ queryKey: ['resumen'], queryFn: () => api.get<Resumen>('/resumen') })
   const crear = useAccion((d: Record<string, string>) => api.post('/cuentas', { ...d, saldo: num(d.saldo) ?? 0 }).then(() => setNueva(false)), 'Cuenta creada')
@@ -87,7 +97,7 @@ export default function Cuentas() {
         <Boton onClick={() => setNueva(true)}><Plus size={16} />Nueva cuenta</Boton>
       </Cabecera>
 
-      {cuentas.isLoading ? <Cargando /> : (
+      {cuentas.isLoading ? <Cargando /> : cuentas.error ? <ErrorCarga error={cuentas.error} /> : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {cuentas.data?.map((c) => {
             const o = ORIGEN[c.origen] ?? ORIGEN.manual
@@ -107,7 +117,7 @@ export default function Cuentas() {
                   {c.participacion === 0 && <span>No suma en tu patrimonio ni en tus gastos</span>}
                 </div>
                 <div className="mt-1 flex items-center justify-between gap-2 text-xs text-muted">
-                  <span>{c.ultima_sincronizacion ? `Sincronizada ${fecha(c.ultima_sincronizacion, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}` : `Saldo a ${fecha(c.saldo_fecha)}`}</span>
+                  <span>{c.ultima_sincronizacion ? `Sincronizada ${fechaHora(c.ultima_sincronizacion)}` : `Saldo a ${fecha(c.saldo_fecha)}`}</span>
                   {c.origen !== 'indexa' && (
                     <button className="font-medium text-accent" onClick={() => setImportando(c)}>Importar extracto</button>
                   )}
@@ -141,7 +151,8 @@ export default function Cuentas() {
               className="w-full rounded-xl border border-line bg-panel py-2 pr-3 pl-9 text-sm" />
           </label>
         </div>
-        {movs.data?.length ? (
+        {movs.error && !movs.data ? <ErrorCarga error={movs.error} /> : movs.data?.length ? (
+          <>
           <Tabla>
             <thead><tr><th>Fecha</th><th>Concepto</th><th className="hidden md:table-cell">Cuenta</th><th>Categoría</th><th className="num">Importe</th></tr></thead>
             <tbody>
@@ -151,7 +162,7 @@ export default function Cuentas() {
                   <td className="max-w-[320px]"><div className="truncate">{m.concepto}</div></td>
                   <td className="hidden text-muted md:table-cell">{m.cuenta}</td>
                   <td>
-                    <select value={m.categoria_id ?? ''} onChange={(e) => categorizar.mutate({ id: m.id, cat: e.target.value })}
+                    <select value={m.categoria_id ?? ''} disabled={categorizar.isPending && categorizar.variables?.id === m.id} onChange={(e) => categorizar.mutate({ id: m.id, cat: e.target.value })}
                       className={`max-w-[170px] rounded-lg border border-transparent bg-transparent px-1.5 py-1 text-sm hover:border-line ${m.categoria_id ? '' : 'text-warn'}`}
                       aria-label="Categoría">
                       <option value="">Sin categoría</option>
@@ -163,6 +174,8 @@ export default function Cuentas() {
               ))}
             </tbody>
           </Tabla>
+          {movs.data.length === 300 && <p className="mt-3 text-xs text-muted">Se muestran los 300 más recientes; afina la búsqueda para ver otros.</p>}
+          </>
         ) : <Vacio>{movs.isLoading ? 'Cargando…' : 'No hay movimientos con estos filtros.'}</Vacio>}
       </Tarjeta>
 
