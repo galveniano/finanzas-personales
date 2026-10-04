@@ -13,7 +13,7 @@ export interface Resumen {
   fecha: string; neto: number; activos: number; pasivos: number
   grupos: { grupo: string; importe: number }[]
   lineas_activo: Linea[]; lineas_pasivo: Linea[]
-  historico: { fecha: string; neto: number; liquidez: number; inversiones: number; inmuebles: number; deudas: number }[]
+  historico: { fecha: string; neto: number; liquidez: number; inversiones: number; inmuebles: number; vehiculos: number | null; deudas: number }[]
   flujo_mensual: { mes: string; ingresos: number; gastos: number }[]
   gasto_categorias: { categoria: string; importe: number }[]
   proximos_pagos: { id: number; concepto: string; fecha: string; importe: number }[]
@@ -24,6 +24,34 @@ export interface Resumen {
     renta: { anio: number; resultado: number; cuota: number; neto_mes: number; bruto_mes: number } | null
   }
   sync: EstadoSync
+  liquidez: number; disponible: number
+  hacienda_pendiente: Pendiente
+  avisos: Aviso[]
+}
+export interface Aviso { nivel: 'error' | 'aviso' | 'info'; texto: string; ir: string }
+export interface LineaPendiente { concepto: string; importe: number; tipo: 'iva' | '130' | 'renta'; en_curso: boolean }
+export interface Pendiente { lineas: LineaPendiente[]; total: number }
+export interface CuotaAutonomos {
+  anio: number; rendimiento_neto: number; cuota_pagada: number; rendimiento_computable_mes: number; tramo: number
+  base_minima: number; base_maxima: number; cuota_minima_anual: number; cuota_maxima_anual: number
+  a_pagar: number; a_devolver: number; devolucion_pluriactividad: number; fuente: string; previsto: boolean
+}
+export interface Hacienda {
+  pendiente: Pendiente
+  hucha: { cuenta_id: number | null; cuenta: string | null; apartado: number | null; debes_hoy: number
+    renta_prevista: number; falta: number; al_mes: number; meses_hasta_junio: number }
+  cuota_autonomos: CuotaAutonomos[]
+  renta: { anio: number; base: number; base_liquidable: number; base_ahorro: number; imputacion_inmuebles: number
+    reduccion_pensiones: number; cuota: number; resultado: number; tipo_medio: number; tipo_marginal: number } | null
+  supuestos: { aportacion_pensiones_anio: number | null; aportacion_ppes_anio: number | null; fraccionar_renta: boolean | null
+    rentas_ahorro_anio: number | null; imputacion_inmuebles_anio: number | null }
+  origen: { rentas_ahorro_anio: string; imputacion_inmuebles_anio: string; valor_rentas_ahorro: number; valor_imputacion: number }
+  plazos: { fecha: string; titulo: string; detalle: string }[]
+  cuentas: { id: number; nombre: string }[]
+}
+export interface AhorroFiscal {
+  anio: number; cuota_sin: number; cuota_con: number; ahorro: number; tipo_marginal: number; reduccion_aplicada: number
+  limites: { pensiones: number; ppes: number; pct_rendimientos: number }
 }
 export interface Cuenta {
   id: number; nombre: string; entidad: string; tipo: string; iban: string; origen: string
@@ -78,7 +106,7 @@ export interface Inmueble {
   id: number; nombre: string; tipo: string; uso: string; fecha_compra: string | null
   precio_compra: number; gastos_compra: number; valor_catastral: number; valor_catastral_construccion: number
   porcentaje_propiedad: number; valor: number; valor_detalle: string; deuda: number; equity: number
-  valoraciones: { fecha: string; valor: number }[]
+  valoraciones: { id: number; fecha: string; valor: number }[]
   hipotecas: { id: number; nombre: string; entidad: string; capital_inicial: number; tipo_interes_anual: number
     plazo_meses: number; fecha_inicio: string | null; cuota: number; pendiente: number; intereses_anio: number; futura: boolean }[]
   contratos: { id: number; inquilino: string; fecha_inicio: string; fecha_fin: string | null; renta_inicial: number
@@ -87,6 +115,12 @@ export interface Inmueble {
   pagos: { id: number; concepto: string; fecha: string; importe: number; pagado: boolean }[]
   rendimiento: Rendimiento | null
   rentabilidad: Rentabilidad | null; notas: string
+}
+export interface VenderOAlquilar {
+  precio_venta: number; valor_detalle: string; gastos_venta: number; amortizacion_acumulada: number
+  valor_adquisicion: number; ganancia: number; irpf_ganancia: number; hipoteca_pendiente: number; en_mano: number
+  alquiler_flujo_anual: number; alquiler_irpf_anual: number; alquiler_flujo_tras_irpf: number
+  rentabilidad_sobre_en_mano: number | null; notas: string[]
 }
 export interface Rentabilidad {
   renta_anual: number; gastos_anuales: number; intereses_anuales: number; cuotas_anuales: number
@@ -175,6 +209,9 @@ export interface MesPrevision {
   mes: string; nomina: number; facturado: number; cobros: number; iva: number; retenciones: number; alquiler: number
   gastos: number; pagos_previstos: number; impuestos: { concepto: string; importe: number; presentado: boolean }[]
   total_impuestos: number; neto: number; liquidez: number
+  objetivos: { concepto: string; importe: number }[]; total_objetivos: number
+  ya_este_mes: { nomina: number; cobros: number; alquiler: number; gastos: number; impuestos: number } | null
+  bajo_colchon: boolean
 }
 export interface RentaPrevista {
   anio: number; rendimiento_trabajo: number; rendimiento_actividad: number; rendimiento_alquiler: number; base: number
@@ -189,7 +226,7 @@ export interface Prevision {
   gastos_autonomo_mes: number; origen_gastos_autonomo: string
   renta_presentada: { anio: number; resultado: number; casillas: Record<string, number> } | null
   clientes: { nombre: string; tarifa_hora: number; horas_dia: number; dias_mes: number; origen_dias: string }[]
-  meses: MesPrevision[]; anios: RentaPrevista[]
+  meses: MesPrevision[]; anios: RentaPrevista[]; colchon: number
 }
 export interface GastosRecientes {
   desde: string; meses: number; ingresos_mes: number; gastos_mes: number; ahorro_mes: number; tasa_ahorro: number | null

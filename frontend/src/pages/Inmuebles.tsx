@@ -1,13 +1,14 @@
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Plus } from 'lucide-react'
+import { Pencil, Plus } from 'lucide-react'
 import { api } from '../lib/api'
 import { eur, fecha, hoyISO } from '../lib/format'
-import type { Inmueble } from '../lib/tipos'
-import { Barra, BorrarEnDosPasos, Boton, Cabecera, Campo, Cargando, Dato, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio, num, opc, useAccion } from '../components/ui'
+import type { Inmueble, VenderOAlquilar } from '../lib/tipos'
+import { num, opc, useAccion } from '../lib/utilidades'
+import { Barra, BorrarEnDosPasos, Boton, Cabecera, Campo, Cargando, Dato, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio } from '../components/ui'
 
-type Accion = { tipo: 'valoracion' | 'hipoteca' | 'contrato' | 'renta' | 'gasto' | 'nuevo'; inmueble?: Inmueble; contratoId?: number }
+type Accion = { tipo: 'valoracion' | 'hipoteca' | 'contrato' | 'renta' | 'gasto' | 'nuevo' | 'editar' | 'escritura' | 'editarContrato'; inmueble?: Inmueble; contratoId?: number }
 
 function Fila({ etiqueta, valor, fuerte }: { etiqueta: ReactNode; valor: number; fuerte?: boolean }) {
   return (
@@ -27,6 +28,10 @@ function Ficha({ i, abrir }: { i: Inmueble; abrir: (a: Accion) => void }) {
   const pagado = i.pagos.filter((p) => p.pagado).reduce((s, p) => s + p.importe, 0)
   const r = i.rendimiento
   const borrarHipoteca = useAccion((id: number) => api.del(`/deudas/${id}`), 'Hipoteca borrada')
+  const borrarContrato = useAccion((id: number) => api.del(`/contratos/${id}`), 'Contrato borrado')
+  const borrarGasto = useAccion((id: number) => api.del(`/gastos-inmueble/${id}`), 'Gasto borrado')
+  const borrarValoracion = useAccion((id: number) => api.del(`/valoraciones/${id}`), 'Valoración borrada')
+  const borrar = useAccion(() => api.del(`/inmuebles/${i.id}`), `${i.nombre} borrado`)
   return (
     <Tarjeta className="mb-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -45,6 +50,9 @@ function Ficha({ i, abrir }: { i: Inmueble; abrir: (a: Accion) => void }) {
           {!coche && <Boton variante="secundario" className="px-2.5 py-1.5 text-xs" onClick={() => abrir({ tipo: 'hipoteca', inmueble: i })}>Hipoteca</Boton>}
           {!enObra && !coche && <Boton variante="secundario" className="px-2.5 py-1.5 text-xs" onClick={() => abrir({ tipo: 'contrato', inmueble: i })}>Contrato</Boton>}
           {!coche && <Boton variante="secundario" className="px-2.5 py-1.5 text-xs" onClick={() => abrir({ tipo: 'gasto', inmueble: i })}>Gasto</Boton>}
+          {enObra && <Boton variante="secundario" className="px-2.5 py-1.5 text-xs" onClick={() => abrir({ tipo: 'escritura', inmueble: i })}>Gastos de escritura</Boton>}
+          <Boton variante="fantasma" className="px-2 py-1.5 text-xs" onClick={() => abrir({ tipo: 'editar', inmueble: i })} aria-label={`Editar ${i.nombre}`}><Pencil size={14} /></Boton>
+          <BorrarEnDosPasos etiqueta={`${i.nombre} con sus hipotecas, contratos y gastos`} disabled={borrar.isPending} onBorrar={() => borrar.mutate(undefined)} />
         </div>
       </div>
 
@@ -77,7 +85,7 @@ function Ficha({ i, abrir }: { i: Inmueble; abrir: (a: Accion) => void }) {
           <div key={h.id}>
             <div className="mb-2 flex items-center justify-between gap-2">
               <h3 className="text-sm font-semibold">{h.nombre} · {h.entidad}{h.futura && <> <Etiqueta tono="acento">Prevista</Etiqueta></>}</h3>
-              <BorrarEnDosPasos onBorrar={() => borrarHipoteca.mutate(h.id)} />
+              <BorrarEnDosPasos etiqueta={`la hipoteca ${h.nombre}`} disabled={borrarHipoteca.isPending} onBorrar={() => borrarHipoteca.mutate(h.id)} />
             </div>
             <div className="mb-1 flex justify-between text-xs text-muted"><span>{eur(h.capital_inicial - h.pendiente)} amortizado</span><span>{eur(h.capital_inicial)}</span></div>
             <Barra valor={h.capital_inicial - h.pendiente} max={h.capital_inicial} />
@@ -93,8 +101,13 @@ function Ficha({ i, abrir }: { i: Inmueble; abrir: (a: Accion) => void }) {
           <div key={c.id}>
             <div className="mb-2 flex items-center justify-between gap-2">
               <h3 className="text-sm font-semibold">Alquiler{c.inquilino && ` · ${c.inquilino}`}</h3>
-              <button className="text-xs font-medium text-accent" onClick={() => abrir({ tipo: 'renta', inmueble: i, contratoId: c.id })}>Actualizar renta</button>
+              <span className="flex items-center gap-3">
+                <button className="text-xs font-medium text-accent" onClick={() => abrir({ tipo: 'renta', inmueble: i, contratoId: c.id })}>Actualizar renta</button>
+                <button className="text-xs font-medium text-accent" onClick={() => abrir({ tipo: 'editarContrato', inmueble: i, contratoId: c.id })}>Editar</button>
+                <BorrarEnDosPasos etiqueta="el contrato" disabled={borrarContrato.isPending} onBorrar={() => borrarContrato.mutate(c.id)} />
+              </span>
             </div>
+            <p className="text-xs text-muted">Reducción en la renta: {c.reduccion_pct} %{c.fecha_fin && ` · terminó el ${fecha(c.fecha_fin)}`}</p>
             <div className="cifra text-2xl font-medium">{eur(c.renta_actual)}<span className="text-sm text-muted"> /mes</span></div>
             <ol className="mt-2 space-y-1 text-xs text-muted">
               <li>Desde {fecha(c.fecha_inicio)}: {eur(c.renta_inicial)}</li>
@@ -135,18 +148,80 @@ function Ficha({ i, abrir }: { i: Inmueble; abrir: (a: Accion) => void }) {
         )}
       </div>
 
+      {i.contratos.length > 0 && <VenderOSeguir i={i} />}
+
       {i.gastos.length > 0 && (
         <details className="mt-5">
           <summary className="cursor-pointer text-sm font-medium text-accent">Gastos registrados ({i.gastos.length})</summary>
           <div className="mt-3">
             <Tabla>
-              <thead><tr><th>Fecha</th><th>Tipo</th><th>Concepto</th><th className="num">Importe</th></tr></thead>
-              <tbody>{i.gastos.map((g) => <tr key={g.id}><td className="cifra text-muted">{fecha(g.fecha)}</td><td className="capitalize">{g.tipo}</td><td>{g.concepto}</td><td className="num"><Importe valor={g.importe} /></td></tr>)}</tbody>
+              <thead><tr><th>Fecha</th><th>Tipo</th><th>Concepto</th><th className="num">Importe</th><th /></tr></thead>
+              <tbody>{i.gastos.map((g) => <tr key={g.id}><td className="cifra text-muted">{fecha(g.fecha)}</td><td className="capitalize">{g.tipo}</td><td>{g.concepto}</td>
+                <td className="num"><Importe valor={g.importe} /></td>
+                <td className="text-right"><BorrarEnDosPasos etiqueta={`el gasto ${g.concepto || g.tipo}`} disabled={borrarGasto.isPending} onBorrar={() => borrarGasto.mutate(g.id)} /></td></tr>)}</tbody>
             </Tabla>
           </div>
         </details>
       )}
+      {i.valoraciones.length > 0 && (
+        <details className="mt-3">
+          <summary className="cursor-pointer text-sm font-medium text-accent">Valoraciones ({i.valoraciones.length})</summary>
+          <ul className="mt-2 divide-y divide-line">
+            {i.valoraciones.map((v) => (
+              <li key={v.id} className="flex items-center justify-between gap-3 py-2 text-sm">
+                <span className="cifra text-muted">{fecha(v.fecha)}</span>
+                <span className="flex items-center gap-2"><Importe valor={v.valor} />
+                  <BorrarEnDosPasos etiqueta="la valoración" disabled={borrarValoracion.isPending} onBorrar={() => borrarValoracion.mutate(v.id)} /></span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
     </Tarjeta>
+  )
+}
+
+function VenderOSeguir({ i }: { i: Inmueble }) {
+  const [precio, setPrecio] = useState('')
+  const [abierto, setAbierto] = useState(false)
+  const p = num(precio)
+  const { data: v, isFetching } = useQuery({
+    queryKey: ['vender', i.id, p ?? null], enabled: abierto,
+    queryFn: () => api.get<VenderOAlquilar>(`/inmuebles/${i.id}/vender${p ? `?precio=${p}` : ''}`),
+  })
+  return (
+    <details className="mt-5 rounded-xl border border-line p-4" onToggle={(e) => setAbierto((e.target as HTMLDetailsElement).open)}>
+      <summary className="cursor-pointer text-sm font-semibold">¿Vender o seguir alquilando?</summary>
+      <div className="mt-3 max-w-xs">
+        <Campo etiqueta="Precio de venta (€)" name="precio" inputMode="decimal" value={precio} onChange={(e) => setPrecio(e.target.value)}
+          placeholder={v ? String(Math.round(v.precio_venta)) : ''} ayuda="Vacío: el valor actual." />
+      </div>
+      {v && (
+        <div className={`mt-4 grid gap-6 lg:grid-cols-2 ${isFetching ? 'opacity-60' : ''}`}>
+          <div>
+            <h4 className="mb-1 text-sm font-semibold">Si vendes</h4>
+            <Fila etiqueta={`Precio (${v.valor_detalle})`} valor={v.precio_venta} />
+            <Fila etiqueta="Gastos de venta (3 %)" valor={-v.gastos_venta} />
+            <Fila etiqueta={`IRPF de la ganancia (${eur(v.ganancia)})`} valor={-v.irpf_ganancia} />
+            <Fila etiqueta="Cancelar la hipoteca" valor={-v.hipoteca_pendiente} />
+            <Fila etiqueta="Te queda en mano" valor={v.en_mano} fuerte />
+            <p className="mt-2 text-xs text-muted">La ganancia descuenta la amortización que ya te has deducido ({eur(v.amortizacion_acumulada)}).</p>
+          </div>
+          <div>
+            <h4 className="mb-1 text-sm font-semibold">Si sigues alquilando</h4>
+            <Fila etiqueta="Te queda al año" valor={v.alquiler_flujo_anual} />
+            <Fila etiqueta="IRPF del alquiler" valor={-v.alquiler_irpf_anual} />
+            <Fila etiqueta="Neto al año" valor={v.alquiler_flujo_tras_irpf} fuerte />
+            <p className="mt-2 text-xs text-muted">
+              {v.rentabilidad_sobre_en_mano !== null
+                ? `Equivale a un ${pct(v.rentabilidad_sobre_en_mano)} al año sobre lo que sacarías vendiendo, sin contar lo que suba o baje el piso.`
+                : 'Vendiendo no te quedaría dinero en mano.'}
+            </p>
+          </div>
+          <div className="lg:col-span-2">{v.notas.map((n) => <p key={n} className="text-xs text-muted">{n}</p>)}</div>
+        </div>
+      )}
+    </details>
   )
 }
 
@@ -159,6 +234,11 @@ function Formularios({ a, cerrar }: { a: Accion; cerrar: () => void }) {
   const renta = usePost(`/contratos/${a.contratoId}/rentas`, 'Renta actualizada')
   const gasto = usePost(`/inmuebles/${id}/gastos`, 'Gasto guardado')
   const nuevo = usePost('/inmuebles', 'Inmueble creado')
+  const escritura = usePost(`/inmuebles/${id}/gastos-escritura`, 'Gastos de escritura añadidos a Plan')
+  const editar = useAccion((d: object) => api.patch(`/inmuebles/${id}`, d).then(cerrar), 'Cambios guardados')
+  const editarContrato = useAccion((d: object) => api.patch(`/contratos/${a.contratoId}`, d).then(cerrar), 'Contrato guardado')
+  const i = a.inmueble
+  const c = i?.contratos.find((x) => x.id === a.contratoId)
 
   switch (a.tipo) {
     case 'valoracion':
@@ -179,12 +259,12 @@ function Formularios({ a, cerrar }: { a: Accion; cerrar: () => void }) {
       </Formulario>
     case 'contrato':
       return <Formulario onEnviar={(d) => contrato.mutateAsync({ inquilino: d.inquilino, fecha_inicio: d.fecha_inicio, fecha_fin: opc(d.fecha_fin),
-        renta_mensual: num(d.renta_mensual), reduccion_pct: num(d.reduccion_pct) ?? 60 })}>
+        renta_mensual: num(d.renta_mensual), reduccion_pct: num(d.reduccion_pct) ?? null })}>
         <Campo etiqueta="Inquilino" name="inquilino" />
         <Campo etiqueta="Renta inicial (€/mes)" name="renta_mensual" inputMode="decimal" required />
         <Campo etiqueta="Inicio del contrato" name="fecha_inicio" type="date" required />
         <Campo etiqueta="Fin (si ya terminó)" name="fecha_fin" type="date" />
-        <Campo etiqueta="Reducción IRPF %" name="reduccion_pct" defaultValue="60" className="sm:col-span-2" ayuda="60 % para contratos firmados antes del 26/05/2023." />
+        <Campo etiqueta="Reducción IRPF %" name="reduccion_pct" className="sm:col-span-2" ayuda="Vacío: 60 % si el contrato es anterior al 26/05/2023 y 50 % si es posterior." />
       </Formulario>
     case 'renta':
       return <Formulario onEnviar={(d) => renta.mutateAsync({ desde: d.desde, renta_mensual: num(d.renta_mensual) })}>
@@ -201,6 +281,35 @@ function Formularios({ a, cerrar }: { a: Accion; cerrar: () => void }) {
         </Selector>
         <Campo etiqueta="Importe (€)" name="importe" inputMode="decimal" required />
         <Campo etiqueta="Concepto" name="concepto" />
+      </Formulario>
+    case 'editarContrato':
+      return <Formulario onEnviar={(d) => editarContrato.mutateAsync({ inquilino: d.inquilino, fecha_fin: d.fecha_fin || null,
+        ...(num(d.reduccion_pct) !== undefined ? { reduccion_pct: num(d.reduccion_pct) } : {}) })}>
+        <Campo etiqueta="Inquilino" name="inquilino" defaultValue={c?.inquilino} />
+        <Campo etiqueta="Fin (si ya terminó)" name="fecha_fin" type="date" defaultValue={c?.fecha_fin ?? ''} />
+        <Campo etiqueta="Reducción IRPF %" name="reduccion_pct" defaultValue={c ? String(c.reduccion_pct) : ''} className="sm:col-span-2" />
+      </Formulario>
+    case 'escritura':
+      return <Formulario onEnviar={(d) => escritura.mutateAsync({ fecha: d.fecha, precio: num(d.precio) ?? null })}>
+        <Campo etiqueta="Fecha prevista de la escritura" name="fecha" type="date" required />
+        <Campo etiqueta="Precio sin IVA (€)" name="precio" inputMode="decimal" defaultValue={i?.precio_compra ? String(i.precio_compra) : ''} />
+        <p className="text-xs text-muted sm:col-span-2">Te apunto en Plan un pago con el AJD de Murcia (1,5 % del precio) y unos 1.200 € de notaría, registro y gestoría.</p>
+      </Formulario>
+    case 'editar':
+      return <Formulario onEnviar={(d) => editar.mutateAsync({ nombre: d.nombre, uso: d.uso, fecha_compra: d.fecha_compra || null,
+        precio_compra: num(d.precio_compra) ?? 0, gastos_compra: num(d.gastos_compra) ?? 0, valor_catastral: num(d.valor_catastral) ?? 0,
+        valor_catastral_construccion: num(d.valor_catastral_construccion) ?? 0, porcentaje_propiedad: num(d.porcentaje_propiedad) ?? 100, notas: d.notas })}>
+        <Campo etiqueta="Nombre" name="nombre" required defaultValue={i?.nombre} />
+        <Selector etiqueta="Uso" name="uso" defaultValue={i?.uso}>
+          <option value="alquiler">Alquiler</option><option value="vivienda_habitual">Vivienda habitual</option><option value="otro">Otro</option>
+        </Selector>
+        <Campo etiqueta="Fecha de compra" name="fecha_compra" type="date" defaultValue={i?.fecha_compra ?? ''} />
+        <Campo etiqueta="Precio (€)" name="precio_compra" inputMode="decimal" defaultValue={String(i?.precio_compra ?? '')} />
+        <Campo etiqueta="Gastos de compra (€)" name="gastos_compra" inputMode="decimal" defaultValue={String(i?.gastos_compra ?? '')} />
+        <Campo etiqueta="Valor catastral (€)" name="valor_catastral" inputMode="decimal" defaultValue={String(i?.valor_catastral ?? '')} />
+        <Campo etiqueta="Catastral construcción (€)" name="valor_catastral_construccion" inputMode="decimal" defaultValue={String(i?.valor_catastral_construccion ?? '')} />
+        <Campo etiqueta="% de propiedad" name="porcentaje_propiedad" defaultValue={String(i?.porcentaje_propiedad ?? 100)} />
+        <Campo etiqueta="Notas" name="notas" defaultValue={i?.notas} className="sm:col-span-2" />
       </Formulario>
     case 'nuevo':
       return <Formulario onEnviar={(d) => nuevo.mutateAsync({ nombre: d.nombre, tipo: d.tipo, uso: d.uso, fecha_compra: opc(d.fecha_compra),
@@ -226,6 +335,7 @@ function Formularios({ a, cerrar }: { a: Accion; cerrar: () => void }) {
 const TITULOS: Record<Accion['tipo'], string> = {
   valoracion: 'Nueva valoración', hipoteca: 'Añadir hipoteca', contrato: 'Contrato de alquiler',
   renta: 'Actualizar renta', gasto: 'Añadir gasto', nuevo: 'Nuevo inmueble o coche',
+  editar: 'Editar', escritura: 'Gastos de escritura', editarContrato: 'Editar contrato',
 }
 
 export default function Inmuebles() {

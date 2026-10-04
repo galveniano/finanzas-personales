@@ -1,13 +1,63 @@
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { api } from '../lib/api'
 import { diasHasta, eur, eurK, fecha } from '../lib/format'
-import type { Resumen } from '../lib/tipos'
+import type { Aviso, Resumen } from '../lib/tipos'
 import { Cabecera, Cargando, Dato, ErrorCarga, Importe, Tarjeta } from '../components/ui'
 
 const COLORES: Record<string, string> = {
   Liquidez: 'var(--chart-2)', Inversiones: 'var(--chart-1)', Inmuebles: 'var(--chart-3)', Otros: 'var(--chart-4)',
+  'Vehículos': 'var(--chart-5)',
+}
+
+const NIVEL: Record<Aviso['nivel'], string> = {
+  error: 'border-neg/40 bg-neg/10 text-neg', aviso: 'border-warn/40 bg-warn-soft text-warn', info: 'border-line bg-panel text-ink',
+}
+
+function Avisos({ avisos }: { avisos: Aviso[] }) {
+  const [todos, setTodos] = useState(false)
+  if (!avisos.length) return null
+  const visibles = todos ? avisos : avisos.slice(0, 3)
+  return (
+    <ul className="mb-4 grid gap-2" aria-label="Avisos">
+      {visibles.map((a, i) => (
+        <li key={i} className={`flex items-start justify-between gap-3 rounded-xl border px-4 py-2.5 text-sm ${NIVEL[a.nivel]}`}>
+          <span className="min-w-0">{a.texto}</span>
+          <Link to={a.ir} className="shrink-0 text-xs font-medium underline underline-offset-2">Ver</Link>
+        </li>
+      ))}
+      {avisos.length > 3 && (
+        <li><button type="button" className="text-xs font-medium text-accent" onClick={() => setTodos(!todos)}>
+          {todos ? 'Ver menos' : `Ver los ${avisos.length} avisos`}</button></li>
+      )}
+    </ul>
+  )
+}
+
+/** Patrimonio a final de cada año (o hoy, el año en curso) y cuánto ha cambiado. */
+function PorAnio({ r }: { r: Resumen }) {
+  const ultimos = new Map<string, Resumen['historico'][number]>()
+  for (const h of r.historico) ultimos.set(h.fecha.slice(0, 4), h)
+  const filas = [...ultimos.entries()]
+  if (filas.length < 2) return null
+  return (
+    <div className="mt-4 overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead><tr className="text-left text-xs text-muted"><th className="py-1 font-medium">Año</th><th className="num font-medium">Neto</th><th className="num font-medium">Cambio</th></tr></thead>
+        <tbody>
+          {filas.map(([anio, h], i) => (
+            <tr key={anio} className="border-t border-line">
+              <td className="py-1.5">{anio}</td>
+              <td className="num"><Importe valor={h.neto} /></td>
+              <td className="num">{i ? <Importe valor={h.neto - filas[i - 1][1].neto} signo /> : '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
 }
 
 const estiloTooltip = {
@@ -77,11 +127,13 @@ export default function Inicio() {
   if (error) return <ErrorCarga error={error} />
   if (!r) return null
   const { iva, irpf, trimestre, renta } = r.fiscal
-  const hacienda = iva.resultado + (irpf.exento ? 0 : irpf.resultado)
+  // Un 303 a compensar no se resta del 130: ese saldo se usa en trimestres siguientes
+  const hacienda = Math.max(iva.resultado, 0) + (irpf.exento ? 0 : irpf.resultado)
 
   return (
     <>
       <Cabecera titulo="Inicio" subtitulo={`Situación a ${fecha(r.fecha, { day: 'numeric', month: 'long', year: 'numeric' })}`} />
+      <Avisos avisos={r.avisos} />
 
       <div className="grid gap-4 lg:grid-cols-3">
         <Tarjeta className="lg:col-span-2" titulo="Patrimonio neto">
@@ -91,11 +143,26 @@ export default function Inicio() {
             <Dato etiqueta="Debes" valor={eur(r.pasivos)} />
           </div>
           <Evolucion r={r} />
+          <PorAnio r={r} />
         </Tarjeta>
         <Tarjeta titulo="En qué está">
           <Composicion r={r} />
         </Tarjeta>
       </div>
+
+      <Tarjeta className="mt-4" titulo="Disponible de verdad" accion={<Link to="/impuestos" className="text-xs font-medium text-accent">Hucha</Link>}>
+        <div className="flex flex-wrap gap-x-10 gap-y-4">
+          <Dato etiqueta="En tus cuentas" valor={eur(r.liquidez)} />
+          <Dato etiqueta="Debes a Hacienda" valor={eur(r.hacienda_pendiente.total)} />
+          <Dato etiqueta="Disponible" valor={eur(r.disponible)} />
+        </div>
+        {r.hacienda_pendiente.lineas.length > 0 && (
+          <p className="mt-3 text-xs text-muted">
+            {r.hacienda_pendiente.lineas.map((l) => `${l.concepto} ${eur(l.importe)}`).join(' · ')}. Estimado: el IVA cobrado
+            y la renta que se va generando no son tuyos hasta que pagas.
+          </p>
+        )}
+      </Tarjeta>
 
       <div className="mt-4 grid gap-4 md:grid-cols-3">
         <Tarjeta titulo="Ganas al mes" accion={<Link to="/ingresos" className="text-xs font-medium text-accent">Ingresos</Link>}>
@@ -108,7 +175,8 @@ export default function Inicio() {
           <Dato etiqueta={`${trimestre}T ${r.fiscal.anio} · ${iva.plazo}`} valor={eur(hacienda)} />
           <p className="mt-1 text-xs text-muted">IVA {eur(iva.resultado)} · IRPF {irpf.exento ? 'exento' : eur(irpf.resultado)}{iva.presentado && irpf.presentado ? ' · presentado' : ''}</p>
           {renta && <p className="mt-3 border-t border-line pt-3 text-sm">
-            Renta {renta.anio}: <strong className="cifra">{eur(Math.abs(renta.resultado))}</strong> {renta.resultado >= 0 ? `a pagar en junio de ${renta.anio + 1}` : 'a devolver'}</p>}
+            Renta {renta.anio}: {Math.abs(renta.resultado) < 0.005 ? 'sin pagar ni devolver' : <>
+              <strong className="cifra">{eur(Math.abs(renta.resultado))}</strong> {renta.resultado > 0 ? `a pagar en junio de ${renta.anio + 1}` : 'a devolver'}</>}</p>}
         </Tarjeta>
         <Tarjeta titulo="Próximos pagos" accion={<Link to="/plan" className="text-xs font-medium text-accent">Plan</Link>}>
           {r.proximos_pagos.length ? (
@@ -119,7 +187,7 @@ export default function Inicio() {
                   <li key={p.id} className="flex items-center justify-between gap-3 py-2 text-sm first:pt-0">
                     <div className="min-w-0">
                       <div className="truncate">{p.concepto}</div>
-                      <div className="text-xs text-muted">{dias < 0 ? 'Vencido' : dias === 0 ? 'Hoy' : `En ${dias} días`}</div>
+                      <div className="text-xs text-muted">{dias < 0 ? 'Vencido' : dias === 0 ? 'Hoy' : dias === 1 ? 'Mañana' : `En ${dias} días`}</div>
                     </div>
                     <Importe valor={p.importe} />
                   </li>

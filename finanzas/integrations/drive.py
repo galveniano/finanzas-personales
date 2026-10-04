@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from finanzas import documentos, ia
+from finanzas.fechas import ahora_utc
 from finanzas.models import Cliente, Declaracion, DocumentoDrive, Factura, GastoAutonomo
 
 API = "https://www.googleapis.com/drive/v3"
@@ -144,7 +145,7 @@ def importar(s: Session, token: str, desde: str = "2024-01-01", transport=None) 
     for f in nuevos[:POR_LLAMADA]:
         doc = vistos.get(f["id"]) or DocumentoDrive(drive_id=f["id"])
         doc.nombre, doc.modificado, doc.enlace = f["name"][:250], f["modifiedTime"], f.get("webViewLink", "")[:300]
-        doc.revisado = datetime.now()
+        doc.revisado = ahora_utc()
         s.add(doc)
         procesar(s, doc, drive.descargar(f["id"]), cfg, transport)
         s.commit()

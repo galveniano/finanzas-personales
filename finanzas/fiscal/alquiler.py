@@ -44,6 +44,26 @@ class RendimientoAlquiler:
         return self.rendimiento_neto - self.reduccion
 
 
+FECHA_LEY_VIVIENDA = date(2023, 5, 26)
+
+
+def reduccion_por_defecto(fecha_inicio: date) -> Decimal:
+    """Reducción del rendimiento del alquiler de vivienda: 60 % en contratos anteriores al 26/05/2023 y 50 %
+    en los posteriores (puede ser más en zonas tensionadas, que en Murcia no hay)."""
+    return Decimal("60") if fecha_inicio < FECHA_LEY_VIVIENDA else Decimal("50")
+
+
+def amortizacion_acumulada(activo: Activo, contratos: Iterable[ContratoAlquiler], hasta: date) -> Decimal:
+    """Lo amortizado mientras el piso estuvo alquilado: al venderlo, baja el valor de adquisición."""
+    base = base_amortizacion(activo)
+    meses = 0
+    for c in contratos:
+        fin = min(c.fecha_fin or hasta, hasta)
+        if fin > c.fecha_inicio:
+            meses += (fin.year - c.fecha_inicio.year) * 12 + fin.month - c.fecha_inicio.month
+    return (base * AMORTIZACION_PCT / 100 * meses / 12).quantize(CENT)
+
+
 def meses_alquilado(contrato: ContratoAlquiler, anio: int) -> list[date]:
     """Primer día de cada mes del año en que el contrato estaba vigente."""
     inicio = contrato.fecha_inicio.replace(day=1)

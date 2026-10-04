@@ -7,3 +7,4 @@ secretos/
 *.pem
 frontend/node_modules/
 .vercel/
+.claude/worktrees/

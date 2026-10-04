@@ -6,7 +6,8 @@ import { api } from '../lib/api'
 import { eur, eurK, fecha, hoyISO } from '../lib/format'
 import type { Nominas as Datos, Prevision } from '../lib/tipos'
 import CalculadoraSueldo from './CalculadoraSueldo'
-import { Boton, Campo, Cargando, Dato, Dialogo, ErrorCarga, Formulario, Importe, Tabla, Tarjeta, Vacio, num, useAccion } from './ui'
+import { num, useAccion } from '../lib/utilidades'
+import { BorrarEnDosPasos, Boton, Campo, Cargando, Dato, Dialogo, ErrorCarga, Formulario, Importe, Tabla, Tarjeta, Vacio } from './ui'
 
 export default function SeccionNomina() {
   const [abierto, setAbierto] = useState(false)
@@ -17,6 +18,7 @@ export default function SeccionNomina() {
     empresa: v.empresa, fecha: v.fecha, bruto: num(v.bruto), retencion_irpf: num(v.retencion_irpf),
     seguridad_social: num(v.seguridad_social), neto: num(v.neto),
   }).then(() => setAbierto(false)), 'Nómina registrada')
+  const borrar = useAccion((id: number) => api.del(`/nominas/${id}`), 'Nómina borrada')
 
   if (isLoading) return <Cargando />
   if (error) return <ErrorCarga error={error} />
@@ -85,7 +87,7 @@ export default function SeccionNomina() {
       <Tarjeta className="mt-4" titulo="Nóminas registradas">
         {d.nominas.length ? (
           <Tabla>
-            <thead><tr><th>Mes</th><th>Empresa</th><th className="num">Bruto</th><th className="num">IRPF</th><th className="num">SS</th><th className="num">Neto</th></tr></thead>
+            <thead><tr><th>Mes</th><th>Empresa</th><th className="num">Bruto</th><th className="num">IRPF</th><th className="num">SS</th><th className="num">Neto</th><th /></tr></thead>
             <tbody>
               {d.nominas.map((n) => (
                 <tr key={n.id}>
@@ -95,6 +97,9 @@ export default function SeccionNomina() {
                   <td className="num"><Importe valor={n.retencion_irpf} /></td>
                   <td className="num"><Importe valor={n.seguridad_social} /></td>
                   <td className="num font-medium"><Importe valor={n.neto} /></td>
+                  <td className="text-right">
+                    <BorrarEnDosPasos etiqueta={`la nómina de ${fecha(n.fecha, { month: 'long', year: 'numeric' })}`} disabled={borrar.isPending} onBorrar={() => borrar.mutate(n.id)} />
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -106,7 +111,7 @@ export default function SeccionNomina() {
 
       <Dialogo abierto={abierto} onCerrar={() => setAbierto(false)} titulo="Registrar nómina">
         <Formulario onEnviar={(v) => crear.mutateAsync(v)}>
-          <Campo etiqueta="Empresa" name="empresa" defaultValue="Indra" />
+          <Campo etiqueta="Empresa" name="empresa" placeholder="Empresa" />
           <Campo etiqueta="Fecha" name="fecha" type="date" defaultValue={hoyISO()} required />
           <Campo etiqueta="Bruto (€)" name="bruto" inputMode="decimal" required />
           <Campo etiqueta="Retención IRPF (€)" name="retencion_irpf" inputMode="decimal" required />

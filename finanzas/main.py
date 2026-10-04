@@ -13,8 +13,8 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import exc as sa_exc
 
-from finanzas import auth, config, db, sync
-from finanzas.api import router
+from finanzas import auth, calendario, config, db, sync
+from finanzas.api import COOKIE_ESTADO_BANCO, router
 from finanzas.categorizar import sembrar_categorias
 from finanzas.integrations import enablebanking
 
@@ -40,7 +40,20 @@ async def lifespan(_app):
 
 app = FastAPI(title="Finanzas personales", lifespan=lifespan)
 app.include_router(auth.router)
+app.include_router(calendario.router)
 app.include_router(router)
+
+
+@app.middleware("http")
+async def cabeceras_seguridad(request: Request, call_next):
+    respuesta = await call_next(request)
+    respuesta.headers.setdefault("X-Content-Type-Options", "nosniff")
+    respuesta.headers.setdefault("X-Frame-Options", "DENY")
+    respuesta.headers.setdefault("Referrer-Policy", "same-origin")
+    respuesta.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    if config.EN_VERCEL:
+        respuesta.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
+    return respuesta
 
 
 @app.get("/api/cron/sync")
@@ -55,10 +68,14 @@ def cron_sync(request: Request):
 
 
 @app.get("/sabadell/vuelta", dependencies=[Depends(auth.requiere_sesion)])
-def vuelta_sabadell(code: str = ""):
+def vuelta_sabadell(request: Request, code: str = "", state: str = ""):
     """Vuelta desde el banco cuando la app se sirve por https (Vercel). En local se pega la URL en Ajustes."""
     if not code:
         return RedirectResponse("/#/ajustes")
+    esperado = request.cookies.get(COOKIE_ESTADO_BANCO, "")
+    if not esperado or not hmac.compare_digest(state, esperado):
+        motivo = "La vuelta del banco no corresponde a una conexión que hayas empezado aquí. Vuelve a pulsar Conectar."
+        return RedirectResponse("/#/ajustes?" + urlencode({"sabadell_error": motivo}))
     db.asegurar_tablas()
     with db.SessionLocal() as s:
         try:
@@ -75,7 +92,9 @@ def vuelta_sabadell(code: str = ""):
         except Exception:
             s.rollback()
             log.exception("Fallo al guardar la foto del patrimonio")
-    return RedirectResponse("/#/ajustes?sabadell=ok")
+    respuesta = RedirectResponse("/#/ajustes?sabadell=ok")
+    respuesta.delete_cookie(COOKIE_ESTADO_BANCO, path="/")
+    return respuesta
 
 
 if (WEB / "index.html").exists():

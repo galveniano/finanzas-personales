@@ -27,16 +27,16 @@ def test_130_acumulado_resta_pagos_previos():
     facturas = [fac(date(2026, 1, 15), "10000", ret="0"), fac(date(2026, 5, 1), "10000", ret="0")]
     gastos = [gasto(date(2026, 1, 20), "2000", iva="0")]
     t1 = autonomo.calcular_130(2026, 1, facturas, gastos)
-    assert t1.resultado == D("1600.00")  # 20 % de 8000
+    assert t1.resultado == D("1520.00")  # 20 % de 8000 − 5 % de difícil justificación (7600)
     t2 = autonomo.calcular_130(2026, 2, facturas, gastos)
-    assert t2.pagos_anteriores == D("1600.00")
-    assert t2.resultado == D("2000.00")  # 20 % de 18000 − 1600
+    assert t2.pagos_anteriores == D("1520.00")
+    assert t2.resultado == D("1900.00")  # 20 % de 18000 − 900 (17100) − 1520
 
 
 def test_130_con_retencion_y_exencion_70():
     facturas = [fac(date(2025, 6, 1), "5000"), fac(date(2026, 2, 1), "5000")]
     m = autonomo.calcular_130(2026, 1, facturas, [])
-    assert m.resultado == D("250.00")  # 20 % de 5000 = 1000 − 750 de retenciones
+    assert m.resultado == D("200.00")  # 20 % de 4750 (5000 − 5 %) = 950 − 750 de retenciones
     assert m.exento  # en 2025 el 100 % de lo facturado llevaba retención
 
 

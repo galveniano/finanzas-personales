@@ -2,13 +2,15 @@
 import logging
 import threading
 from datetime import date, datetime
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from finanzas import config, db, patrimonio
+from finanzas.fechas import iso_utc
 from finanzas.integrations import enablebanking, indexa
-from finanzas.models import Instantanea, RegistroSync
+from finanzas.models import Activo, Instantanea, RegistroSync
 
 log = logging.getLogger("finanzas.sync")
 _cerrojo = threading.Lock()
@@ -42,17 +44,38 @@ def sincronizar_indexa(session: Session, cliente=None) -> dict:
 
 def guardar_instantanea(session: Session, fecha: date | None = None) -> Instantanea:
     fecha = fecha or date.today()
-    p = patrimonio.calcular(session, fecha)
+    pendiente = None
+    if fecha == date.today():  # lo que debes a Hacienda también es deuda (como en Inicio)
+        try:
+            from finanzas import hacienda
+            pendiente = hacienda.pendiente(session)
+        except Exception:
+            session.rollback()
+            log.exception("No se ha podido estimar lo pendiente con Hacienda")
+    p = patrimonio.calcular(session, fecha, pendiente)
     grupos = p.por_grupo()
     foto = session.scalar(select(Instantanea).where(Instantanea.fecha == fecha)) or Instantanea(fecha=fecha)
     foto.liquidez = grupos.get("Liquidez", 0)
     foto.inversiones = grupos.get("Inversiones", 0)
     foto.inmuebles = grupos.get("Inmuebles", 0)
+    foto.vehiculos = grupos.get("Vehículos", 0)
     foto.otros = grupos.get("Otros", 0)
     foto.deudas = p.total_pasivos
     session.add(foto)
     session.commit()
     return foto
+
+
+def rellenar_vehiculos(session: Session) -> None:
+    """Las fotos de antes no guardaban el coche: se calcula su valor a esa fecha (se deprecia solo)."""
+    fotos = session.scalars(select(Instantanea).where(Instantanea.vehiculos.is_(None))).all()
+    if not fotos:
+        return
+    coches = session.scalars(select(Activo).where(Activo.tipo == "vehiculo")).all()
+    for foto in fotos:
+        foto.vehiculos = sum((patrimonio.valor_activo(a, foto.fecha)[0] for a in coches
+                              if not a.fecha_compra or a.fecha_compra <= foto.fecha), Decimal(0))
+    session.commit()
 
 
 def sincronizar_todo(session: Session) -> list[dict]:
@@ -71,7 +94,7 @@ def estado(session: Session) -> dict:
     def ultimo(fuente):
         r = session.scalar(select(RegistroSync).where(RegistroSync.fuente == fuente)
                            .order_by(RegistroSync.id.desc()).limit(1))
-        return None if r is None else {"fecha": r.fecha.isoformat(timespec="minutes"), "ok": r.ok,
+        return None if r is None else {"fecha": iso_utc(r.fecha), "ok": r.ok,
                                        "mensaje": r.mensaje}
 
     con = enablebanking.conexion_activa(session)

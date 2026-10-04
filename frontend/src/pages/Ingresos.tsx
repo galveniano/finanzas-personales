@@ -8,7 +8,7 @@ import FormSupuestos from '../components/FormSupuestos'
 import LoQueGanas from '../components/LoQueGanas'
 import SeccionAutonomo from '../components/SeccionAutonomo'
 import SeccionNomina from '../components/SeccionNomina'
-import { Boton, Cabecera, Dialogo, Tarjeta, Vacio } from '../components/ui'
+import { Boton, Cabecera, Dialogo, ErrorCarga, Tarjeta, Vacio } from '../components/ui'
 
 const PESTANAS = [{ id: 'autonomo', texto: 'Autónomo' }, { id: 'nomina', texto: 'Nómina' }] as const
 
@@ -16,7 +16,7 @@ export default function Ingresos() {
   const [params, setParams] = useSearchParams()
   const ver = params.get('ver') === 'nomina' ? 'nomina' : 'autonomo'
   const [editar, setEditar] = useState(false)
-  const { data: d } = useQuery({ queryKey: ['prevision'], queryFn: () => api.get<Prevision>('/prevision') })
+  const { data: d, error } = useQuery({ queryKey: ['prevision'], queryFn: () => api.get<Prevision>('/prevision') })
   const sinDatos = d && !d.supuestos.nomina && !d.supuestos.clientes.length
   const botonSupuestos = <Boton variante="secundario" className="px-2.5 py-1 text-xs" onClick={() => setEditar(true)}><Settings2 size={14} />Sueldo y tarifas</Boton>
 
@@ -24,6 +24,7 @@ export default function Ingresos() {
     <>
       <Cabecera titulo="Ingresos" subtitulo="Tu nómina, lo que facturas y el alquiler" />
 
+      {error && !d && <ErrorCarga error={error} />}
       {d && (sinDatos
         ? <Tarjeta titulo="Lo que ganas al mes" accion={botonSupuestos}>
             <Vacio>Pon tu sueldo y lo que cobras a cada cliente en «Sueldo y tarifas» y verás lo que te queda cada mes.</Vacio>

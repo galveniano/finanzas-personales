@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom'
 import { ArrowUp, RotateCcw, Sparkles } from 'lucide-react'
 import { api } from '../lib/api'
 import type { MensajeChat } from '../lib/tipos'
-import { Boton, Cabecera, Vacio } from '../components/ui'
+import { Boton, Cabecera, ErrorCarga, Vacio } from '../components/ui'
 
 const CLAVE = 'finanzas:asistente'
 const SUGERENCIAS = [
@@ -33,7 +33,11 @@ export default function Asistente() {
   const [pensando, setPensando] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const fin = useRef<HTMLDivElement>(null)
-  const { data: estado } = useQuery({ queryKey: ['asistente'], queryFn: () => api.get<{ disponible: boolean }>('/asistente/estado') })
+  const [seguroNueva, setSeguroNueva] = useState(false)
+  const { data: estado, error: errorEstado } = useQuery({
+    queryKey: ['asistente'],
+    queryFn: () => api.get<{ disponible: boolean; proveedor?: string; proveedor_nombre?: string }>('/asistente/estado'),
+  })
 
   useEffect(() => {
     try { sessionStorage.setItem(CLAVE, JSON.stringify(mensajes)) } catch { /* sin almacenamiento */ }
@@ -62,10 +66,17 @@ export default function Asistente() {
   return (
     <>
       <Cabecera titulo="Asistente" subtitulo="Pregunta lo que quieras sobre tus finanzas: ve todos los datos de la app">
-        {mensajes.length > 0 && <Boton variante="secundario" onClick={() => setMensajes([])}><RotateCcw size={15} />Nueva conversación</Boton>}
+        {mensajes.length > 0 && (
+          <Boton variante={seguroNueva ? 'peligro' : 'secundario'} onBlur={() => setSeguroNueva(false)}
+            onClick={() => { if (!seguroNueva) { setSeguroNueva(true); return } setMensajes([]); setSeguroNueva(false); setError(null) }}>
+            <RotateCcw size={15} />{seguroNueva ? '¿Borrar la conversación? Confirmar' : 'Nueva conversación'}
+          </Boton>
+        )}
       </Cabecera>
-      {estado && !estado.disponible ? (
-        <Vacio>Para activar el asistente pon tu clave de OpenAI en <Link to="/ajustes" className="font-medium text-accent">Ajustes → Asistente (IA)</Link>.</Vacio>
+      {errorEstado && !estado ? (
+        <ErrorCarga error={errorEstado} />
+      ) : estado && !estado.disponible ? (
+        <Vacio>Para activar el asistente pon tu clave de OpenAI o de Claude en <Link to="/ajustes" className="font-medium text-accent">Ajustes → Asistente (IA)</Link>.</Vacio>
       ) : (
         <div className="flex min-h-[60vh] flex-col rounded-2xl border border-line bg-panel">
           <div className="flex-1 space-y-4 p-5">
@@ -99,7 +110,7 @@ export default function Asistente() {
           </form>
         </div>
       )}
-      <p className="mt-3 text-xs text-muted">Usa Claude a través de la API de Anthropic: tus datos se envían para responder y no se usan para entrenar. Puede equivocarse; confirma lo importante con tu gestor.</p>
+      <p className="mt-3 text-xs text-muted">Usa {estado?.proveedor_nombre ?? 'un modelo de IA'} a través de su API: tus datos se envían para responder y no se usan para entrenar. Puede equivocarse; confirma lo importante con tu gestor.</p>
     </>
   )
 }

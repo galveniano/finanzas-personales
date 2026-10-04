@@ -6,6 +6,7 @@ from sqlalchemy import Boolean, Date, DateTime, ForeignKey, LargeBinary, Numeric
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from finanzas.db import Base
+from finanzas.fechas import ahora_utc
 
 Dinero = Numeric(14, 2, asdecimal=True)
 Porcentaje = Numeric(5, 2, asdecimal=True)
@@ -63,6 +64,8 @@ class ReglaCategoria(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     patron: Mapped[str] = mapped_column(String(120))
     categoria_id: Mapped[int] = mapped_column(ForeignKey("categorias.id"))
+    # Creada al cambiar tú la categoría de un movimiento: manda sobre las reglas de serie
+    aprendida: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     categoria: Mapped[Categoria] = relationship()
 
 
@@ -304,7 +307,7 @@ class ConexionBancaria(Base):
     banco: Mapped[str] = mapped_column(String(80))
     session_id: Mapped[str] = mapped_column(String(80))
     valida_hasta: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    creada: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    creada: Mapped[datetime] = mapped_column(DateTime, default=ahora_utc)
     activa: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
@@ -312,7 +315,7 @@ class RegistroSync(Base):
     __tablename__ = "registro_sync"
     id: Mapped[int] = mapped_column(primary_key=True)
     fuente: Mapped[str] = mapped_column(String(30))  # sabadell | indexa
-    fecha: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    fecha: Mapped[datetime] = mapped_column(DateTime, default=ahora_utc)
     ok: Mapped[bool] = mapped_column(Boolean, default=True)
     mensaje: Mapped[str] = mapped_column(Text, default="")
 
@@ -325,12 +328,14 @@ class Instantanea(Base):
     liquidez: Mapped[Decimal] = mapped_column(Dinero, default=Decimal("0"))
     inversiones: Mapped[Decimal] = mapped_column(Dinero, default=Decimal("0"))
     inmuebles: Mapped[Decimal] = mapped_column(Dinero, default=Decimal("0"))
+    # Vacío en las fotos anteriores a que se guardara (se rellena al leerlas)
+    vehiculos: Mapped[Decimal | None] = mapped_column(Dinero, nullable=True)
     otros: Mapped[Decimal] = mapped_column(Dinero, default=Decimal("0"))
     deudas: Mapped[Decimal] = mapped_column(Dinero, default=Decimal("0"))
 
     @property
     def neto(self) -> Decimal:
-        return self.liquidez + self.inversiones + self.inmuebles + self.otros - self.deudas
+        return self.liquidez + self.inversiones + self.inmuebles + (self.vehiculos or 0) + self.otros - self.deudas
 
 
 # --- Hacienda ---------------------------------------------------------------
@@ -375,7 +380,7 @@ class DocumentoDrive(Base):
     factura_id: Mapped[int | None] = mapped_column(ForeignKey("facturas.id", ondelete="SET NULL"), nullable=True)
     gasto_id: Mapped[int | None] = mapped_column(ForeignKey("gastos_autonomo.id", ondelete="SET NULL"), nullable=True)
     declaracion_id: Mapped[int | None] = mapped_column(ForeignKey("declaraciones.id", ondelete="SET NULL"), nullable=True)
-    revisado: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    revisado: Mapped[datetime] = mapped_column(DateTime, default=ahora_utc)
 
 
 class Ajuste(Base):

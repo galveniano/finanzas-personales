@@ -24,6 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from finanzas import config
+from finanzas.fechas import ahora_utc
 from finanzas.categorizar import categorizar
 from finanzas.models import ConexionBancaria, Cuenta, Movimiento
 
@@ -180,9 +181,22 @@ def _saldo_principal(saldos: list[dict]) -> Decimal | None:
 
 # --- Flujo ------------------------------------------------------------------
 
-def iniciar_autorizacion(cliente: EnableBankingClient | None = None) -> str:
+def nuevo_estado() -> str:
+    """Valor aleatorio que viaja al banco y vuelve; la app lo guarda en una cookie para comprobar
+    que la vuelta es de una conexión que empezaste tú."""
+    return secrets.token_urlsafe(16)
+
+
+def iniciar_autorizacion(cliente: EnableBankingClient | None = None, estado: str | None = None) -> str:
     cliente = cliente or EnableBankingClient()
-    return cliente.iniciar(config.BANCO, config.ENABLE_BANKING_REDIRECT_URL, secrets.token_urlsafe(16))
+    return cliente.iniciar(config.BANCO, config.ENABLE_BANKING_REDIRECT_URL, estado or nuevo_estado())
+
+
+def extraer_estado(texto: str) -> str | None:
+    """El state de la URL de vuelta que se pega a mano, si viene."""
+    if "state=" not in texto:
+        return None
+    return parse_qs(urlparse(texto.strip()).query).get("state", [None])[0]
 
 
 def extraer_code(texto: str) -> str:
@@ -241,7 +255,7 @@ def completar_autorizacion(session: Session, code: str,
 def conexion_activa(session: Session) -> ConexionBancaria | None:
     con = session.scalar(select(ConexionBancaria).where(ConexionBancaria.activa)
                          .order_by(ConexionBancaria.id.desc()))
-    if con and con.valida_hasta and con.valida_hasta < datetime.utcnow():
+    if con and con.valida_hasta and con.valida_hasta < ahora_utc():
         return None
     return con
 
@@ -284,7 +298,7 @@ def sincronizar(session: Session, cliente: EnableBankingClient | None = None,
         saldo = _saldo_principal(cliente.saldos(cuenta.uid_externo))
         if saldo is not None:
             cuenta.saldo, cuenta.saldo_fecha = saldo, hoy
-        cuenta.ultima_sincronizacion = datetime.now()
+        cuenta.ultima_sincronizacion = ahora_utc()
     session.commit()
 
     nuevos = 0

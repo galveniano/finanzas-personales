@@ -3,7 +3,8 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { eur } from '../lib/format'
 import type { CalculoNomina } from '../lib/tipos'
-import { Dato, Selector, Tabla, Tarjeta, num } from './ui'
+import { num } from '../lib/utilidades'
+import { Dato, Selector, Tabla, Tarjeta } from './ui'
 
 const MESES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre']
 

@@ -66,9 +66,13 @@ def valor_activo(activo: Activo, a_fecha: date) -> tuple[Decimal, str]:
     return (valor * activo.porcentaje_propiedad / 100), detalle
 
 
-def calcular(session: Session, a_fecha: date | None = None) -> Patrimonio:
+def calcular(session: Session, a_fecha: date | None = None, hacienda: dict | None = None) -> Patrimonio:
+    """`hacienda`: lo que debes a Hacienda y aún no has pagado (finanzas.hacienda.pendiente), como pasivo."""
     a_fecha = a_fecha or date.today()
     p = Patrimonio(a_fecha)
+    if hacienda and hacienda.get("total"):
+        p.pasivos.append(Linea("Hacienda (IVA, 130 y renta pendientes)", "Impuestos",
+                               Decimal(str(hacienda["total"])), "estimado"))
 
     for c in session.scalars(select(Cuenta).where(Cuenta.activa)):
         if c.parte == 0:  # se ve en Cuentas pero no es tuya
