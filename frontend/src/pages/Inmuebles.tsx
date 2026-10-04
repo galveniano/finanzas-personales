@@ -5,7 +5,8 @@ import { Plus } from 'lucide-react'
 import { api } from '../lib/api'
 import { eur, fecha, hoyISO } from '../lib/format'
 import type { Inmueble } from '../lib/tipos'
-import { Barra, BorrarEnDosPasos, Boton, Cabecera, Campo, Cargando, Dato, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio, num, opc, useAccion } from '../components/ui'
+import { num, opc, useAccion } from '../lib/utilidades'
+import { Barra, BorrarEnDosPasos, Boton, Cabecera, Campo, Cargando, Dato, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio } from '../components/ui'
 
 type Accion = { tipo: 'valoracion' | 'hipoteca' | 'contrato' | 'renta' | 'gasto' | 'nuevo'; inmueble?: Inmueble; contratoId?: number }
 
@@ -77,7 +78,7 @@ function Ficha({ i, abrir }: { i: Inmueble; abrir: (a: Accion) => void }) {
           <div key={h.id}>
             <div className="mb-2 flex items-center justify-between gap-2">
               <h3 className="text-sm font-semibold">{h.nombre} · {h.entidad}{h.futura && <> <Etiqueta tono="acento">Prevista</Etiqueta></>}</h3>
-              <BorrarEnDosPasos onBorrar={() => borrarHipoteca.mutate(h.id)} />
+              <BorrarEnDosPasos etiqueta={`la hipoteca ${h.nombre}`} disabled={borrarHipoteca.isPending} onBorrar={() => borrarHipoteca.mutate(h.id)} />
             </div>
             <div className="mb-1 flex justify-between text-xs text-muted"><span>{eur(h.capital_inicial - h.pendiente)} amortizado</span><span>{eur(h.capital_inicial)}</span></div>
             <Barra valor={h.capital_inicial - h.pendiente} max={h.capital_inicial} />

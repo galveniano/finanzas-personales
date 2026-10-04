@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { eur, fecha } from '../lib/format'
 import type { CarteraIndexa as Cartera } from '../lib/tipos'
-import { Barra, Dato, Etiqueta, Importe, Tabla, Tarjeta } from './ui'
+import { Barra, Dato, ErrorCarga, Etiqueta, Importe, Tabla, Tarjeta } from './ui'
 
 const pct = (v: number | null | undefined) => (v == null ? '—' : `${v.toLocaleString('es-ES', { maximumFractionDigits: 2 })} %`)
 
@@ -57,7 +57,8 @@ function Cuenta({ c }: { c: Cartera }) {
 
 /** Cartera de Indexa: valor, rentabilidad y fondos de cada cuenta, de la última sincronización. */
 export default function CarteraIndexa() {
-  const { data } = useQuery({ queryKey: ['indexa'], queryFn: () => api.get<Cartera[]>('/indexa') })
+  const { data, error } = useQuery({ queryKey: ['indexa'], queryFn: () => api.get<Cartera[]>('/indexa') })
+  if (error && !data) return <section className="mt-8"><h2 className="mb-3 text-lg font-semibold">Indexa Capital</h2><ErrorCarga error={error} /></section>
   if (!data?.length) return null
   return (
     <section className="mt-8">

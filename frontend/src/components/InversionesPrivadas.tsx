@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Check, Plus, Trash2 } from 'lucide-react'
+import { Check, Plus } from 'lucide-react'
 import { api } from '../lib/api'
 import { eur, fecha, hoyISO } from '../lib/format'
 import type { InversionPrivada, Inversiones } from '../lib/tipos'
-import { Barra, Boton, Campo, Dato, Dialogo, Etiqueta, Formulario, Importe, Tarjeta, Vacio, num, useAccion } from './ui'
+import { num, useAccion } from '../lib/utilidades'
+import { Barra, BorrarEnDosPasos, Boton, Campo, Dato, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Tarjeta, Vacio } from './ui'
 
 type Fila = { fecha: string; importe: string; pagado: boolean }
 const filaVacia = (): Fila => ({ fecha: '', importe: '', pagado: false })
@@ -98,7 +99,7 @@ function Fondo({ inv, onEditar }: { inv: InversionPrivada; onEditar: () => void 
       <div className="mt-5 text-sm">
         <div className="mb-1.5 flex justify-between gap-2">
           <span>Desembolsado <span className="cifra font-medium">{eur(inv.desembolsado)}</span> de {eur(inv.compromiso)}</span>
-          <span className="cifra whitespace-nowrap text-muted">{inv.pct_desembolsado ?? 0} %</span>
+          <span className="cifra whitespace-nowrap text-muted">{(inv.pct_desembolsado ?? 0).toLocaleString('es-ES', { maximumFractionDigits: 1 })} %</span>
         </div>
         <Barra valor={inv.desembolsado} max={inv.compromiso} />
         {inv.sin_calendario > 0 && (
@@ -113,17 +114,17 @@ function Fondo({ inv, onEditar }: { inv: InversionPrivada; onEditar: () => void 
               <span className={l.pagado ? 'text-muted' : ''}>{fecha(l.fecha, { day: 'numeric', month: 'short', year: 'numeric' })}</span>
               <div className="flex items-center gap-2">
                 <Importe valor={l.importe} />
-                <Boton variante={l.pagado ? 'secundario' : 'fantasma'} className="px-2 py-1 text-xs" onClick={() => marcar.mutate({ id: l.id, pagado: !l.pagado })}>
+                <Boton variante={l.pagado ? 'secundario' : 'fantasma'} className="px-2 py-1 text-xs" disabled={marcar.isPending || quitar.isPending} onClick={() => marcar.mutate({ id: l.id, pagado: !l.pagado })}>
                   <Check size={14} />{l.pagado ? 'Pagada' : 'Marcar'}
                 </Boton>
-                <Boton variante="fantasma" className="px-1.5 py-1" aria-label="Quitar llamada" onClick={() => quitar.mutate(l.id)}><Trash2 size={14} /></Boton>
+                <BorrarEnDosPasos etiqueta={`la llamada del ${fecha(l.fecha)}`} disabled={quitar.isPending} onBorrar={() => quitar.mutate(l.id)} />
               </div>
             </li>
           ))}
         </ul>
-        <Boton variante="fantasma" className="mt-2 px-2 py-1 text-xs text-neg" onClick={() => { if (confirm(`¿Borrar ${inv.nombre}?`)) borrar.mutate(undefined) }}>
-          <Trash2 size={14} />Borrar inversión
-        </Boton>
+        <div className="mt-2">
+          <BorrarEnDosPasos texto="Borrar inversión" etiqueta={inv.nombre} disabled={borrar.isPending} onBorrar={() => borrar.mutate(undefined)} />
+        </div>
       </details>
     </Tarjeta>
   )
@@ -133,7 +134,8 @@ function Fondo({ inv, onEditar }: { inv: InversionPrivada; onEditar: () => void 
 export default function InversionesPrivadas() {
   const [nueva, setNueva] = useState(false)
   const [editando, setEditando] = useState<InversionPrivada | null>(null)
-  const { data } = useQuery({ queryKey: ['inversiones'], queryFn: () => api.get<Inversiones>('/inversiones') })
+  const { data, error } = useQuery({ queryKey: ['inversiones'], queryFn: () => api.get<Inversiones>('/inversiones') })
+  if (error && !data) return <section className="mt-8"><h2 className="mb-3 text-lg font-semibold">Inversión privada</h2><ErrorCarga error={error} /></section>
   if (!data) return null
   return (
     <section className="mt-8">

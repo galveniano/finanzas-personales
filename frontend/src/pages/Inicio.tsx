@@ -77,7 +77,8 @@ export default function Inicio() {
   if (error) return <ErrorCarga error={error} />
   if (!r) return null
   const { iva, irpf, trimestre, renta } = r.fiscal
-  const hacienda = iva.resultado + (irpf.exento ? 0 : irpf.resultado)
+  // Un 303 a compensar no se resta del 130: ese saldo se usa en trimestres siguientes
+  const hacienda = Math.max(iva.resultado, 0) + (irpf.exento ? 0 : irpf.resultado)
 
   return (
     <>
@@ -108,7 +109,8 @@ export default function Inicio() {
           <Dato etiqueta={`${trimestre}T ${r.fiscal.anio} · ${iva.plazo}`} valor={eur(hacienda)} />
           <p className="mt-1 text-xs text-muted">IVA {eur(iva.resultado)} · IRPF {irpf.exento ? 'exento' : eur(irpf.resultado)}{iva.presentado && irpf.presentado ? ' · presentado' : ''}</p>
           {renta && <p className="mt-3 border-t border-line pt-3 text-sm">
-            Renta {renta.anio}: <strong className="cifra">{eur(Math.abs(renta.resultado))}</strong> {renta.resultado >= 0 ? `a pagar en junio de ${renta.anio + 1}` : 'a devolver'}</p>}
+            Renta {renta.anio}: {Math.abs(renta.resultado) < 0.005 ? 'sin pagar ni devolver' : <>
+              <strong className="cifra">{eur(Math.abs(renta.resultado))}</strong> {renta.resultado > 0 ? `a pagar en junio de ${renta.anio + 1}` : 'a devolver'}</>}</p>}
         </Tarjeta>
         <Tarjeta titulo="Próximos pagos" accion={<Link to="/plan" className="text-xs font-medium text-accent">Plan</Link>}>
           {r.proximos_pagos.length ? (
@@ -119,7 +121,7 @@ export default function Inicio() {
                   <li key={p.id} className="flex items-center justify-between gap-3 py-2 text-sm first:pt-0">
                     <div className="min-w-0">
                       <div className="truncate">{p.concepto}</div>
-                      <div className="text-xs text-muted">{dias < 0 ? 'Vencido' : dias === 0 ? 'Hoy' : `En ${dias} días`}</div>
+                      <div className="text-xs text-muted">{dias < 0 ? 'Vencido' : dias === 0 ? 'Hoy' : dias === 1 ? 'Mañana' : `En ${dias} días`}</div>
                     </div>
                     <Importe valor={p.importe} />
                   </li>

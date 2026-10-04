@@ -1,10 +1,12 @@
-import { useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Briefcase, Building2, CalendarClock, Ellipsis, LayoutDashboard, LogOut, RefreshCw, Scale, Settings, Sparkles, Wallet } from 'lucide-react'
 import { api, esDemo } from '../lib/api'
 import type { EstadoAuth, EstadoSync } from '../lib/tipos'
-import { Boton, useAccion } from './ui'
+import { fechaHora } from '../lib/format'
+import { useAccion, useAvisos } from '../lib/utilidades'
+import { Boton, Cargando } from './ui'
 
 const secciones: { a: string; texto: string; icono: typeof Wallet; movil?: boolean }[] = [
   { a: '/', texto: 'Inicio', icono: LayoutDashboard, movil: true },
@@ -25,7 +27,7 @@ function EstadoConexiones() {
     <div className="flex items-center gap-3">
       {ultima && (
         <span className="hidden text-xs text-muted sm:inline">
-          Última sincronización {new Date(ultima.fecha).toLocaleString('es-ES', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+          Última sincronización {fechaHora(ultima.fecha)}
         </span>
       )}
       <Boton variante="secundario" onClick={() => sincronizar.mutate(undefined)} disabled={sincronizar.isPending}>
@@ -38,9 +40,18 @@ function EstadoConexiones() {
 
 function Sesion({ compacto }: { compacto?: boolean }) {
   const qc = useQueryClient()
+  const avisar = useAvisos()
   const { data } = useQuery({ queryKey: ['auth'], queryFn: () => api.get<EstadoAuth>('/auth/estado'), enabled: !esDemo, staleTime: Infinity })
   if (!data?.email) return null
-  const salir = async () => { await api.post('/auth/salir'); qc.clear(); location.reload() }
+  const salir = async () => {
+    try {
+      await api.post('/auth/salir')
+      qc.clear()
+      location.reload()
+    } catch (e) {
+      avisar(`No se ha podido cerrar la sesión: ${(e as Error).message}`, 'error')
+    }
+  }
   return compacto
     ? <button onClick={salir} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-muted"><LogOut size={18} />Salir ({data.email})</button>
     : (
@@ -56,6 +67,12 @@ function NavMovil() {
   const { pathname } = useLocation()
   const resto = [...secciones.filter((x) => !x.movil), asistente, ajustes]
   const enResto = resto.some((x) => x.a === pathname)
+  useEffect(() => {
+    if (!mas) return
+    const tecla = (e: KeyboardEvent) => { if (e.key === 'Escape') setMas(false) }
+    window.addEventListener('keydown', tecla)
+    return () => window.removeEventListener('keydown', tecla)
+  }, [mas])
   const clase = (activo: boolean) => `flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-lg py-1 text-[10px] ${activo ? 'text-accent' : 'text-muted'}`
   return (
     <>
@@ -129,7 +146,7 @@ export default function Layout() {
           </div>
         )}
         <main className="mx-auto max-w-6xl px-4 py-6 sm:px-8 sm:py-8">
-          <Outlet />
+          <Suspense fallback={<Cargando />}><Outlet /></Suspense>
         </main>
       </div>
 

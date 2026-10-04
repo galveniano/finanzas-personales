@@ -5,14 +5,15 @@ import { api } from '../lib/api'
 import { eur, fecha } from '../lib/format'
 import { permisoDrive } from '../lib/google'
 import type { DocumentosDrive } from '../lib/tipos'
-import { Boton, Etiqueta, Tarjeta, Vacio, useAccion, useAvisos } from './ui'
+import { useAccion, useAvisos } from '../lib/utilidades'
+import { Boton, ErrorCarga, Etiqueta, Tarjeta, Vacio } from './ui'
 
 /** Importa de tu Drive las facturas emitidas, las recibidas y los justificantes de Hacienda. */
 export default function DriveImport() {
   const qc = useQueryClient()
   const avisar = useAvisos()
   const [progreso, setProgreso] = useState<string | null>(null)
-  const { data: d } = useQuery({ queryKey: ['drive'], queryFn: () => api.get<DocumentosDrive>('/drive/documentos') })
+  const { data: d, error } = useQuery({ queryKey: ['drive'], queryFn: () => api.get<DocumentosDrive>('/drive/documentos') })
   const gasto = useAccion((id: number) => api.post(`/drive/documentos/${id}/gasto`, { deducible_pct: 100 }), 'Apuntado como gasto')
   const ignorar = useAccion((id: number) => api.post(`/drive/documentos/${id}/ignorar`))
 
@@ -37,6 +38,7 @@ export default function DriveImport() {
     }
   }
 
+  const ocupado = gasto.isPending || ignorar.isPending
   const docs = d?.documentos ?? []
   const pendientes = docs.filter((x) => x.estado === 'pendiente')
   const importados = docs.filter((x) => x.estado === 'importado')
@@ -48,10 +50,10 @@ export default function DriveImport() {
         Busca en tu Drive facturas y justificantes de Hacienda. Tus facturas emitidas pasan a Autónomo y los justificantes a Hacienda;
         las facturas que recibes te las enseño aquí para que decidas si son gasto de la actividad. Solo lectura: no se toca nada de tu Drive.
       </p>
-      {!d ? null : !d.google_client_id ? (
+      {!d ? (error ? <ErrorCarga error={error} /> : null) : !d.google_client_id ? (
         <Vacio>Funciona con la app publicada y el inicio de sesión de Google configurado.</Vacio>
       ) : !d.ia ? (
-        <Vacio>Para leer las facturas hace falta configurar el asistente: pon tu clave de OpenAI en la tarjeta Asistente (IA) de arriba.</Vacio>
+        <Vacio>Para leer las facturas hace falta configurar el asistente: pon tu clave de OpenAI o de Claude en Ajustes, en la tarjeta Asistente (IA) de arriba.</Vacio>
       ) : (
         <Boton onClick={importar} disabled={!!progreso}><FolderSync size={15} className={progreso ? 'animate-pulse' : ''} />{progreso ?? 'Importar de Drive'}</Boton>
       )}
@@ -69,8 +71,8 @@ export default function DriveImport() {
                 {x.datos.avisos?.map((a) => <div key={a} className="text-xs text-neg">{a}</div>)}
               </div>
               <div className="flex gap-2">
-                <Boton variante="secundario" className="px-2.5 py-1 text-xs" onClick={() => gasto.mutate(x.id)}><Check size={14} />Es gasto</Boton>
-                <Boton variante="fantasma" className="px-2.5 py-1 text-xs" onClick={() => ignorar.mutate(x.id)}><X size={14} />No</Boton>
+                <Boton variante="secundario" className="px-2.5 py-1 text-xs" disabled={ocupado} onClick={() => gasto.mutate(x.id)}><Check size={14} />Es gasto</Boton>
+                <Boton variante="fantasma" className="px-2.5 py-1 text-xs" disabled={ocupado} onClick={() => ignorar.mutate(x.id)}><X size={14} />No</Boton>
               </div>
             </li>
           ))}
