@@ -44,6 +44,18 @@ def test_entrar_con_google(con_login):
         assert c.get("/api/resumen").status_code == 401
 
 
+def test_salir_en_todos_invalida_las_cookies_copiadas(con_login):
+    with TestClient(app) as c:
+        c.post("/api/auth/google", json={"credential": token_google()})
+        copiada = c.cookies.get(auth.COOKIE)
+        assert c.post("/api/auth/salir-en-todos").status_code == 200
+        c.cookies.set(auth.COOKIE, copiada)
+        assert c.get("/api/resumen").status_code == 401
+        c.cookies.clear()
+        c.post("/api/auth/google", json={"credential": token_google()})
+        assert c.get("/api/resumen").status_code == 200
+
+
 @pytest.mark.parametrize("token, codigo", [
     (lambda: token_google(email="otro@gmail.com"), 403),
     (lambda: token_google(aud="otra-app"), 401),

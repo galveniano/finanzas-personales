@@ -1,0 +1,41 @@
+name: Pruebas
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  servidor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+      - run: pip install -r requirements.txt
+      - run: python -m pytest -q
+
+  frontal:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npx tsc -b && npx oxlint
+        working-directory: frontend
+      # El frontal compilado va en el repo (finanzas/web): tiene que coincidir con el código
+      - run: npm run build
+        working-directory: frontend
+      - name: El frontal compilado está al día
+        run: |
+          if [ -n "$(git status --porcelain finanzas/web)" ]; then
+            git status --short finanzas/web
+            echo "::error::finanzas/web no coincide con frontend/: ejecuta 'cd frontend && npm run build' y súbelo"
+            exit 1
+          fi

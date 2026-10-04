@@ -77,8 +77,11 @@ def _gasto_por_categoria(s: Session, dias: int = 30) -> list[dict]:
 
 @router.get("/resumen")
 def resumen(s: Session = SesionDB):
+    from finanzas import avisos, hacienda, prevision
     hoy = date.today()
-    p = patrimonio.calcular(s, hoy)
+    prev_completa = prevision.calcular(s)
+    pendiente = hacienda.pendiente(s, prev_completa)
+    p = patrimonio.calcular(s, hoy, pendiente)
     facturas, gastos = s.scalars(select(Factura)).all(), s.scalars(select(GastoAutonomo)).all()
     # El trimestre que toca pagar: el anterior mientras dura su plazo (hasta el 20, o el 30 de enero), si no el actual
     anio_t, t = hoy.year, autonomo.trimestre_de(hoy)
@@ -89,8 +92,7 @@ def resumen(s: Session = SesionDB):
     m130 = autonomo.calcular_130(anio_t, t, facturas, gastos, _presentados_130(presentadas))
     d303, d130 = presentadas.get(("303", t)), presentadas.get(("130", t))
     # Si hay previsión, lo no presentado sale de ella, igual que en Autónomo y Previsión
-    from finanzas import prevision
-    prev = prevision.calcular(s) if prevision.leer(s).get("clientes") or prevision.leer(s).get("nomina") else None
+    prev = prev_completa if prevision.leer(s).get("clientes") or prevision.leer(s).get("nomina") else None
     p_t = (prev or {}).get("trimestres", {}).get(f"{anio_t}-{t}")
     renta = next((a for a in (prev or {}).get("anios", []) if a["anio"] == hoy.year), None)
     sync.rellenar_vehiculos(s)
@@ -127,6 +129,10 @@ def resumen(s: Session = SesionDB):
                       "bruto_mes": renta["ingresos"]["total"]["bruto_mes"]} if renta else None,
         },
         "sync": sync.estado(s),
+        "liquidez": n(p.por_grupo().get("Liquidez", CERO)),
+        "hacienda_pendiente": pendiente,
+        "disponible": round(float(p.por_grupo().get("Liquidez", CERO)) - pendiente["total"], 2),
+        "avisos": avisos.calcular(s, hacienda.revision_reta(s, prev_completa)),
     }
 
 
@@ -230,10 +236,41 @@ class MovimientoPatch(BaseModel):
 
 @router.patch("/movimientos/{mov_id}")
 def actualizar_movimiento(mov_id: int, datos: MovimientoPatch, s: Session = SesionDB):
+    """Al cambiar la categoría se aprende la regla para los siguientes y se dice cuántos anteriores parecidos hay."""
+    from finanzas import categorizar
     m = _obtener(s, Movimiento, mov_id)
     m.categoria_id = datos.categoria_id
     s.commit()
-    return {"ok": True}
+    return {"ok": True, **categorizar.aprender(s, m)}
+
+
+@router.post("/movimientos/{mov_id}/aplicar-a-parecidos")
+def aplicar_a_parecidos(mov_id: int, s: Session = SesionDB):
+    from finanzas import categorizar
+    m = _obtener(s, Movimiento, mov_id)
+    parecidos = categorizar.parecidos(s, m)
+    for x in parecidos:
+        x.categoria_id = m.categoria_id
+    s.commit()
+    return {"ok": True, "cambiados": len(parecidos)}
+
+
+@router.delete("/cuentas/{cuenta_id}")
+def borrar_cuenta(cuenta_id: int, s: Session = SesionDB):
+    """Las cuentas manuales o de extractos se borran con sus movimientos; las que vienen del banco o de
+    Indexa solo se ocultan (volverían en la siguiente sincronización)."""
+    c = _obtener(s, Cuenta, cuenta_id)
+    if c.origen in ("enable_banking", "indexa"):
+        c.activa = False
+        oculta = True
+    else:
+        for m in s.scalars(select(Movimiento).where(Movimiento.cuenta_id == c.id)):
+            s.delete(m)
+        s.delete(c)
+        oculta = False
+    s.commit()
+    sync.guardar_instantanea(s)
+    return {"ok": True, "oculta": oculta}
 
 
 # --- Sincronización ---------------------------------------------------------
@@ -597,7 +634,8 @@ class ContratoIn(BaseModel):
     fecha_inicio: date
     fecha_fin: date | None = None
     renta_mensual: Decimal
-    reduccion_pct: Decimal = Decimal("60")
+    # Vacío: 60 % si el contrato es anterior al 26/05/2023 y 50 % si es posterior
+    reduccion_pct: Decimal | None = None
 
 
 class RentaIn(BaseModel):
@@ -728,7 +766,10 @@ def borrar_deuda(deuda_id: int, s: Session = SesionDB):
 @router.post("/inmuebles/{activo_id}/contratos")
 def crear_contrato(activo_id: int, datos: ContratoIn, s: Session = SesionDB):
     _obtener(s, Activo, activo_id)
-    s.add(ContratoAlquiler(activo_id=activo_id, **datos.model_dump()))
+    valores = datos.model_dump()
+    if valores["reduccion_pct"] is None:
+        valores["reduccion_pct"] = alquiler.reduccion_por_defecto(datos.fecha_inicio)
+    s.add(ContratoAlquiler(activo_id=activo_id, **valores))
     s.commit()
     return {"ok": True}
 
@@ -1337,3 +1378,319 @@ def probar_ajustes_ia(s: Session = SesionDB):
         raise HTTPException(400, str(e))
     return {"ok": True, "proveedor": ia.PROVEEDORES[cfg.proveedor]["nombre"], "modelo": cfg.modelo,
             "respuesta": respuesta[:200]}
+
+
+# --- Inmuebles: editar, borrar, gastos de escritura y vender o seguir alquilando ----------
+
+class ActivoPatch(BaseModel):
+    nombre: str | None = None
+    uso: str | None = None
+    fecha_compra: date | None = None
+    precio_compra: Decimal | None = None
+    gastos_compra: Decimal | None = None
+    valor_catastral: Decimal | None = None
+    valor_catastral_construccion: Decimal | None = None
+    porcentaje_propiedad: Decimal | None = None
+    notas: str | None = None
+
+
+@router.patch("/inmuebles/{activo_id}")
+def actualizar_inmueble(activo_id: int, datos: ActivoPatch, s: Session = SesionDB):
+    a = _obtener(s, Activo, activo_id)
+    for campo, valor in datos.model_dump(exclude_unset=True).items():
+        if valor is not None or campo == "fecha_compra":
+            setattr(a, campo, valor)
+    s.commit()
+    sync.guardar_instantanea(s)
+    return {"ok": True}
+
+
+@router.delete("/inmuebles/{activo_id}")
+def borrar_inmueble(activo_id: int, s: Session = SesionDB):
+    """Borra el bien con sus hipotecas, contratos, gastos y valoraciones. Sus pagos previstos se quedan, sin bien."""
+    a = _obtener(s, Activo, activo_id)
+    for modelo in (Deuda, GastoInmueble, Valoracion):
+        for x in s.scalars(select(modelo).where(modelo.activo_id == a.id)):
+            s.delete(x)
+    for c in s.scalars(select(ContratoAlquiler).where(ContratoAlquiler.activo_id == a.id)):
+        for cambio in c.cambios_renta:
+            s.delete(cambio)
+        s.delete(c)
+    for p in s.scalars(select(PagoPrevisto).where(PagoPrevisto.activo_id == a.id)):
+        p.activo_id = None
+    s.flush()
+    s.delete(a)
+    s.commit()
+    sync.guardar_instantanea(s)
+    return {"ok": True}
+
+
+@router.delete("/valoraciones/{valoracion_id}")
+def borrar_valoracion(valoracion_id: int, s: Session = SesionDB):
+    s.delete(_obtener(s, Valoracion, valoracion_id))
+    s.commit()
+    return {"ok": True}
+
+
+@router.delete("/gastos-inmueble/{gasto_id}")
+def borrar_gasto_inmueble(gasto_id: int, s: Session = SesionDB):
+    s.delete(_obtener(s, GastoInmueble, gasto_id))
+    s.commit()
+    return {"ok": True}
+
+
+class ContratoPatch(BaseModel):
+    inquilino: str | None = None
+    fecha_fin: date | None = None
+    renta_mensual: Decimal | None = None
+    reduccion_pct: Decimal | None = None
+
+
+@router.patch("/contratos/{contrato_id}")
+def actualizar_contrato(contrato_id: int, datos: ContratoPatch, s: Session = SesionDB):
+    c = _obtener(s, ContratoAlquiler, contrato_id)
+    for campo, valor in datos.model_dump(exclude_unset=True).items():
+        if valor is not None or campo == "fecha_fin":
+            setattr(c, campo, valor)
+    s.commit()
+    return {"ok": True}
+
+
+@router.delete("/contratos/{contrato_id}")
+def borrar_contrato(contrato_id: int, s: Session = SesionDB):
+    c = _obtener(s, ContratoAlquiler, contrato_id)
+    for cambio in c.cambios_renta:
+        s.delete(cambio)
+    s.delete(c)
+    s.commit()
+    return {"ok": True}
+
+
+AJD_MURCIA_PCT = Decimal("1.5")  # actos jurídicos documentados en la compra de obra nueva (Región de Murcia)
+NOTARIA_REGISTRO = Decimal("1200")  # notaría, registro y gestoría, aproximado
+
+
+class EscrituraIn(BaseModel):
+    fecha: date
+    precio: Decimal | None = None  # sin IVA; vacío: el precio de compra del bien
+
+
+@router.post("/inmuebles/{activo_id}/gastos-escritura")
+def gastos_escritura(activo_id: int, datos: EscrituraIn, s: Session = SesionDB):
+    """Añade como pago previsto los gastos de la escritura de la casa nueva: AJD más notaría y registro."""
+    a = _obtener(s, Activo, activo_id)
+    precio = datos.precio or a.precio_compra
+    if not precio:
+        raise HTTPException(400, "Pon el precio de la vivienda (sin IVA)")
+    importe = (precio * AJD_MURCIA_PCT / 100 + NOTARIA_REGISTRO).quantize(Decimal("1"))
+    s.add(PagoPrevisto(concepto=f"Escritura {a.nombre}: AJD 1,5 % y notaría (estimado)"[:160], fecha=datos.fecha,
+                       importe=importe, activo_id=a.id))
+    s.commit()
+    return {"ok": True, "importe": n(importe)}
+
+
+@router.get("/inmuebles/{activo_id}/vender")
+def vender_o_alquilar(activo_id: int, precio: float | None = None, gastos_venta_pct: float = 3.0,
+                      s: Session = SesionDB):
+    """Compara vender el piso (lo que te quedaría en mano tras impuestos e hipoteca) con seguir alquilándolo."""
+    from finanzas import prevision
+    a = _obtener(s, Activo, activo_id)
+    hoy = date.today()
+    valor, detalle = patrimonio.valor_activo(a, hoy)
+    venta = Decimal(str(precio)) if precio else valor
+    gastos_venta = (venta * Decimal(str(gastos_venta_pct)) / 100).quantize(Decimal("0.01"))
+    contratos = s.scalars(select(ContratoAlquiler).where(ContratoAlquiler.activo_id == a.id)).all()
+    amortizado = alquiler.amortizacion_acumulada(a, contratos, hoy)
+    adquisicion = (a.precio_compra + a.gastos_compra) * a.porcentaje_propiedad / 100 - amortizado
+    ganancia = venta - gastos_venta - adquisicion
+    irpf = Decimal(str(round(prevision.escala_ahorro(float(max(ganancia, CERO))), 2)))
+    deudas = s.scalars(select(Deuda).where(Deuda.activo_id == a.id)).all()
+    hipoteca = sum((saldo_pendiente(d, hoy) for d in deudas), CERO)
+    en_mano = venta - gastos_venta - irpf - hipoteca
+    gastos = s.scalars(select(GastoInmueble).where(GastoInmueble.activo_id == a.id)).all()
+    rent = _rentabilidad(a, contratos, gastos, deudas, valor, hoy)
+    prev = prevision.calcular(s)
+    renta_actual = next((r for r in prev["anios"] if r["anio"] == hoy.year), None)
+    marginal = (renta_actual or {}).get("tipo_marginal", 45.0) / 100
+    rend = alquiler.calcular_rendimiento(a, contratos, gastos, hoy.year).rendimiento_reducido if contratos else CERO
+    flujo = Decimal(str(rent["flujo_caja_anual"])) if rent else CERO
+    flujo_tras_irpf = flujo - rend * Decimal(str(marginal))
+    return {
+        "precio_venta": n(venta), "valor_detalle": "el precio que has puesto" if precio else detalle,
+        "gastos_venta": n(gastos_venta), "amortizacion_acumulada": n(amortizado),
+        "valor_adquisicion": n(adquisicion), "ganancia": n(ganancia), "irpf_ganancia": n(irpf),
+        "hipoteca_pendiente": n(hipoteca), "en_mano": n(en_mano),
+        "alquiler_flujo_anual": n(flujo), "alquiler_irpf_anual": n((rend * Decimal(str(marginal))).quantize(Decimal("0.01"))),
+        "alquiler_flujo_tras_irpf": n(flujo_tras_irpf.quantize(Decimal("0.01"))),
+        "rentabilidad_sobre_en_mano": round(float(flujo_tras_irpf / en_mano * 100), 2) if en_mano > 0 else None,
+        "notas": ["Falta la plusvalía municipal, que depende del valor catastral del suelo y de los años.",
+                  "La ganancia tributa en la base del ahorro (19 % a 30 %); si compras tu vivienda habitual "
+                  "no hay exención por reinversión porque este piso no es tu vivienda."],
+    }
+
+
+# --- Autónomo: editar una factura ------------------------------------------------
+
+@router.put("/autonomo/facturas/{factura_id}")
+def actualizar_factura(factura_id: int, datos: FacturaIn, s: Session = SesionDB):
+    x = _obtener(s, Factura, factura_id)
+    nombre = datos.cliente.strip()
+    cli = s.scalar(select(Cliente).where(Cliente.nombre == nombre))
+    if cli is None:
+        cli = Cliente(nombre=nombre)
+        s.add(cli)
+        s.flush()
+    for campo, valor in datos.model_dump(exclude={"cliente"}).items():
+        setattr(x, campo, valor)
+    x.cliente_id = cli.id
+    s.commit()
+    return {"ok": True}
+
+
+# --- Hacienda: lo pendiente, la hucha, la cuota de autónomos y el ahorro fiscal -----------
+
+@router.get("/hacienda")
+def ver_hacienda(s: Session = SesionDB):
+    from finanzas import avisos, hacienda, prevision
+    prev = prevision.calcular(s)
+    pend = hacienda.pendiente(s, prev)
+    hoy = date.today()
+    renta = next((r for r in prev["anios"] if r["anio"] == hoy.year), None)
+    return {
+        "pendiente": pend, "hucha": hacienda.hucha(s, pend, prev), "cuota_autonomos": hacienda.revision_reta(s, prev),
+        "renta": {k: renta[k] for k in ("anio", "base", "base_liquidable", "base_ahorro", "imputacion_inmuebles",
+                                        "reduccion_pensiones", "cuota", "resultado", "tipo_medio", "tipo_marginal")}
+        if renta else None,
+        "supuestos": {k: prev["supuestos"].get(k) for k in ("aportacion_pensiones_anio", "aportacion_ppes_anio",
+                                                             "fraccionar_renta", "rentas_ahorro_anio",
+                                                             "imputacion_inmuebles_anio")},
+        "origen": {"rentas_ahorro_anio": prev["origen_rentas_ahorro_anio"],
+                   "imputacion_inmuebles_anio": prev["origen_imputacion_inmuebles_anio"],
+                   "valor_rentas_ahorro": prev["rentas_ahorro_anio"],
+                   "valor_imputacion": prev["imputacion_inmuebles_anio"]},
+        "plazos": [{"fecha": f(p["fecha"]), "titulo": p["titulo"], "detalle": p["detalle"]}
+                   for p in avisos.plazos(hoy, hoy + timedelta(days=365))],
+        "cuentas": [{"id": c.id, "nombre": c.nombre} for c in s.scalars(
+            select(Cuenta).where(Cuenta.activa, Cuenta.tipo.in_(["corriente", "ahorro"])).order_by(Cuenta.nombre))],
+    }
+
+
+class HuchaIn(BaseModel):
+    cuenta_id: int | None = None
+
+
+@router.put("/hacienda/hucha")
+def elegir_hucha(datos: HuchaIn, s: Session = SesionDB):
+    from finanzas import ajustes, hacienda
+    if datos.cuenta_id is not None:
+        _obtener(s, Cuenta, datos.cuenta_id)
+    ajustes.guardar(s, hacienda.CLAVE_HUCHA, str(datos.cuenta_id or ""))
+    return {"ok": True}
+
+
+class SupuestosRentaIn(BaseModel):
+    aportacion_pensiones_anio: float = 0
+    aportacion_ppes_anio: float = 0
+    fraccionar_renta: bool = False
+    rentas_ahorro_anio: float | None = None
+    imputacion_inmuebles_anio: float | None = None
+
+
+@router.put("/hacienda/supuestos")
+def guardar_supuestos_renta(datos: SupuestosRentaIn, s: Session = SesionDB):
+    """Lo de la renta que la app no ve en tus cuentas; se guarda con el resto de supuestos de la previsión."""
+    from finanzas import prevision
+    prevision.guardar(s, {**prevision.leer(s), **datos.model_dump()})
+    return {"ok": True}
+
+
+@router.get("/hacienda/ahorro")
+def simular_ahorro(pensiones: float = 0, ppes: float = 0, gastos: float = 0, s: Session = SesionDB):
+    """Cuánto baja la renta de este año aportando a pensiones o apuntando más gastos de la actividad."""
+    from finanzas import prevision
+    prev = prevision.calcular(s)
+    hoy = date.today()
+    r = next((a for a in prev["anios_todos"] if a["anio"] == hoy.year), None)
+    if r is None:
+        raise HTTPException(400, "Falta la previsión de este año")
+    cfg = prevision.resolver_clientes(s, prevision.leer(s))
+    e = r["entradas"]
+    base = {"pensiones": 0, "ppes": 0, "gastos_actividad": 0}
+    con = {"pensiones": max(pensiones, 0), "ppes": max(ppes, 0), "gastos_actividad": max(gastos, 0)}
+    args = (cfg, e["nomina"], e["facturado"], e["retenciones"], e["pagos_130"], e["alquiler"], e["imputacion_app"])
+    sin, simulada = prevision._renta(*args, extra=base), prevision._renta(*args, extra=con)
+    return {"anio": hoy.year, "cuota_sin": sin["cuota"], "cuota_con": simulada["cuota"],
+            "ahorro": round(sin["cuota"] - simulada["cuota"], 2), "tipo_marginal": sin["tipo_marginal"],
+            "reduccion_aplicada": simulada["reduccion_pensiones"],
+            "limites": {"pensiones": prevision.LIMITE_PENSIONES, "ppes": prevision.LIMITE_PPES,
+                        "pct_rendimientos": prevision.LIMITE_PENSIONES_PCT * 100}}
+
+
+# --- Copia de seguridad y calendario ---------------------------------------------
+
+@router.get("/exportar")
+def exportar(pdfs: bool = False, s: Session = SesionDB):
+    """Todos tus datos en JSON. Las claves de API guardadas no salen; los PDF de Hacienda, solo si los pides."""
+    import base64
+    from finanzas import ajustes as aj, avisos
+    from finanzas.models import Ajuste
+    tablas = {}
+    for tabla in db.Base.metadata.sorted_tables:
+        filas = []
+        for fila in s.execute(tabla.select()).mappings():
+            d = {}
+            for k, v in fila.items():
+                if isinstance(v, bytes):
+                    v = base64.b64encode(v).decode() if pdfs else None
+                elif isinstance(v, Decimal):
+                    v = float(v)
+                elif hasattr(v, "isoformat"):
+                    v = v.isoformat()
+                d[k] = v
+            if tabla.name == Ajuste.__tablename__ and str(d.get("valor", "")).startswith(aj.PREFIJO):
+                continue  # secretos cifrados
+            filas.append(d)
+        tablas[tabla.name] = filas
+    aj.guardar(s, avisos.CLAVE_ULTIMA_COPIA, date.today().isoformat())
+    nombre = f"finanzas-{date.today().isoformat()}.json"
+    return Response(json.dumps({"version": 1, "fecha": date.today().isoformat(), "tablas": tablas}, ensure_ascii=False),
+                    media_type="application/json", headers={"Content-Disposition": f'attachment; filename="{nombre}"'})
+
+
+@router.get("/exportar/movimientos.xlsx")
+def exportar_movimientos(s: Session = SesionDB):
+    import io
+    from openpyxl import Workbook
+    libro = Workbook()
+    hoja = libro.active
+    hoja.title = "Movimientos"
+    hoja.append(["Fecha", "Cuenta", "Concepto", "Importe", "Tu parte", "Categoría", "Saldo"])
+    filas = s.execute(select(Movimiento.fecha, Cuenta.nombre, Movimiento.concepto, Movimiento.importe,
+                             Movimiento.importe * PARTE, Categoria.nombre, Movimiento.saldo)
+                      .join(Cuenta, Movimiento.cuenta_id == Cuenta.id)
+                      .join(Categoria, Movimiento.categoria_id == Categoria.id, isouter=True)
+                      .order_by(Movimiento.fecha.desc(), Movimiento.id.desc()))
+    for fecha, cuenta, concepto, importe, tuyo, cat, saldo in filas:
+        hoja.append([fecha, cuenta, concepto, float(importe), round(float(tuyo), 2), cat or "",
+                     float(saldo) if saldo is not None else None])
+    for col, ancho in zip("ABCDEFG", (12, 22, 60, 12, 12, 22, 12)):
+        hoja.column_dimensions[col].width = ancho
+    salida = io.BytesIO()
+    libro.save(salida)
+    return Response(salida.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="movimientos-{date.today().isoformat()}.xlsx"'})
+
+
+@router.post("/exportar/hecha")
+def copia_hecha(s: Session = SesionDB):
+    """El frontal avisa de que ha guardado la copia en tu Google Drive."""
+    from finanzas import ajustes as aj, avisos
+    aj.guardar(s, avisos.CLAVE_ULTIMA_COPIA, date.today().isoformat())
+    return {"ok": True}
+
+
+@router.get("/calendario/enlace")
+def enlace_calendario():
+    """Dirección secreta para suscribirte desde Google Calendar a los plazos de Hacienda."""
+    from finanzas import calendario
+    return {"ruta": f"/calendario/{calendario.token()}.ics"}

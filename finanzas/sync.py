@@ -44,7 +44,15 @@ def sincronizar_indexa(session: Session, cliente=None) -> dict:
 
 def guardar_instantanea(session: Session, fecha: date | None = None) -> Instantanea:
     fecha = fecha or date.today()
-    p = patrimonio.calcular(session, fecha)
+    pendiente = None
+    if fecha == date.today():  # lo que debes a Hacienda también es deuda (como en Inicio)
+        try:
+            from finanzas import hacienda
+            pendiente = hacienda.pendiente(session)
+        except Exception:
+            session.rollback()
+            log.exception("No se ha podido estimar lo pendiente con Hacienda")
+    p = patrimonio.calcular(session, fecha, pendiente)
     grupos = p.por_grupo()
     foto = session.scalar(select(Instantanea).where(Instantanea.fecha == fecha)) or Instantanea(fecha=fecha)
     foto.liquidez = grupos.get("Liquidez", 0)

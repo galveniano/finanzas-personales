@@ -50,9 +50,23 @@ def _secreto() -> str:
     return config.SESSION_SECRET
 
 
+CLAVE_VERSION = "sesion_version"
+
+
+def _version() -> str:
+    """Al cerrar sesión en todos los dispositivos cambia la versión y las cookies anteriores dejan de valer."""
+    from finanzas import ajustes, db
+    if db.engine is None:
+        return ""
+    db.asegurar_tablas()
+    with db.SessionLocal() as s:
+        return ajustes.leer(s, CLAVE_VERSION, "")
+
+
 def crear_sesion(email: str) -> str:
     ahora = int(time.time())
-    return jwt.encode({"sub": email, "iat": ahora, "exp": ahora + DURACION}, _secreto(), algorithm="HS256")
+    return jwt.encode({"sub": email, "iat": ahora, "exp": ahora + DURACION, "v": _version()}, _secreto(),
+                      algorithm="HS256")
 
 
 def email_de_sesion(request: Request) -> str | None:
@@ -60,9 +74,12 @@ def email_de_sesion(request: Request) -> str | None:
     if not token:
         return None
     try:
-        email = jwt.decode(token, _secreto(), algorithms=["HS256"])["sub"]
+        datos = jwt.decode(token, _secreto(), algorithms=["HS256"])
     except jwt.PyJWTError:
         return None
+    if datos.get("v", "") != _version():
+        return None
+    email = datos["sub"]
     # Si quitas un email de EMAILS_PERMITIDOS, su sesión deja de valer
     return email if email in config.EMAILS_PERMITIDOS else None
 
@@ -101,5 +118,17 @@ def entrar(datos: CredencialIn, response: Response):
 
 @router.post("/salir")
 def salir(response: Response):
+    response.delete_cookie(COOKIE, path="/")
+    return {"ok": True}
+
+
+@router.post("/salir-en-todos")
+def salir_en_todos(request: Request, response: Response):
+    """Invalida todas las sesiones abiertas (otros dispositivos, o una cookie que alguien haya copiado)."""
+    import secrets
+    from finanzas import ajustes, db
+    requiere_sesion(request)
+    with db.SessionLocal() as s:
+        ajustes.guardar(s, CLAVE_VERSION, secrets.token_hex(8))
     response.delete_cookie(COOKIE, path="/")
     return {"ok": True}

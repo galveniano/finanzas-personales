@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import exc as sa_exc
 
-from finanzas import auth, config, db, sync
+from finanzas import auth, calendario, config, db, sync
 from finanzas.api import COOKIE_ESTADO_BANCO, router
 from finanzas.categorizar import sembrar_categorias
 from finanzas.integrations import enablebanking
@@ -40,7 +40,20 @@ async def lifespan(_app):
 
 app = FastAPI(title="Finanzas personales", lifespan=lifespan)
 app.include_router(auth.router)
+app.include_router(calendario.router)
 app.include_router(router)
+
+
+@app.middleware("http")
+async def cabeceras_seguridad(request: Request, call_next):
+    respuesta = await call_next(request)
+    respuesta.headers.setdefault("X-Content-Type-Options", "nosniff")
+    respuesta.headers.setdefault("X-Frame-Options", "DENY")
+    respuesta.headers.setdefault("Referrer-Policy", "same-origin")
+    respuesta.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    if config.EN_VERCEL:
+        respuesta.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
+    return respuesta
 
 
 @app.get("/api/cron/sync")
