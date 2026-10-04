@@ -332,7 +332,10 @@ def _autonomo_por_anio(s: Session, facturas, gastos, previsto: dict) -> list[dic
     El año en curso, si hay previsión, se completa con lo previsto."""
     from finanzas import prevision
     cfg = prevision.resolver_clientes(s, prevision.leer(s))
-    anios = sorted({x.fecha.year for x in facturas} | {int(k[:4]) for k in previsto})
+    rentas = {d.ejercicio: _casillas(d) for d in s.scalars(select(Declaracion).where(Declaracion.modelo == "100")
+                                                           .order_by(Declaracion.id))}
+    anios = sorted({x.fecha.year for x in facturas} | {int(k[:4]) for k in previsto}
+                   | {a for a, c in rentas.items() if c.get("ingresos_actividad")})
     filas = []
     for anio in anios:
         facturado = float(sum((x.base for x in facturas if x.fecha.year == anio), CERO))
@@ -342,8 +345,15 @@ def _autonomo_por_anio(s: Session, facturas, gastos, previsto: dict) -> list[dic
         if es_previsto:
             facturado = max(facturado, sum(v["base"] for v in prev))
             gasto = max(gasto, float(cfg.get("gastos_autonomo_mes", 0)) * 12)
+        renta = rentas.get(anio, {})
+        if not es_previsto and renta.get("ingresos_actividad"):
+            # Año con la renta presentada: lo declarado manda
+            facturado, gasto = renta["ingresos_actividad"], renta.get("gastos_actividad", gasto)
         rendimiento = max(facturado - gasto, 0.0)
-        irpf = prevision.irpf_de_la_actividad(cfg, rendimiento)
+        if renta.get("cuota") and renta.get("base_general"):
+            irpf = rendimiento * renta["cuota"] / renta["base_general"]  # tipo medio real de ese año
+        else:
+            irpf = prevision.irpf_de_la_actividad(cfg, rendimiento)
         filas.append({"anio": anio, "facturado": round(facturado, 2), "gastos": round(gasto, 2),
                       "irpf": round(irpf, 2), "neto": round(facturado - gasto - irpf, 2), "previsto": es_previsto})
     return filas
@@ -743,6 +753,14 @@ class SupuestosPrevision(BaseModel):
     gastos_autonomo_mes: float = 0
     gasto_habitual_mes: float | None = None
     meses_sin_facturar: list[int] = []
+    # Días que planificas trabajar para un cliente en un mes concreto: {"Cliente": {"2026-11": 18}}
+    dias_planificados: dict[str, dict[str, float]] | None = None
+
+
+class DiasPlanificados(BaseModel):
+    cliente: str
+    mes: str  # AAAA-MM
+    dias: float | None = None  # vacío: quitar lo planificado
 
 
 @router.get("/gastos/recientes")
@@ -756,7 +774,29 @@ def guardar_supuestos(datos: SupuestosPrevision, s: Session = SesionDB):
     from finanzas import prevision
     if datos.nomina and datos.nomina.pagas not in (12, 14):
         raise HTTPException(400, "Las pagas tienen que ser 12 o 14")
-    prevision.guardar(s, datos.model_dump())
+    nuevos = datos.model_dump()
+    if nuevos["dias_planificados"] is None:  # el formulario de supuestos no los manda: se conservan
+        nuevos["dias_planificados"] = prevision.leer(s).get("dias_planificados") or {}
+    prevision.guardar(s, nuevos)
+    return {"ok": True}
+
+
+@router.put("/prevision/dias")
+def planificar_dias(datos: DiasPlanificados, s: Session = SesionDB):
+    """Guarda los días que vas a trabajar para un cliente en un mes; la previsión los usa en vez de la media."""
+    from finanzas import prevision
+    try:
+        date.fromisoformat(f"{datos.mes}-01")
+    except ValueError:
+        raise HTTPException(400, "El mes tiene que ser AAAA-MM")
+    cfg = prevision.leer(s)
+    planes = cfg.get("dias_planificados") or {}
+    del_cliente = planes.setdefault(datos.cliente, {})
+    if datos.dias is None:
+        del_cliente.pop(datos.mes, None)
+    else:
+        del_cliente[datos.mes] = max(0.0, min(datos.dias, 31.0))
+    prevision.guardar(s, {**cfg, "dias_planificados": {k: v for k, v in planes.items() if v}})
     return {"ok": True}
 
 
@@ -782,7 +822,11 @@ class ObjetivoIn(BaseModel):
 
 
 class ObjetivoPatch(BaseModel):
-    ahorrado: Decimal
+    nombre: str | None = None
+    tipo: str | None = None
+    fecha_objetivo: date | None = None
+    importe_objetivo: Decimal | None = None
+    ahorrado: Decimal | None = None
 
 
 class PagoIn(BaseModel):
@@ -813,10 +857,14 @@ def ver_planificacion(s: Session = SesionDB):
     inversiones = {i.id: i.nombre for i in s.scalars(select(InversionPrivada))}
     nombres_obj = {o.id: o.nombre for o in objetivos}
     pendiente_12m = sum((p.importe for p in pagos if not p.pagado and p.fecha <= hoy + timedelta(days=365)), CERO)
+    # Lo que pagará una hipoteca prevista no sale de tu bolsillo
+    financiado = sum((d.capital_inicial for d in s.scalars(select(Deuda).where(
+        Deuda.fecha_inicio > hoy, Deuda.fecha_inicio <= hoy + timedelta(days=365)))), CERO)
+    pendiente_12m = max(pendiente_12m - financiado, CERO)
     liquidez = sum((c.saldo * c.parte for c in s.scalars(select(Cuenta).where(Cuenta.activa, Cuenta.tipo.in_(
         ["corriente", "ahorro"])))), CERO)
     return {
-        "liquidez": n(liquidez), "pendiente_12_meses": n(pendiente_12m),
+        "liquidez": n(liquidez), "pendiente_12_meses": n(pendiente_12m), "financiado_hipoteca": n(financiado),
         "objetivos": [{
             "id": o.id, "nombre": o.nombre, "tipo": o.tipo, "fecha_objetivo": f(o.fecha_objetivo),
             "importe_objetivo": n(o.importe_objetivo), "ahorrado": n(o.ahorrado),
@@ -840,7 +888,20 @@ def crear_objetivo(datos: ObjetivoIn, s: Session = SesionDB):
 
 @router.patch("/objetivos/{objetivo_id}")
 def actualizar_objetivo(objetivo_id: int, datos: ObjetivoPatch, s: Session = SesionDB):
-    _obtener(s, Objetivo, objetivo_id).ahorrado = datos.ahorrado
+    o = _obtener(s, Objetivo, objetivo_id)
+    for campo, valor in datos.model_dump(exclude_unset=True).items():
+        if valor is not None or campo == "fecha_objetivo":
+            setattr(o, campo, valor)
+    s.commit()
+    return {"ok": True}
+
+
+@router.delete("/objetivos/{objetivo_id}")
+def borrar_objetivo(objetivo_id: int, s: Session = SesionDB):
+    o = _obtener(s, Objetivo, objetivo_id)
+    for p in s.scalars(select(PagoPrevisto).where(PagoPrevisto.objetivo_id == objetivo_id)):
+        p.objetivo_id = None  # los pagos se quedan, sin objetivo
+    s.delete(o)
     s.commit()
     return {"ok": True}
 

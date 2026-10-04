@@ -4,13 +4,15 @@ import { Plus } from 'lucide-react'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { api } from '../lib/api'
 import { eur, eurK, fecha, hoyISO } from '../lib/format'
-import type { Nominas as Datos } from '../lib/tipos'
+import type { Nominas as Datos, Prevision } from '../lib/tipos'
 import CalculadoraSueldo from '../components/CalculadoraSueldo'
 import { Boton, Cabecera, Campo, Cargando, Dato, Dialogo, ErrorCarga, Formulario, Importe, Tabla, Tarjeta, Vacio, num, useAccion } from '../components/ui'
 
 export default function Nominas() {
   const [abierto, setAbierto] = useState(false)
   const { data: d, isLoading, error } = useQuery({ queryKey: ['nominas'], queryFn: () => api.get<Datos>('/nominas') })
+  const { data: prev } = useQuery({ queryKey: ['prevision'], queryFn: () => api.get<Prevision>('/prevision') })
+  const brutoSupuesto = prev?.supuestos.nomina ? prev.supuestos.nomina.bruto_anual * (1 + (prev.supuestos.nomina.variable_pct ?? 0) / 100) : null
   const crear = useAccion((v: Record<string, string>) => api.post('/nominas', {
     empresa: v.empresa, fecha: v.fecha, bruto: num(v.bruto), retencion_irpf: num(v.retencion_irpf),
     seguridad_social: num(v.seguridad_social), neto: num(v.neto),
@@ -60,7 +62,7 @@ export default function Nominas() {
         </Tarjeta>
       )}
 
-      <CalculadoraSueldo brutoInicial={d.bruto_12_meses} />
+      <CalculadoraSueldo key={brutoSupuesto ?? d.bruto_12_meses ?? 0} brutoInicial={d.bruto_12_meses || brutoSupuesto} />
 
       {d.banco.length > 0 && (
         <Tarjeta className="mt-4" titulo="Cobros de nómina en el banco">

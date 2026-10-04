@@ -87,7 +87,10 @@ def test_bruto_y_neto_por_fuente():
         ing = r["ingresos"]
         fuentes = {x["fuente"]: x for x in ing["fuentes"]}
         assert fuentes["Nómina"]["bruto_anual"] == 42000  # 40.000 + 5 % de variable
-        assert fuentes["Autónomo"]["gastos_anual"] == 3600  # 300 al mes
+        # Cada cliente sale aparte, con los gastos de autónomo repartidos (300 al mes en total)
+        clientes = [x for x in ing["fuentes"] if x["cliente"]]
+        assert {x["fuente"] for x in clientes} >= {"Cliente A", "Cliente B"}
+        assert abs(sum(x["gastos_anual"] for x in clientes) - 3600) < 0.05
         # El IRPF repartido entre fuentes suma la cuota de la renta
         assert abs(sum(x["irpf_anual"] for x in ing["fuentes"]) - r["cuota"]) < 0.05
         assert ing["total"]["neto_mes"] < ing["total"]["bruto_mes"]
@@ -108,3 +111,32 @@ def test_cuota_de_autonomos_del_banco():
         assert d["gastos_autonomo_mes"] == 310 and "banco" in d["origen_gastos_autonomo"]
         c.put("/api/prevision/supuestos", json=SUPUESTOS)
         assert c.get("/api/prevision").json()["gastos_autonomo_mes"] == 300  # lo puesto a mano manda
+
+
+def test_nominas_subidas_mandan_en_su_mes():
+    from datetime import date
+    with TestClient(app) as c:
+        c.put("/api/prevision/supuestos", json=SUPUESTOS)
+        antes = c.get("/api/prevision").json()["anios"][0]
+        anio = antes["anio"]
+        r = c.post("/api/nominas", json={"empresa": "Empresa ejemplo", "fecha": f"{anio}-01-28", "bruto": 3000,
+                                          "retencion_irpf": 2000, "seguridad_social": 190, "neto": 810})
+        assert r.status_code == 200
+        despues = c.get("/api/prevision").json()["anios"][0]
+        assert despues["retenciones_nomina"] > antes["retenciones_nomina"] + 1000  # 2.000 reales frente a ~800 previstos
+        nid = next(x["id"] for x in c.get("/api/nominas").json()["nominas"] if x["fecha"] == f"{anio}-01-28")
+        c.delete(f"/api/nominas/{nid}")
+
+
+def test_dias_planificados_mandan_en_ese_mes():
+    with TestClient(app) as c:
+        c.put("/api/prevision/supuestos", json=SUPUESTOS)
+        mes = next(m["mes"] for m in c.get("/api/prevision").json()["meses"] if not m["mes"].endswith("-08"))
+        assert c.put("/api/prevision/dias", json={"cliente": "Cliente A", "mes": mes, "dias": 10}).status_code == 200
+        c.put("/api/prevision/supuestos", json=SUPUESTOS)  # guardar supuestos no borra lo planificado
+        fila = next(m for m in c.get("/api/prevision").json()["meses"] if m["mes"] == mes)
+        assert fila["facturado"] == 30 * 8 * 10 + 4000  # Cliente A 10 días, Cliente B sus 20
+        c.put("/api/prevision/dias", json={"cliente": "Cliente A", "mes": mes, "dias": None})
+        fila = next(m for m in c.get("/api/prevision").json()["meses"] if m["mes"] == mes)
+        assert fila["facturado"] == 8800  # vuelve a los 20 días
+        assert c.put("/api/prevision/dias", json={"cliente": "Cliente A", "mes": "nov-2026", "dias": 3}).status_code == 400

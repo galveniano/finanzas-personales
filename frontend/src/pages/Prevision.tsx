@@ -157,7 +157,7 @@ function LoQueGanas({ anios, cuota, origenCuota }: { anios: RentaPrevista[]; cuo
         <tbody>
           {r.ingresos.fuentes.map((f) => (
             <tr key={f.fuente}>
-              <td>{f.fuente}<div className="text-xs text-muted">{GASTOS_FUENTE[f.fuente]}</div></td>
+              <td>{f.fuente}<div className="text-xs text-muted">{f.cliente ? 'Autónomo · su parte de la cuota y los gastos' : GASTOS_FUENTE[f.fuente]}</div></td>
               <td className="num"><Importe valor={f.bruto_mes} /></td>
               <td className="num"><Importe valor={-mes(f.gastos_anual)} /></td>
               <td className="num"><Importe valor={-mes(f.irpf_anual)} /></td>
@@ -181,8 +181,8 @@ function LoQueGanas({ anios, cuota, origenCuota }: { anios: RentaPrevista[]; cuo
         </tbody>
       </Tabla>
       <p className="mt-3 text-xs text-muted">
-        Media del año (las pagas extra y el variable se reparten en 12). El IRPF es el de la renta completa, no solo lo retenido:
-        la nómina paga el de sus tramos, el autónomo lo que añade encima y el alquiler el resto.
+        Media del año (las pagas extra y el variable se reparten en 12). El IRPF es el de la renta completa, no solo lo retenido,
+        repartido al tipo medio entre lo que aporta cada fuente.
         Gastos de autónomo: {eur(cuota)} al mes ({origenCuota}).
       </p>
     </Tarjeta>

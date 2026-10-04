@@ -17,7 +17,7 @@ from finanzas import ajustes
 from finanzas.fiscal import alquiler, nomina as calc_nomina
 from finanzas.hipoteca import cuadro_amortizacion, intereses_anio
 from finanzas.models import (Activo, Categoria, Cliente, ContratoAlquiler, Cuenta, Declaracion, Deuda, Factura,
-                             GastoInmueble, Movimiento, PagoPrevisto)
+                             GastoInmueble, Movimiento, Nomina, PagoPrevisto)
 
 CLAVE = "prevision"
 SS_TRABAJADOR_PCT = sum(calc_nomina.SS_TRABAJADOR.values())
@@ -25,7 +25,7 @@ GASTOS_DIFICIL_JUSTIFICACION = (0.05, 2000.0)  # estimación directa simplificad
 LIMITE_REDUCCION_TRABAJO = 6500.0  # con más rentas que no sean del trabajo no hay reducción
 
 VACIO = {"nomina": None, "clientes": [], "gastos_autonomo_mes": 0, "gasto_habitual_mes": None,
-         "meses_sin_facturar": []}
+         "meses_sin_facturar": [], "dias_planificados": {}}
 
 
 def leer(s: Session) -> dict:
@@ -79,17 +79,26 @@ def _nomina_anual(cfg: dict | None) -> dict:
     return {"meses": meses, "bruto": bruto + variable, "ss": c.ss_anual + ss_var, "irpf": c.irpf_anual + irpf_var}
 
 
+def _por_cliente(cfg: dict, d: date) -> list[tuple[str, float, float, float]]:
+    """Nombre, base, IVA y retención previstos de cada cliente en un mes. Los días planificados para ese
+    mes mandan; si no, los meses sin facturar dan 0 y el resto usa los días al mes del cliente."""
+    clave, planes = d.strftime("%Y-%m"), cfg.get("dias_planificados") or {}
+    filas = []
+    for c in cfg.get("clientes", []):
+        plan = (planes.get(c.get("nombre")) or {}).get(clave)
+        if plan is None and d.month in cfg.get("meses_sin_facturar", []):
+            dias = 0.0
+        else:
+            dias = float(plan if plan is not None else c.get("dias_mes", 20))
+        b = float(c.get("tarifa_hora", 0)) * float(c.get("horas_dia", 8)) * dias
+        filas.append((c.get("nombre", ""), b, b * float(c.get("iva", 0)) / 100, b * float(c.get("retencion", 0)) / 100))
+    return filas
+
+
 def _facturacion(cfg: dict, d: date) -> tuple[float, float, float]:
     """Base, IVA y retención de lo facturado en un mes."""
-    if d.month in cfg.get("meses_sin_facturar", []):
-        return 0.0, 0.0, 0.0
-    base = iva = ret = 0.0
-    for c in cfg.get("clientes", []):
-        b = float(c.get("tarifa_hora", 0)) * float(c.get("horas_dia", 8)) * float(c.get("dias_mes", 20))
-        base += b
-        iva += b * float(c.get("iva", 0)) / 100
-        ret += b * float(c.get("retencion", 0)) / 100
-    return round(base, 2), round(iva, 2), round(ret, 2)
+    filas = _por_cliente(cfg, d)
+    return tuple(round(sum(f[i] for f in filas), 2) for i in (1, 2, 3))
 
 
 def _exento_130(cfg: dict) -> bool:
@@ -100,19 +109,24 @@ def _exento_130(cfg: dict) -> bool:
     return bool(total) and sum(b for b, r in bases if r > 0) / total >= 0.7
 
 
+def _palabra(nombre: str) -> str:
+    return nombre.split()[0].lower() if nombre and nombre.split() else ""
+
+
 def _dias_ultimo_mes(s: Session, c: dict) -> tuple[float, str] | None:
-    """Días trabajados el último mes facturado a ese cliente: lo facturado ese mes / (tarifa × horas)."""
+    """Días trabajados al mes para ese cliente: media de sus últimos 3 meses facturados (lo facturado / tarifa × horas)."""
     precio_dia = float(c.get("tarifa_hora", 0)) * float(c.get("horas_dia", 8))
-    palabra = (c.get("nombre") or "").split()[0].lower() if c.get("nombre") else ""
+    palabra = _palabra(c.get("nombre") or "")
     if not precio_dia or not palabra:
         return None
     facturas = s.scalars(select(Factura).join(Cliente).where(func.lower(Cliente.nombre).contains(palabra))
                          .order_by(Factura.fecha.desc())).all()
     if not facturas:
         return None
-    ultimo = facturas[0].fecha.strftime("%Y-%m")
-    base = sum(float(f.base) for f in facturas if f.fecha.strftime("%Y-%m") == ultimo)
-    return round(base / precio_dia, 1), ultimo
+    meses = sorted({f.fecha.strftime("%Y-%m") for f in facturas}, reverse=True)[:3]
+    base = sum(float(f.base) for f in facturas if f.fecha.strftime("%Y-%m") in meses)
+    texto = f"facturado en {meses[0]}" if len(meses) == 1 else f"media de {meses[-1]} a {meses[0]}"
+    return round(base / precio_dia / len(meses), 1), texto
 
 
 PATRON_CUOTA_AUTONOMO = ("tgss", "seguridad social", "cotizacion autonomo", "cuota autonomo")
@@ -139,11 +153,11 @@ def resolver_clientes(s: Session, cfg: dict) -> dict:
         c = dict(c)
         if c.get("dias_mes") in (None, ""):
             ultimo = _dias_ultimo_mes(s, c)
-            c["dias_mes"], c["origen_dias"] = (ultimo[0], f"facturado en {ultimo[1]}") if ultimo else (20, "por defecto")
+            c["dias_mes"], c["origen_dias"] = (ultimo[0], ultimo[1]) if ultimo else (20, "por defecto")
         else:
             c["origen_dias"] = "a mano"
         clientes.append(c)
-    resuelto = {**cfg, "clientes": clientes, "origen_gastos_autonomo": "a mano"}
+    resuelto = {**cfg, "clientes": clientes, "origen_gastos_autonomo": "a mano", "factor_renta": factor_renta(s)}
     if not float(cfg.get("gastos_autonomo_mes") or 0):
         cuota, origen = cuota_autonomo_banco(s), "cuota de autónomos del banco"
         if not cuota and (ultima := ultima_renta(s)) and ultima["casillas"].get("gastos_actividad"):
@@ -152,6 +166,17 @@ def resolver_clientes(s: Session, cfg: dict) -> dict:
         resuelto["gastos_autonomo_mes"] = cuota or 0
         resuelto["origen_gastos_autonomo"] = origen if cuota else "sin datos"
     return resuelto
+
+
+def factor_renta(s: Session) -> float:
+    """Ajuste de la escala con la última renta presentada: su cuota real entre la que calcula la app con
+    la misma base (recoge la escala autonómica exacta y las deducciones). Entre 0,85 y 1,1."""
+    ultima = ultima_renta(s)
+    c = (ultima or {}).get("casillas", {})
+    if not c.get("base_general") or not c.get("cuota"):
+        return 1.0
+    calculada = _escala(c["base_general"]) - _escala(calc_nomina.MINIMO_PERSONAL)
+    return round(min(max(c["cuota"] / calculada, 0.85), 1.1), 4) if calculada > 0 else 1.0
 
 
 def ultima_renta(s: Session) -> dict | None:
@@ -165,6 +190,25 @@ def ultima_renta(s: Session) -> dict | None:
     except ValueError:
         casillas = {}
     return {"anio": d.ejercicio, "resultado": float(d.importe), "casillas": casillas}
+
+
+def _nomina_con_reales(s: Session, anio: int, prevista: dict) -> dict:
+    """Las nóminas que hayas subido mandan en sus meses (bruto, Seguridad Social, IRPF retenido y neto);
+    el resto del año sigue la previsión."""
+    reales = [x for x in s.scalars(select(Nomina)).all() if x.fecha.year == anio]
+    if not reales:
+        return prevista
+    meses = dict(prevista["meses"])
+    cubiertos = {x.fecha.month for x in reales}
+    neto_previsto = sum(prevista["meses"].values()) or 1.0
+    resto = sum(v for m, v in prevista["meses"].items() if m not in cubiertos) / neto_previsto
+    for m in cubiertos:
+        meses[m] = sum(float(x.neto) for x in reales if x.fecha.month == m)
+    return {"meses": meses,
+            "bruto": sum(float(x.bruto) for x in reales) + prevista["bruto"] * resto,
+            "ss": sum(float(x.seguridad_social) for x in reales) + prevista["ss"] * resto,
+            "irpf": sum(float(x.retencion_irpf) for x in reales) + prevista["irpf"] * resto,
+            "reales": len(cubiertos)}
 
 
 def _escala(base: float) -> float:
@@ -212,7 +256,7 @@ def _renta(cfg: dict, nom: dict, facturado: float, retenciones: float, pagos_130
     if actividad + alquiler_tributa <= LIMITE_REDUCCION_TRABAJO:
         trabajo = max(trabajo - calc_nomina._reduccion_trabajo(trabajo), 0.0)
     base = trabajo + actividad + alquiler_tributa
-    cuota = max(_escala(base) - _escala(calc_nomina.MINIMO_PERSONAL), 0.0)
+    cuota = max(_escala(base) - _escala(calc_nomina.MINIMO_PERSONAL), 0.0) * float(cfg.get("factor_renta", 1.0))
     pagado = nom["irpf"] + retenciones + pagos_130
     return {"rendimiento_trabajo": round(trabajo, 2), "rendimiento_actividad": round(actividad, 2),
             "rendimiento_alquiler": round(alquiler_tributa, 2), "base": round(base, 2), "cuota": round(cuota, 2),
@@ -222,12 +266,15 @@ def _renta(cfg: dict, nom: dict, facturado: float, retenciones: float, pagos_130
 
 
 def irpf_de_la_actividad(cfg: dict, actividad: float) -> float:
-    """IRPF que se lleva la actividad: la cuota con ella menos la cuota solo con la nómina (tipo marginal)."""
+    """IRPF que se lleva la actividad al tipo medio de la renta: la cuota con nómina y actividad,
+    repartida según lo que pesa cada una en la base."""
     nom = _nomina_anual(cfg.get("nomina"))
     trabajo = max(nom["bruto"] - nom["ss"] - calc_nomina.OTROS_GASTOS, 0.0)
-    minimo = calc_nomina.MINIMO_PERSONAL
-    return max(_escala(trabajo + actividad) - _escala(trabajo), 0.0) if trabajo > minimo else \
-        max(_escala(trabajo + actividad) - _escala(minimo), 0.0)
+    base = trabajo + max(actividad, 0.0)
+    if not base:
+        return 0.0
+    cuota = max(_escala(base) - _escala(calc_nomina.MINIMO_PERSONAL), 0.0) * float(cfg.get("factor_renta", 1.0))
+    return cuota * max(actividad, 0.0) / base
 
 
 def _presentado(s: Session, modelo: str, anio: int, trimestre: int) -> float | None:
@@ -245,15 +292,20 @@ def _casillas_130(s: Session, anio: int, trimestre: int) -> dict:
         return {}
 
 
-def _facturado_por_mes(s: Session) -> dict[str, tuple[float, float, float]]:
-    """Base, IVA y retención de las facturas emitidas, por mes."""
-    meses: dict[str, list[float]] = {}
+def _facturado_por_mes(s: Session, cfg: dict) -> dict[str, dict]:
+    """Base, IVA y retención de las facturas emitidas por mes, y la base de cada cliente
+    (con el nombre que tenga en los supuestos si coincide la primera palabra)."""
+    nombres = {_palabra(c.get("nombre", "")): c.get("nombre", "") for c in cfg.get("clientes", [])}
+    meses: dict[str, dict] = {}
     for x in s.scalars(select(Factura)).all():
-        fila = meses.setdefault(x.fecha.strftime("%Y-%m"), [0.0, 0.0, 0.0])
-        fila[0] += float(x.base)
-        fila[1] += float(x.cuota_iva)
-        fila[2] += abs(float(x.retencion))
-    return {k: (round(b, 2), round(i, 2), round(r, 2)) for k, (b, i, r) in meses.items()}
+        fila = meses.setdefault(x.fecha.strftime("%Y-%m"), {"base": 0.0, "iva": 0.0, "ret": 0.0, "clientes": {}})
+        fila["base"] += float(x.base)
+        fila["iva"] += float(x.cuota_iva)
+        fila["ret"] += abs(float(x.retencion))
+        cliente = x.cliente.nombre if x.cliente else "Otros"
+        cliente = next((v for k, v in nombres.items() if k and k in cliente.lower()), cliente)
+        fila["clientes"][cliente] = fila["clientes"].get(cliente, 0.0) + float(x.base)
+    return meses
 
 
 def _gastos_alquiler(s: Session, anio: int) -> tuple[float, float]:
@@ -273,24 +325,32 @@ def _gastos_alquiler(s: Session, anio: int) -> tuple[float, float]:
     return gastos, intereses
 
 
+def _autonomo_por_cliente(facturado: float, gastos: float, irpf: float, por_cliente: dict[str, float]) -> list[dict]:
+    """La parte de autónomo de cada cliente: gastos e IRPF repartidos según lo que factura cada uno."""
+    clientes = {n: b for n, b in por_cliente.items() if b}
+    if not clientes or not facturado:
+        return [{"fuente": "Autónomo", "bruto": facturado, "gastos": gastos, "irpf": irpf}]
+    return [{"fuente": n, "bruto": b, "gastos": gastos * b / facturado, "irpf": irpf * b / facturado, "cliente": True}
+            for n, b in sorted(clientes.items(), key=lambda kv: -kv[1])]
+
+
 def _ingresos(nom: dict, facturado: float, gastos_act: float, alquiler_bruto: float, gastos_alq: float,
-              intereses: float, r: dict) -> dict:
-    """Bruto y neto de cada fuente al mes. El IRPF se reparte por tramos: la nómina paga el suyo,
-    la actividad lo que añade encima y el alquiler el resto de la cuota."""
-    trabajo = r["rendimiento_trabajo"]
-    minimo = _escala(calc_nomina.MINIMO_PERSONAL)
-    irpf_trabajo = max(_escala(trabajo) - minimo, 0.0)
-    irpf_act = max(_escala(trabajo + r["rendimiento_actividad"]) - minimo, 0.0) - irpf_trabajo
+              intereses: float, r: dict, por_cliente: dict[str, float] | None = None) -> dict:
+    """Bruto y neto de cada fuente al mes. El IRPF de la renta se reparte al tipo medio entre las fuentes."""
+    # Cada fuente paga el tipo medio de la renta sobre lo que aporta a la base
+    base = r["base"] or 1.0
+    irpf_trabajo = r["cuota"] * r["rendimiento_trabajo"] / base
+    irpf_act = r["cuota"] * r["rendimiento_actividad"] / base
     irpf_alq = max(r["cuota"] - irpf_trabajo - irpf_act, 0.0)
     fuentes = [
         {"fuente": "Nómina", "bruto": nom["bruto"], "gastos": nom["ss"], "irpf": irpf_trabajo},
-        {"fuente": "Autónomo", "bruto": facturado, "gastos": gastos_act, "irpf": irpf_act},
+        *_autonomo_por_cliente(facturado, gastos_act, irpf_act, por_cliente or {}),
         {"fuente": "Alquiler", "bruto": alquiler_bruto, "gastos": gastos_alq + intereses, "irpf": irpf_alq},
     ]
     filas = []
     for f_ in fuentes:
         neto = f_["bruto"] - f_["gastos"] - f_["irpf"]
-        filas.append({"fuente": f_["fuente"], "bruto_anual": round(f_["bruto"], 2), "neto_anual": round(neto, 2),
+        filas.append({"fuente": f_["fuente"], "cliente": f_.get("cliente", False), "bruto_anual": round(f_["bruto"], 2), "neto_anual": round(neto, 2),
                       "gastos_anual": round(f_["gastos"], 2), "irpf_anual": round(f_["irpf"], 2),
                       "bruto_mes": round(f_["bruto"] / 12, 2), "neto_mes": round(neto / 12, 2)})
     total = {k: round(sum(x[k] for x in filas), 2) for k in ("bruto_anual", "neto_anual", "gastos_anual", "irpf_anual",
@@ -311,24 +371,35 @@ def calcular(s: Session, meses: int = 12) -> dict:
     pagos = s.scalars(select(PagoPrevisto).where(~PagoPrevisto.pagado)).all()
     gastos_act_mes = float(cfg.get("gastos_autonomo_mes", 0))
 
-    reales = _facturado_por_mes(s)
+    reales = _facturado_por_mes(s, cfg)
     # Las hipotecas que aún no han empezado (la de la casa nueva) no están en el gasto del banco: sus cuotas se suman
     cuotas_futuras: dict[str, float] = {}
     for deuda in s.scalars(select(Deuda).where(Deuda.fecha_inicio > hoy)):
+        # El mes en que se firma, el banco pone el capital (paga la entrega); luego vienen las cuotas
+        firma = deuda.fecha_inicio.strftime("%Y-%m")
+        cuotas_futuras[firma] = cuotas_futuras.get(firma, 0.0) - float(deuda.capital_inicial)
         for c in cuadro_amortizacion(deuda):
             cuotas_futuras[c.fecha.strftime("%Y-%m")] = cuotas_futuras.get(c.fecha.strftime("%Y-%m"), 0.0) + float(c.cuota)
     tabla: dict[str, Mes] = {}
     trimestres: dict[str, dict] = {}
     resumen_anios = []
     for anio in anios:
-        nom = _nomina_anual(cfg.get("nomina"))
+        nom = _nomina_con_reales(s, anio, _nomina_anual(cfg.get("nomina")))
         acumulado = {"base": 0.0, "ret": 0.0, "pagos130": 0.0}
         facturado_anio = ret_anio = 0.0
+        por_cliente: dict[str, float] = {}
         for d in _meses(date(anio, 1, 1), 12):
             m = tabla.setdefault(d.strftime("%Y-%m"), Mes(d.strftime("%Y-%m")))
             # Los meses ya cerrados con facturas usan lo facturado de verdad; el resto, las tarifas
-            base, iva, ret = reales.get(d.strftime("%Y-%m")) if d < inicio and d.strftime("%Y-%m") in reales \
-                else _facturacion(cfg, d)
+            real = reales.get(d.strftime("%Y-%m")) if d < inicio else None
+            if real:
+                base, iva, ret = round(real["base"], 2), round(real["iva"], 2), round(real["ret"], 2)
+                del_mes = real["clientes"]
+            else:
+                base, iva, ret = _facturacion(cfg, d)
+                del_mes = {n: b for n, b, _, _ in _por_cliente(cfg, d)}
+            for nombre_cli, b in del_mes.items():
+                por_cliente[nombre_cli] = por_cliente.get(nombre_cli, 0.0) + b
             m.nomina, m.facturado, m.iva, m.retenciones = round(nom["meses"][d.month], 2), base, iva, ret
             m.cobros, m.alquiler = round(base + iva - ret, 2), round(renta_mes, 2)
             m.gastos = round(habitual, 2)
@@ -365,7 +436,7 @@ def calcular(s: Session, meses: int = 12) -> dict:
         r["anio"] = anio
         alquiler_bruto = sum(tabla[x.strftime("%Y-%m")].alquiler for x in _meses(date(anio, 1, 1), 12))
         r["ingresos"] = _ingresos(nom, facturado_anio, gastos_act_mes * 12, alquiler_bruto,
-                                  *_gastos_alquiler(s, anio), r)
+                                  *_gastos_alquiler(s, anio), r, por_cliente)
         resumen_anios.append(r)
         junio = tabla.setdefault(f"{anio + 1}-06", Mes(f"{anio + 1}-06"))
         if r["resultado"]:

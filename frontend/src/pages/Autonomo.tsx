@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Plus } from 'lucide-react'
+import { CalendarDays, Plus } from 'lucide-react'
+import PlanificadorFactura from './PlanificadorFactura'
 import { api } from '../lib/api'
 import { eur, eurK, fecha, hoyISO } from '../lib/format'
 import { Link } from 'react-router-dom'
@@ -78,7 +79,7 @@ function Modelo({ nombre, valor, fuente, estimado, exento }: { nombre: string; v
 export default function Autonomo() {
   const actual = new Date().getFullYear()
   const [anio, setAnio] = useState(actual)
-  const [dialogo, setDialogo] = useState<'factura' | 'gasto' | null>(null)
+  const [dialogo, setDialogo] = useState<'factura' | 'gasto' | 'planificar' | null>(null)
   const { data: d, isLoading, error } = useQuery({ queryKey: ['autonomo', anio], queryFn: () => api.get<Datos>(`/autonomo?anio=${anio}`) })
   const { data: prev } = useQuery({ queryKey: ['prevision'], queryFn: () => api.get<Prevision>('/prevision') })
   const renta = prev?.anios.find((r) => r.anio === anio)
@@ -94,6 +95,7 @@ export default function Autonomo() {
         <Selector value={anio} onChange={(e) => setAnio(Number(e.target.value))} aria-label="Año" className="w-28">
           {[actual + 1, actual, actual - 1, actual - 2].map((a) => <option key={a} value={a}>{a}</option>)}
         </Selector>
+        <Boton variante="secundario" onClick={() => setDialogo('planificar')}><CalendarDays size={16} />Planificar factura</Boton>
         <Boton variante="secundario" onClick={() => setDialogo('gasto')}><Plus size={16} />Gasto</Boton>
         <Boton onClick={() => setDialogo('factura')}><Plus size={16} />Factura</Boton>
       </Cabecera>
@@ -134,7 +136,7 @@ export default function Autonomo() {
                   </BarChart>
                 </ResponsiveContainer>
               </div>
-              <p className="mt-2 text-xs text-muted">Neto = facturado menos gastos deducibles y el IRPF que se lleva la actividad encima de tu nómina (tu tipo marginal).
+              <p className="mt-2 text-xs text-muted">Neto = facturado menos gastos deducibles y el IRPF de la actividad a tu tipo medio de la renta (el real del año si ya la subiste).
                 El IVA no cuenta: lo cobras y se lo das a Hacienda. El año en curso usa la previsión del año completo (o lo ya facturado, si es más).</p>
             </Tarjeta>
           )}
@@ -157,7 +159,7 @@ export default function Autonomo() {
               Lo que aún no has presentado se prevé con tu sueldo, tus tarifas y los días del último mes (en Previsión).</p>)}
           {d.trimestres[3].notas.map((n) => <p key={n} className="mt-3 text-sm text-muted">{n}</p>)}
 
-          <div className="mt-6 grid gap-4 lg:grid-cols-3">
+          <div className="mt-6 grid gap-4 xl:grid-cols-3">
             <Tarjeta titulo="Por cliente">
               {d.por_cliente.length ? (
                 <ul className="space-y-3">
@@ -171,7 +173,7 @@ export default function Autonomo() {
               ) : <Vacio>Sin facturas este año.</Vacio>}
             </Tarjeta>
 
-            <Tarjeta className="lg:col-span-2" titulo="Facturas emitidas">
+            <Tarjeta className="xl:col-span-2" titulo="Facturas emitidas">
               {d.facturas.length ? (
                 <Tabla>
                   <thead><tr><th>Fecha</th><th>Nº</th><th>Cliente</th><th className="num">Base</th><th className="num">IVA</th><th className="num">Retención</th><th className="num">Cobras</th><th /></tr></thead>
@@ -219,6 +221,9 @@ export default function Autonomo() {
 
       <Dialogo abierto={dialogo === 'factura'} onCerrar={() => setDialogo(null)} titulo="Registrar factura">
         <FormFactura clientes={d?.clientes ?? []} onHecho={() => setDialogo(null)} />
+      </Dialogo>
+      <Dialogo abierto={dialogo === 'planificar'} onCerrar={() => setDialogo(null)} titulo="Planificar factura por días">
+        {dialogo === 'planificar' && <PlanificadorFactura onHecho={() => setDialogo(null)} />}
       </Dialogo>
       <Dialogo abierto={dialogo === 'gasto'} onCerrar={() => setDialogo(null)} titulo="Registrar gasto">
         <FormGasto onHecho={() => setDialogo(null)} />

@@ -1,11 +1,11 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Check, Plus } from 'lucide-react'
+import { Check, Pencil, Plus } from 'lucide-react'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { api } from '../lib/api'
 import { diasHasta, eur, eurK, fecha, hoyISO, mesCorto } from '../lib/format'
 import type { Planificacion as Datos } from '../lib/tipos'
-import { Barra, Boton, Cabecera, Campo, Cargando, Dato, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tarjeta, Vacio, num, useAccion } from '../components/ui'
+import { Barra, BorrarEnDosPasos, Boton, Cabecera, Campo, Cargando, Dato, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tarjeta, Vacio, num, useAccion } from '../components/ui'
 
 const TIPO: Record<string, string> = { boda: 'Boda', viaje: 'Viaje', casa: 'Casa', colchon: 'Colchón', otro: 'Objetivo' }
 
@@ -21,11 +21,16 @@ function pagosPorMes(d: Datos) {
 
 export default function Planificacion() {
   const [dialogo, setDialogo] = useState<'objetivo' | 'pago' | null>(null)
+  const [editando, setEditando] = useState<Datos['objetivos'][number] | null>(null)
   const { data: d, isLoading, error } = useQuery({ queryKey: ['planificacion'], queryFn: () => api.get<Datos>('/planificacion') })
-  const crearObjetivo = useAccion((v: Record<string, string>) => api.post('/objetivos', {
-    nombre: v.nombre, tipo: v.tipo, fecha_objetivo: v.fecha_objetivo || null,
-    importe_objetivo: num(v.importe_objetivo) ?? 0, ahorrado: num(v.ahorrado) ?? 0,
-  }).then(() => setDialogo(null)), 'Objetivo creado')
+  const guardarObjetivo = useAccion((v: Record<string, string>) => {
+    const datos = { nombre: v.nombre, tipo: v.tipo, fecha_objetivo: v.fecha_objetivo || null,
+      importe_objetivo: num(v.importe_objetivo) ?? 0, ahorrado: num(v.ahorrado) ?? 0 }
+    return (editando ? api.patch(`/objetivos/${editando.id}`, datos) : api.post('/objetivos', datos))
+      .then(() => { setDialogo(null); setEditando(null) })
+  }, 'Objetivo guardado')
+  const borrarObjetivo = useAccion((id: number) => api.del(`/objetivos/${id}`), 'Objetivo borrado')
+  const borrarPago = useAccion((id: number) => api.del(`/pagos/${id}`), 'Pago borrado')
   const crearPago = useAccion((v: Record<string, string>) => api.post('/pagos', {
     concepto: v.concepto, fecha: v.fecha, importe: num(v.importe),
     objetivo_id: v.objetivo_id ? Number(v.objetivo_id) : null, activo_id: v.activo_id ? Number(v.activo_id) : null,
@@ -49,7 +54,8 @@ export default function Planificacion() {
       <Tarjeta>
         <div className="grid gap-6 sm:grid-cols-3">
           <Dato etiqueta="Liquidez hoy" valor={eur(d.liquidez)} nota="Cuentas corrientes y de ahorro" />
-          <Dato etiqueta="Pagos en 12 meses" valor={eur(d.pendiente_12_meses)} />
+          <Dato etiqueta="Pagos en 12 meses" valor={eur(d.pendiente_12_meses)}
+            nota={d.financiado_hipoteca ? `Sin los ${eur(d.financiado_hipoteca)} que pone la hipoteca prevista` : undefined} />
           <Dato etiqueta="Margen" valor={eur(margen)} tono={margen < 0 ? 'neg' : 'pos'}
             nota={margen < 0 ? 'Con lo que tienes hoy no llegas: cuenta con lo que ahorres estos meses.' : 'Te sobra aunque no ahorres nada más.'} />
         </div>
@@ -81,7 +87,11 @@ export default function Planificacion() {
                     <div className="truncate font-semibold">{o.nombre}</div>
                     <div className="text-xs text-muted">{o.fecha_objetivo ? fecha(o.fecha_objetivo, { day: 'numeric', month: 'long', year: 'numeric' }) : 'Sin fecha'}</div>
                   </div>
-                  <Etiqueta tono="acento">{TIPO[o.tipo] ?? o.tipo}</Etiqueta>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <Etiqueta tono="acento">{TIPO[o.tipo] ?? o.tipo}</Etiqueta>
+                    <Boton variante="fantasma" className="px-2 py-1" aria-label="Editar" onClick={() => { setEditando(o); setDialogo('objetivo') }}><Pencil size={14} /></Boton>
+                    <BorrarEnDosPasos onBorrar={() => borrarObjetivo.mutate(o.id)} />
+                  </div>
                 </div>
                 <div className="mt-4 flex items-baseline justify-between gap-2">
                   <span className="cifra text-xl font-medium">{eur(o.ahorrado)}</span>
@@ -116,6 +126,7 @@ export default function Planificacion() {
                     <Boton variante={p.pagado ? 'secundario' : 'fantasma'} className="px-2 py-1 text-xs" onClick={() => marcar.mutate({ id: p.id, pagado: !p.pagado })}>
                       <Check size={14} />{p.pagado ? 'Pagado' : 'Marcar'}
                     </Boton>
+                    <BorrarEnDosPasos onBorrar={() => borrarPago.mutate(p.id)} />
                   </div>
                 </li>
               )
@@ -124,17 +135,17 @@ export default function Planificacion() {
         ) : <Vacio>Apunta aquí los plazos de la obra nueva, la señal de la boda o el viaje.</Vacio>}
       </Tarjeta>
 
-      <Dialogo abierto={dialogo === 'objetivo'} onCerrar={() => setDialogo(null)} titulo="Nuevo objetivo">
-        <Formulario onEnviar={(v) => crearObjetivo.mutateAsync(v)}>
-          <Campo etiqueta="Nombre" name="nombre" required placeholder="Boda" />
-          <Selector etiqueta="Tipo" name="tipo" defaultValue="boda">
+      <Dialogo abierto={dialogo === 'objetivo'} onCerrar={() => { setDialogo(null); setEditando(null) }} titulo={editando ? 'Editar objetivo' : 'Nuevo objetivo'}>
+        {dialogo === 'objetivo' && <Formulario key={editando?.id ?? 'nuevo'} onEnviar={(v) => guardarObjetivo.mutateAsync(v)}>
+          <Campo etiqueta="Nombre" name="nombre" required placeholder="Boda" defaultValue={editando?.nombre ?? ''} />
+          <Selector etiqueta="Tipo" name="tipo" defaultValue={editando?.tipo ?? 'boda'}>
             <option value="boda">Boda</option><option value="viaje">Viaje</option><option value="casa">Casa</option>
             <option value="colchon">Colchón de seguridad</option><option value="otro">Otro</option>
           </Selector>
-          <Campo etiqueta="Fecha" name="fecha_objetivo" type="date" />
-          <Campo etiqueta="Presupuesto (€)" name="importe_objetivo" inputMode="decimal" required />
-          <Campo etiqueta="Ya ahorrado (€)" name="ahorrado" inputMode="decimal" defaultValue="0" />
-        </Formulario>
+          <Campo etiqueta="Fecha" name="fecha_objetivo" type="date" defaultValue={editando?.fecha_objetivo ?? ''} />
+          <Campo etiqueta="Presupuesto (€)" name="importe_objetivo" inputMode="decimal" required defaultValue={editando?.importe_objetivo ?? ''} />
+          <Campo etiqueta="Ya ahorrado (€)" name="ahorrado" inputMode="decimal" defaultValue={editando?.ahorrado ?? 0} />
+        </Formulario>}
       </Dialogo>
       <Dialogo abierto={dialogo === 'pago'} onCerrar={() => setDialogo(null)} titulo="Nuevo pago previsto">
         <Formulario onEnviar={(v) => crearPago.mutateAsync(v)}>

@@ -102,7 +102,7 @@ export interface Pago {
   objetivo: string | null; inmueble: string | null; inversion: string | null
 }
 export interface Planificacion {
-  liquidez: number; pendiente_12_meses: number; objetivos: Objetivo[]; pagos: Pago[]
+  liquidez: number; pendiente_12_meses: number; financiado_hipoteca: number; objetivos: Objetivo[]; pagos: Pago[]
   inmuebles: { id: number; nombre: string }[]
 }
 export interface EstadoAuth { requerida: boolean; client_id: string | null; email: string | null }
@@ -169,6 +169,7 @@ export interface SupuestosPrevision {
   nomina: { empresa: string; bruto_anual: number; variable_pct: number; mes_variable: number; pagas: number } | null
   clientes: { nombre: string; tarifa_hora: number; horas_dia: number; dias_mes: number | null; iva: number; retencion: number }[]
   gastos_autonomo_mes: number; gasto_habitual_mes: number | null; meses_sin_facturar: number[]
+  dias_planificados?: Record<string, Record<string, number>>
 }
 export interface MesPrevision {
   mes: string; nomina: number; facturado: number; cobros: number; iva: number; retenciones: number; alquiler: number
@@ -181,7 +182,7 @@ export interface RentaPrevista {
   ingresos: { fuentes: IngresoFuente[]; total: Omit<IngresoFuente, 'fuente'> }
 }
 export interface IngresoFuente {
-  fuente: string; bruto_anual: number; neto_anual: number; gastos_anual: number; irpf_anual: number; bruto_mes: number; neto_mes: number
+  fuente: string; cliente: boolean; bruto_anual: number; neto_anual: number; gastos_anual: number; irpf_anual: number; bruto_mes: number; neto_mes: number
 }
 export interface Prevision {
   supuestos: SupuestosPrevision; gasto_habitual_banco: number | null; liquidez_hoy: number
