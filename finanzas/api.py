@@ -1,16 +1,18 @@
 """API JSON que consume el frontal (carpeta frontend/)."""
 import json
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from finanzas import auth, config, db, patrimonio, sync
+from finanzas.fechas import iso_utc
 from finanzas.fiscal import alquiler, autonomo, nomina as calc_nomina
 from finanzas.hipoteca import cuota_mensual, intereses_anio, saldo_pendiente
 from finanzas.importers import aeat, sabadell
@@ -45,37 +47,32 @@ def _obtener(s: Session, modelo, id_: int):
 # --- Resumen (panel) --------------------------------------------------------
 
 def _gasto_por_mes(s: Session, meses: int = 6) -> list[dict]:
+    from finanzas import prevision
     desde = (date.today().replace(day=1) - timedelta(days=31 * (meses - 1))).replace(day=1)
-    filas = s.execute(
-        select(Movimiento.fecha, Movimiento.importe * PARTE, Categoria.nombre, Categoria.tipo)
-        .join(Cuenta, Movimiento.cuenta_id == Cuenta.id)
-        .join(Categoria, Movimiento.categoria_id == Categoria.id, isouter=True)
-        .where(Movimiento.fecha >= desde, PARTE > 0)
-    ).all()
-    por_mes: dict[str, dict] = defaultdict(lambda: {"ingresos": CERO, "gastos": CERO})
-    for fecha, importe, _cat, tipo in filas:
-        if tipo == "transferencia":
+    movs = prevision.movimientos_tuyos(s, desde)
+    traspasos = prevision.ids_traspaso(movs)
+    por_mes: dict[str, dict] = defaultdict(lambda: {"ingresos": 0.0, "gastos": 0.0})
+    for m in movs:
+        if m.tipo == "transferencia" or m.id in traspasos:
             continue
-        clave = fecha.strftime("%Y-%m")
-        if importe >= 0:
-            por_mes[clave]["ingresos"] += importe
+        clave = m.fecha.strftime("%Y-%m")
+        if m.tuyo >= 0:
+            por_mes[clave]["ingresos"] += m.tuyo
         else:
-            por_mes[clave]["gastos"] += -importe
-    return [{"mes": k, "ingresos": n(v["ingresos"]), "gastos": n(v["gastos"])} for k, v in sorted(por_mes.items())]
+            por_mes[clave]["gastos"] += -m.tuyo
+    return [{"mes": k, "ingresos": round(v["ingresos"], 2), "gastos": round(v["gastos"], 2)}
+            for k, v in sorted(por_mes.items())]
 
 
 def _gasto_por_categoria(s: Session, dias: int = 30) -> list[dict]:
-    desde = date.today() - timedelta(days=dias)
-    nombre = func.coalesce(Categoria.nombre, "Sin categoría")
-    filas = s.execute(
-        select(nombre, func.sum(Movimiento.importe * PARTE))
-        .join(Cuenta, Movimiento.cuenta_id == Cuenta.id)
-        .join(Categoria, Movimiento.categoria_id == Categoria.id, isouter=True)
-        .where(Movimiento.fecha >= desde, Movimiento.importe < 0, PARTE > 0,
-               (Categoria.tipo.is_(None)) | (Categoria.tipo != "transferencia"))
-        .group_by(nombre)
-    ).all()
-    return sorted(({"categoria": c, "importe": -float(t)} for c, t in filas), key=lambda x: -x["importe"])
+    from finanzas import prevision
+    movs = prevision.movimientos_tuyos(s, date.today() - timedelta(days=dias))
+    traspasos = prevision.ids_traspaso(movs)
+    por_cat: dict[str, float] = defaultdict(float)
+    for m in movs:
+        if m.importe < 0 and m.tipo != "transferencia" and m.id not in traspasos:
+            por_cat[m.categoria or "Sin categoría"] += -m.tuyo
+    return sorted(({"categoria": c, "importe": round(t, 2)} for c, t in por_cat.items()), key=lambda x: -x["importe"])
 
 
 @router.get("/resumen")
@@ -96,6 +93,7 @@ def resumen(s: Session = SesionDB):
     prev = prevision.calcular(s) if prevision.leer(s).get("clientes") or prevision.leer(s).get("nomina") else None
     p_t = (prev or {}).get("trimestres", {}).get(f"{anio_t}-{t}")
     renta = next((a for a in (prev or {}).get("anios", []) if a["anio"] == hoy.year), None)
+    sync.rellenar_vehiculos(s)
     historico = s.scalars(select(Instantanea).order_by(Instantanea.fecha)).all()
     proximos = s.scalars(select(PagoPrevisto).where(~PagoPrevisto.pagado).order_by(PagoPrevisto.fecha).limit(6))
     return {
@@ -107,7 +105,8 @@ def resumen(s: Session = SesionDB):
         "lineas_pasivo": [{"nombre": l.nombre, "grupo": l.grupo, "importe": n(l.importe), "detalle": l.detalle}
                           for l in p.pasivos],
         "historico": [{"fecha": f(i.fecha), "neto": n(i.neto), "liquidez": n(i.liquidez),
-                       "inversiones": n(i.inversiones), "inmuebles": n(i.inmuebles), "deudas": n(i.deudas)}
+                       "inversiones": n(i.inversiones), "inmuebles": n(i.inmuebles), "vehiculos": n(i.vehiculos),
+                       "deudas": n(i.deudas)}
                       for i in historico],
         "flujo_mensual": _gasto_por_mes(s),
         "gasto_categorias": _gasto_por_categoria(s),
@@ -145,8 +144,7 @@ def _cuenta(c: Cuenta) -> dict:
     return {"id": c.id, "nombre": c.nombre, "entidad": c.entidad, "tipo": c.tipo, "iban": c.iban,
             "origen": c.origen, "saldo": n(c.saldo), "saldo_fecha": f(c.saldo_fecha),
             "participacion": n(c.parte * 100), "saldo_tuyo": n((c.saldo * c.parte).quantize(Decimal("0.01"))),
-            "ultima_sincronizacion": c.ultima_sincronizacion.isoformat(timespec="minutes")
-            if c.ultima_sincronizacion else None}
+            "ultima_sincronizacion": iso_utc(c.ultima_sincronizacion)}
 
 
 @router.get("/indexa")
@@ -264,12 +262,20 @@ def sincronizar_sabadell(s: Session = SesionDB):
     return r
 
 
+COOKIE_ESTADO_BANCO = "finanzas_banco_estado"
+
+
 @router.post("/sync/sabadell/conectar")
-def conectar_sabadell():
+def conectar_sabadell(response: Response):
+    estado = enablebanking.nuevo_estado()
     try:
-        return {"url": enablebanking.iniciar_autorizacion()}
+        url = enablebanking.iniciar_autorizacion(estado=estado)
     except enablebanking.EnableBankingError as e:
         raise HTTPException(400, str(e))
+    # A la vuelta del banco se comprueba que el state es este: así nadie puede colarte otra conexión
+    response.set_cookie(COOKIE_ESTADO_BANCO, estado, max_age=1800, httponly=True, secure=config.EN_VERCEL,
+                        samesite="lax", path="/")
+    return {"url": url}
 
 
 class CodigoIn(BaseModel):
@@ -277,7 +283,10 @@ class CodigoIn(BaseModel):
 
 
 @router.post("/sync/sabadell/completar")
-def completar_sabadell(datos: CodigoIn, s: Session = SesionDB):
+def completar_sabadell(datos: CodigoIn, request: Request, s: Session = SesionDB):
+    estado = enablebanking.extraer_estado(datos.codigo)
+    if estado is not None and estado != request.cookies.get(COOKIE_ESTADO_BANCO):
+        raise HTTPException(400, "Esa dirección no corresponde a la conexión que has empezado. Vuelve a pulsar Conectar.")
     try:
         con = enablebanking.completar_autorizacion(s, enablebanking.extraer_code(datos.codigo))
     except enablebanking.EnableBankingError as e:
@@ -310,15 +319,28 @@ class GastoAutonomoIn(BaseModel):
     deducible_pct: Decimal = Decimal("100")
 
 
-def _presentadas(s: Session, anio: int) -> dict[tuple[str, int], Declaracion]:
-    """Los 303 y 130 presentados del año, por (modelo, trimestre). Si hay varias (complementarias), la última."""
+@dataclass
+class Presentada:
+    """Un 303 o 130 de un trimestre. Con complementarias, lo pagado es la suma de todas y las casillas
+    (acumuladas) las de la última."""
+    importe: Decimal
+    casillas: str | None
+
+
+def _presentadas(s: Session, anio: int) -> dict[tuple[str, int], Presentada]:
+    """Los 303 y 130 presentados del año, por (modelo, trimestre)."""
     decl = s.scalars(select(Declaracion).where(
         Declaracion.ejercicio == anio, Declaracion.modelo.in_(("303", "130")),
         Declaracion.periodo.in_(("1T", "2T", "3T", "4T"))).order_by(Declaracion.id)).all()
-    return {(d.modelo, int(d.periodo[0])): d for d in decl}
+    res: dict[tuple[str, int], Presentada] = {}
+    for d in decl:
+        clave = (d.modelo, int(d.periodo[0]))
+        previa = res.get(clave)
+        res[clave] = Presentada((previa.importe if previa else CERO) + d.importe, d.casillas or (previa and previa.casillas))
+    return res
 
 
-def _casillas(d: Declaracion | None) -> dict:
+def _casillas(d: Declaracion | Presentada | None) -> dict:
     try:
         return json.loads(d.casillas) if d and d.casillas else {}
     except ValueError:
@@ -1212,7 +1234,7 @@ def listar_documentos_drive(s: Session = SesionDB):
     return {"ia": ia.disponible(s), "google_client_id": config.GOOGLE_CLIENT_ID or None,
             "documentos": [{"id": d.id, "nombre": d.nombre, "enlace": d.enlace, "tipo": d.tipo, "estado": d.estado,
                             "mensaje": d.mensaje, "datos": json.loads(d.datos or "{}"),
-                            "revisado": d.revisado.isoformat(timespec="minutes")} for d in docs]}
+                            "revisado": iso_utc(d.revisado)} for d in docs]}
 
 
 class GastoDriveIn(BaseModel):

@@ -112,6 +112,7 @@ def test_vuelta_del_banco_ensenya_el_error(monkeypatch):
         raise KeyError("uid")
     monkeypatch.setattr(eb, "completar_autorizacion", roto)
     with TestClient(app) as c:
+        c.cookies.set("finanzas_banco_estado", "x")
         r = c.get("/sabadell/vuelta?state=x&code=abc", follow_redirects=False)
         assert r.status_code == 307 and "sabadell_error=KeyError" in r.headers["location"]
 
@@ -119,5 +120,22 @@ def test_vuelta_del_banco_ensenya_el_error(monkeypatch):
     monkeypatch.setattr(eb, "completar_autorizacion", lambda s, code, cliente=None: None)
     monkeypatch.setattr(sync, "sincronizar_sabadell", lambda s, cliente=None: sincronizado.append(1))
     with TestClient(app) as c:
+        c.cookies.set("finanzas_banco_estado", "x")
         r = c.get("/sabadell/vuelta?state=x&code=abc", follow_redirects=False)
         assert r.headers["location"].endswith("sabadell=ok") and sincronizado
+
+
+def test_vuelta_del_banco_sin_el_state_de_la_cookie_no_conecta(monkeypatch):
+    """Un enlace preparado con un code ajeno no sustituye tu conexión."""
+    from fastapi.testclient import TestClient
+    from finanzas.main import app
+
+    llamado = []
+    monkeypatch.setattr(eb, "completar_autorizacion", lambda s, code, cliente=None: llamado.append(code))
+    with TestClient(app) as c:
+        c.cookies.set("finanzas_banco_estado", "mio")
+        r = c.get("/sabadell/vuelta?state=otro&code=ajeno", follow_redirects=False)
+        assert "sabadell_error" in r.headers["location"] and not llamado
+        c.cookies.clear()
+        r = c.get("/sabadell/vuelta?state=mio&code=ajeno", follow_redirects=False)
+        assert "sabadell_error" in r.headers["location"] and not llamado

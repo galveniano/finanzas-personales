@@ -59,9 +59,19 @@ def init_db(eng=None) -> None:
         return
     Base.metadata.create_all(eng)
     _añadir_columnas_nuevas(eng)
+    _migrar_datos(eng)
     if eng is engine:
         global _tablas_listas
         _tablas_listas = True
+
+
+def _migrar_datos(eng) -> None:
+    """Arreglos de datos de versiones anteriores; son idempotentes."""
+    from sqlalchemy.orm import Session
+
+    from finanzas.categorizar import actualizar_reglas
+    with Session(eng) as s:
+        actualizar_reglas(s)
 
 
 def _añadir_columnas_nuevas(eng) -> None:
