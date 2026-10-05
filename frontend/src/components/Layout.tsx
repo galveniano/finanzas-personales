@@ -1,7 +1,7 @@
 import { Suspense, useEffect, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Briefcase, Building2, CalendarClock, Ellipsis, LayoutDashboard, LogOut, RefreshCw, Scale, Settings, Sparkles, Wallet } from 'lucide-react'
+import { Briefcase, Building2, CalendarClock, Ellipsis, LayoutDashboard, LogOut, PieChart, RefreshCw, Scale, Settings, Sparkles, Wallet } from 'lucide-react'
 import { api, esDemo } from '../lib/api'
 import type { EstadoAuth, EstadoSync } from '../lib/tipos'
 import { fechaHora } from '../lib/format'
@@ -11,6 +11,7 @@ import { Boton, Cargando } from './ui'
 const secciones: { a: string; texto: string; icono: typeof Wallet; movil?: boolean }[] = [
   { a: '/', texto: 'Inicio', icono: LayoutDashboard, movil: true },
   { a: '/cuentas', texto: 'Cuentas', icono: Wallet, movil: true },
+  { a: '/gastos', texto: 'Gastos', icono: PieChart, movil: true },
   { a: '/ingresos', texto: 'Ingresos', icono: Briefcase, movil: true },
   { a: '/impuestos', texto: 'Impuestos', icono: Scale },
   { a: '/inmuebles', texto: 'Bienes', icono: Building2 },

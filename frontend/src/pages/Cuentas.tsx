@@ -3,8 +3,7 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { Plus, Search, Upload } from 'lucide-react'
 import { api } from '../lib/api'
 import { eur, fecha, fechaHora } from '../lib/format'
-import type { Categoria, Cuenta, GastosRecientes, Movimiento, Resumen } from '../lib/tipos'
-import ComoGastas, { FlujoMensual } from '../components/Gastos'
+import type { Categoria, Cuenta, Movimiento } from '../lib/tipos'
 import CarteraIndexa from '../components/CarteraIndexa'
 import InversionesPrivadas from '../components/InversionesPrivadas'
 import { num, useAccion, useAvisos } from '../lib/utilidades'
@@ -84,8 +83,6 @@ export default function Cuentas() {
     queryFn: () => api.get<Movimiento[]>(`/movimientos${qs ? `?${qs}` : ''}`),
     placeholderData: keepPreviousData,
   })
-  const gastos = useQuery({ queryKey: ['gastos-recientes'], queryFn: () => api.get<GastosRecientes>('/gastos/recientes') })
-  const resumen = useQuery({ queryKey: ['resumen'], queryFn: () => api.get<Resumen>('/resumen') })
   const crear = useAccion((d: Record<string, string>) => api.post('/cuentas', { ...d, saldo: num(d.saldo) ?? 0 }).then(() => setNueva(false)), 'Cuenta creada')
   const avisar = useAvisos()
   const [aprendido, setAprendido] = useState<{ id: number; patron: string; parecidos: number; categoria: string } | null>(null)
@@ -145,8 +142,6 @@ export default function Cuentas() {
 
       <CarteraIndexa />
       <InversionesPrivadas />
-      {gastos.data && <ComoGastas g={gastos.data} />}
-      {resumen.data && <FlujoMensual flujo={resumen.data.flujo_mensual} />}
 
       <Tarjeta className="mt-6" titulo="Movimientos">
         <div className="mb-4 grid gap-3 sm:grid-cols-[1fr_1fr_1.4fr]">

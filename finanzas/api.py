@@ -829,12 +829,6 @@ class DiasPlanificados(BaseModel):
     dias: float | None = None  # vacío: quitar lo planificado
 
 
-@router.get("/gastos/recientes")
-def ver_gastos_recientes(meses: int = 3, s: Session = SesionDB):
-    from finanzas import prevision
-    return prevision.gastos_recientes(s, max(1, min(meses, 12)))
-
-
 @router.put("/prevision/supuestos")
 def guardar_supuestos(datos: SupuestosPrevision, s: Session = SesionDB):
     from finanzas import prevision

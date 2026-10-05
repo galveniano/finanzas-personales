@@ -228,9 +228,26 @@ export interface Prevision {
   clientes: { nombre: string; tarifa_hora: number; horas_dia: number; dias_mes: number; origen_dias: string }[]
   meses: MesPrevision[]; anios: RentaPrevista[]; colchon: number
 }
-export interface GastosRecientes {
-  desde: string; meses: number; ingresos_mes: number; gastos_mes: number; ahorro_mes: number; tasa_ahorro: number | null
-  categorias: { categoria: string; mes: number }[]
-  suscripciones: { concepto: string; mes: number; anual: number; ultimo_cargo: string; veces: number }[]
-  suscripciones_mes: number
+export interface Suscripcion {
+  clave: string; nombre: string; icono: string | null; color: string | null; grupo: string; categoria: string | null
+  tipo: 'suscripcion' | 'recibo'; periodicidad: 'mensual' | 'trimestral' | 'semestral' | 'anual'
+  importe: number; mes: number; anual: number; ultimo_cargo: string; concepto: string; veces: number
+  proximo: string | null; activa: boolean; cuentas: string[]; cobro_doble: boolean
+  subida: { antes: number; ahora: number } | null
+}
+export interface SitioGasto {
+  nombre: string; total: number; veces: number; mes: number; categoria: string | null; icono: string | null; color: string | null
+}
+export interface AnalisisGastos {
+  desde: string; hasta: string; meses: number
+  ingresos_mes: number; gastos_mes: number; ahorro_mes: number; tasa_ahorro: number | null; gastos_mes_antes: number | null
+  ultimo_mes: { mes: string | null; gastos: number }; este_mes: { gastos: number; dia: number }
+  fijo_mes: number; variable_mes: number
+  por_mes: { mes: string; ingresos: number; gastos: number; aparte: number }[]
+  categorias: { categoria: string; total: number; mes: number; peso: number; mes_antes: number | null; cambio: number | null
+    sitios: { nombre: string; total: number; veces: number }[] }[]
+  sitios: SitioGasto[]
+  mayores: { fecha: string; concepto: string; nombre: string; categoria: string | null; importe: number }[]
+  aparte: { total: number; impuestos: number }
+  suscripciones: Suscripcion[]; recibos: Suscripcion[]; suscripciones_mes: number; recibos_mes: number
 }
