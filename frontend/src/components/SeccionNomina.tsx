@@ -1,38 +1,71 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Plus } from 'lucide-react'
+import { FileText, Pencil, Plus, Upload } from 'lucide-react'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { api } from '../lib/api'
 import { eur, eurK, fecha, hoyISO } from '../lib/format'
-import type { Nominas as Datos, Prevision } from '../lib/tipos'
+import type { Nomina, Nominas as Datos, Prevision } from '../lib/tipos'
 import CalculadoraSueldo from './CalculadoraSueldo'
-import { num, useAccion } from '../lib/utilidades'
-import { BorrarEnDosPasos, Boton, Campo, Cargando, Dato, Dialogo, ErrorCarga, Formulario, Importe, Tabla, Tarjeta, Vacio } from './ui'
+import { num, useAccion, useAvisos } from '../lib/utilidades'
+import { BorrarEnDosPasos, Boton, Campo, Cargando, Dato, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Tabla, Tarjeta, Vacio } from './ui'
+
+const pct = (v: number) => `${v.toFixed(2).replace('.', ',')} %`
+const mes = (n: Nomina) => fecha(n.fecha, { month: 'long', year: 'numeric' })
+const Mes = (n: Nomina) => { const t = mes(n); return t.charAt(0).toUpperCase() + t.slice(1) }
+
+type Subida = { resultados: { fichero: string; ok: boolean; mensaje: string; avisos: string[] }[] }
 
 export default function SeccionNomina() {
-  const [abierto, setAbierto] = useState(false)
+  const avisar = useAvisos()
+  const input = useRef<HTMLInputElement>(null)
+  const [arrastrando, setArrastrando] = useState(false)
+  // null: cerrado; 'nueva': registrar a mano; una nómina: corregirla
+  const [editando, setEditando] = useState<Nomina | 'nueva' | null>(null)
   const { data: d, isLoading, error } = useQuery({ queryKey: ['nominas'], queryFn: () => api.get<Datos>('/nominas') })
   const { data: prev } = useQuery({ queryKey: ['prevision'], queryFn: () => api.get<Prevision>('/prevision') })
   const brutoSupuesto = prev?.supuestos.nomina ? prev.supuestos.nomina.bruto_anual * (1 + (prev.supuestos.nomina.variable_pct ?? 0) / 100) : null
-  const crear = useAccion((v: Record<string, string>) => api.post('/nominas', {
-    empresa: v.empresa, fecha: v.fecha, bruto: num(v.bruto), retencion_irpf: num(v.retencion_irpf),
-    seguridad_social: num(v.seguridad_social), neto: num(v.neto),
-  }).then(() => setAbierto(false)), 'Nómina registrada')
+  const guardar = useAccion((v: Record<string, string>) => {
+    const actual = editando && editando !== 'nueva' ? editando : null
+    const cuerpo = {
+      empresa: v.empresa || 'Empresa', fecha: v.fecha, bruto: num(v.bruto), retencion_irpf: num(v.retencion_irpf),
+      seguridad_social: num(v.seguridad_social), neto: num(v.neto), tipo_irpf: num(v.tipo_irpf) ?? null,
+      especie: actual?.especie ?? null, otras_deducciones: num(v.otras_deducciones) ?? null, paga_extra: v.paga_extra === 'on',
+    }
+    return (actual ? api.put(`/nominas/${actual.id}`, cuerpo) : api.post('/nominas', cuerpo)).then(() => setEditando(null))
+  }, 'Nómina guardada')
   const borrar = useAccion((id: number) => api.del(`/nominas/${id}`), 'Nómina borrada')
+  const subir = useAccion(async (ficheros: File[]) => {
+    const fd = new FormData()
+    ficheros.forEach((f) => fd.append('ficheros', f))
+    const r = await api.post<Subida>('/nominas/pdf', fd)
+    const bien = r.resultados.filter((x) => x.ok)
+    if (bien.length) avisar(bien.length === 1 ? bien[0].mensaje : `${bien.length} nóminas leídas`)
+    bien.forEach((x) => x.avisos.forEach((a) => avisar(`${x.mensaje}: ${a}`, 'error')))
+    r.resultados.filter((x) => !x.ok).forEach((x) => avisar(`${x.fichero}: ${x.mensaje}`, 'error'))
+  })
+  const elegir = (lista: FileList | null) => {
+    const validos = [...(lista ?? [])].filter((f) => /\.pdf$/i.test(f.name) || f.type === 'application/pdf')
+    if (validos.length && !subir.isPending) subir.mutate(validos)
+  }
 
   if (isLoading) return <Cargando />
   if (error) return <ErrorCarga error={error} />
   if (!d) return null
   const t = d.totales
   const tipoMedio = t.bruto ? (t.retencion_irpf / t.bruto) * 100 : 0
+  const renta = prev?.anios.find((a) => a.anio === d.anio)
   const delAnio = d.nominas.filter((n) => n.fecha.startsWith(String(d.anio))).slice().reverse()
 
   return (
     <>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-muted">Trabajo por cuenta ajena en {d.anio}</p>
-        <Boton onClick={() => setAbierto(true)}><Plus size={16} />Nómina</Boton>
+        <div className="flex gap-2">
+          <Boton variante="secundario" onClick={() => setEditando('nueva')}><Plus size={16} />A mano</Boton>
+          <Boton onClick={() => input.current?.click()} disabled={subir.isPending}><Upload size={16} />{subir.isPending ? 'Leyendo…' : 'Subir nóminas'}</Boton>
+        </div>
       </div>
+      <input ref={input} type="file" accept="application/pdf,.pdf" multiple hidden onChange={(e) => { elegir(e.target.files); e.target.value = '' }} />
       <Tarjeta>
         {d.fuente === 'banco' && d.estimado_banco && (
           <p className="mb-4 text-sm text-muted">Sacado de los ingresos de nómina de tus cuentas: el banco solo da el neto, así que
@@ -41,10 +74,15 @@ export default function SeccionNomina() {
         )}
         <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
           <Dato etiqueta="Bruto acumulado" valor={eur(t.bruto)} />
-          <Dato etiqueta="Retenido IRPF" valor={eur(t.retencion_irpf)} nota={`${tipoMedio.toFixed(2).replace('.', ',')} % de media`} />
+          <Dato etiqueta="Retenido IRPF" valor={eur(t.retencion_irpf)} nota={d.tipo_irpf_actual != null ? `${pct(d.tipo_irpf_actual)} en la última nómina` : `${pct(tipoMedio)} de media`} />
           <Dato etiqueta="Seguridad Social" valor={eur(t.seguridad_social)} />
           <Dato etiqueta="Neto cobrado" valor={eur(t.neto)} nota={d.fuente === 'banco' ? 'según el banco' : undefined} />
         </div>
+        {d.tipo_irpf_actual != null && renta && renta.tipo_medio > d.tipo_irpf_actual + 1 && (
+          <p className="mt-4 text-sm text-muted">La empresa te retiene un {pct(d.tipo_irpf_actual)}, pero en la renta de {renta.anio} tu tipo
+            medio sale un {pct(renta.tipo_medio)} porque la nómina se suma a lo que facturas como autónomo. La diferencia
+            es parte de lo que te toca pagar en junio, y la previsión ya la cuenta.</p>
+        )}
       </Tarjeta>
 
       {delAnio.length > 1 && (
@@ -84,40 +122,63 @@ export default function SeccionNomina() {
         </Tarjeta>
       )}
 
-      <Tarjeta className="mt-4" titulo="Nóminas registradas">
+      <div onDragOver={(e) => { e.preventDefault(); setArrastrando(true) }}
+        onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setArrastrando(false) }}
+        onDrop={(e) => { e.preventDefault(); setArrastrando(false); elegir(e.dataTransfer.files) }}>
+      <Tarjeta className={`mt-4 ${arrastrando ? 'ring-2 ring-[var(--accent)]' : ''}`} titulo="Nóminas registradas">
         {d.nominas.length ? (
           <Tabla>
             <thead><tr><th>Mes</th><th>Empresa</th><th className="num">Bruto</th><th className="num">IRPF</th><th className="num">SS</th><th className="num">Neto</th><th /></tr></thead>
             <tbody>
               {d.nominas.map((n) => (
                 <tr key={n.id}>
-                  <td className="whitespace-nowrap capitalize">{fecha(n.fecha, { month: 'long', year: 'numeric' })}</td>
+                  <td className="whitespace-nowrap">{Mes(n)}{n.paga_extra && <> <Etiqueta tono="acento">Extra</Etiqueta></>}</td>
                   <td className="text-muted">{n.empresa}</td>
                   <td className="num"><Importe valor={n.bruto} /></td>
-                  <td className="num"><Importe valor={n.retencion_irpf} /></td>
+                  <td className="num"><Importe valor={n.retencion_irpf} />{n.tipo_irpf != null && <div className="text-xs text-muted">{pct(n.tipo_irpf)}</div>}</td>
                   <td className="num"><Importe valor={n.seguridad_social} /></td>
                   <td className="num font-medium"><Importe valor={n.neto} /></td>
-                  <td className="text-right">
-                    <BorrarEnDosPasos etiqueta={`la nómina de ${fecha(n.fecha, { month: 'long', year: 'numeric' })}`} disabled={borrar.isPending} onBorrar={() => borrar.mutate(n.id)} />
+                  <td className="whitespace-nowrap text-right">
+                    <span className="inline-flex items-center">
+                      {n.tiene_pdf && (
+                        <a href={`/api/nominas/${n.id}/pdf`} target="_blank" rel="noreferrer" aria-label={`Ver la nómina de ${mes(n)}`}
+                          className="inline-flex rounded-lg p-1.5 text-muted hover:bg-panel-2 hover:text-ink"><FileText size={14} /></a>
+                      )}
+                      <Boton variante="fantasma" className="px-2 py-1" onClick={() => setEditando(n)} aria-label={`Corregir la nómina de ${mes(n)}`}><Pencil size={14} /></Boton>
+                      <BorrarEnDosPasos etiqueta={`la nómina de ${mes(n)}`} disabled={borrar.isPending} onBorrar={() => borrar.mutate(n.id)} />
+                    </span>
                   </td>
                 </tr>
               ))}
             </tbody>
           </Tabla>
-        ) : <Vacio>{d.banco.length ? 'Con los cobros del banco basta; registra alguna nómina si quieres el bruto y la retención exactos.' : 'Sincroniza el banco o registra tus nóminas para saber cuánto te han retenido.'}</Vacio>}
+        ) : <Vacio>Sube tus nóminas en PDF (puedes arrastrarlas aquí, varias a la vez) y la app saca el bruto, lo que te retienen de IRPF y la Seguridad Social.{d.banco.length ? ' Mientras tanto se estiman con los cobros del banco.' : ''}</Vacio>}
+        {d.nominas.length > 0 && <p className="mt-3 text-xs text-muted">Puedes arrastrar aquí los PDF. Si subes otra vez la nómina de un mes, se actualiza.</p>}
       </Tarjeta>
+      </div>
 
       <CalculadoraSueldo key={brutoSupuesto ?? d.bruto_12_meses ?? 0} brutoInicial={d.bruto_12_meses || brutoSupuesto} />
 
-      <Dialogo abierto={abierto} onCerrar={() => setAbierto(false)} titulo="Registrar nómina">
-        <Formulario onEnviar={(v) => crear.mutateAsync(v)}>
-          <Campo etiqueta="Empresa" name="empresa" placeholder="Empresa" />
-          <Campo etiqueta="Fecha" name="fecha" type="date" defaultValue={hoyISO()} required />
-          <Campo etiqueta="Bruto (€)" name="bruto" inputMode="decimal" required />
-          <Campo etiqueta="Retención IRPF (€)" name="retencion_irpf" inputMode="decimal" required />
-          <Campo etiqueta="Seguridad Social (€)" name="seguridad_social" inputMode="decimal" required />
-          <Campo etiqueta="Neto (€)" name="neto" inputMode="decimal" required />
-        </Formulario>
+      <Dialogo abierto={editando != null} onCerrar={() => setEditando(null)} titulo={editando && editando !== 'nueva' ? `Nómina de ${mes(editando)}` : 'Registrar nómina'}>
+        {editando && (() => {
+          const x = editando === 'nueva' ? null : editando
+          const valor = (v: number | null | undefined) => (v == null ? undefined : String(v).replace('.', ','))
+          return (
+            <Formulario key={x?.id ?? 'nueva'} onEnviar={(v) => guardar.mutateAsync(v)}>
+              <Campo etiqueta="Empresa" name="empresa" placeholder="Empresa" defaultValue={x?.empresa} />
+              <Campo etiqueta="Fecha" name="fecha" type="date" defaultValue={x?.fecha ?? hoyISO()} required />
+              <Campo etiqueta="Bruto (€)" name="bruto" inputMode="decimal" defaultValue={valor(x?.bruto)} required />
+              <Campo etiqueta="Retención IRPF (€)" name="retencion_irpf" inputMode="decimal" defaultValue={valor(x?.retencion_irpf)} required />
+              <Campo etiqueta="Tipo de IRPF (%)" name="tipo_irpf" inputMode="decimal" defaultValue={valor(x?.tipo_irpf)} placeholder="Opcional" />
+              <Campo etiqueta="Seguridad Social (€)" name="seguridad_social" inputMode="decimal" defaultValue={valor(x?.seguridad_social)} required />
+              <Campo etiqueta="Otras deducciones (€)" name="otras_deducciones" inputMode="decimal" defaultValue={valor(x?.otras_deducciones)} placeholder="Especie, anticipos…" />
+              <Campo etiqueta="Neto (€)" name="neto" inputMode="decimal" defaultValue={valor(x?.neto)} required />
+              <label className="flex items-center gap-2 text-sm sm:col-span-2">
+                <input type="checkbox" name="paga_extra" defaultChecked={x?.paga_extra} /> Es una paga extra suelta
+              </label>
+            </Formulario>
+          )
+        })()}
       </Dialogo>
     </>
   )

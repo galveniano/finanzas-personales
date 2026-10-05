@@ -78,17 +78,21 @@ def _meses(desde: date, n: int) -> list[date]:
 def _nomina_anual(cfg: dict | None) -> dict:
     """Neto de cada mes del año (con las extras) y totales para la renta."""
     if not cfg or not cfg.get("bruto_anual"):
-        return {"meses": {m: 0.0 for m in range(1, 13)}, "bruto": 0.0, "ss": 0.0, "irpf": 0.0}
+        return {"meses": {m: 0.0 for m in range(1, 13)}, "brutos": {m: 0.0 for m in range(1, 13)},
+                "bruto": 0.0, "ss": 0.0, "irpf": 0.0, "tipo": 0.0}
     bruto = float(cfg["bruto_anual"])
     c = calc_nomina.calcular(bruto, int(cfg.get("pagas", 14)))
     meses = {m: sum(x.neto for x in c.meses if x.mes == m) for m in range(1, 13)}
+    brutos = {m: sum(x.bruto for x in c.meses if x.mes == m) for m in range(1, 13)}
     variable = bruto * float(cfg.get("variable_pct", 0)) / 100
     ss_var = irpf_var = 0.0
     if variable:
         ss_var, irpf_var = variable * SS_TRABAJADOR_PCT / 100, variable * c.tipo_irpf / 100
         mes_var = int(cfg.get("mes_variable", 3))
         meses[mes_var] += variable - ss_var - irpf_var
-    return {"meses": meses, "bruto": bruto + variable, "ss": c.ss_anual + ss_var, "irpf": c.irpf_anual + irpf_var}
+        brutos[mes_var] += variable
+    return {"meses": meses, "brutos": brutos, "bruto": bruto + variable, "ss": c.ss_anual + ss_var,
+            "irpf": c.irpf_anual + irpf_var, "tipo": c.tipo_irpf}
 
 
 def _por_cliente(cfg: dict, d: date) -> list[tuple[str, float, float, float]]:
@@ -236,23 +240,44 @@ def ultima_renta(s: Session) -> dict | None:
     return {"anio": d.ejercicio, "resultado": float(d.importe), "casillas": casillas}
 
 
+def tipo_irpf_actual(nominas: list[Nomina]) -> float | None:
+    """El tipo de retención de la última nómina normal: es el que la empresa te aplica ahora."""
+    for x in sorted(nominas, key=lambda x: (x.fecha, not x.paga_extra), reverse=True):
+        if x.tipo_irpf is not None:
+            return float(x.tipo_irpf)
+        if x.bruto:
+            return round(float(x.retencion_irpf) / float(x.bruto) * 100, 2)
+    return None
+
+
 def _nomina_con_reales(s: Session, anio: int, prevista: dict) -> dict:
     """Las nóminas que hayas subido mandan en sus meses (bruto, Seguridad Social, IRPF retenido y neto);
-    el resto del año sigue la previsión."""
-    reales = [x for x in s.scalars(select(Nomina)).all() if x.fecha.year == anio]
+    el resto del año sigue la previsión, pero con el tipo de retención que te aplica la empresa en la
+    última nómina en vez del calculado."""
+    todas = s.scalars(select(Nomina)).all()
+    reales = [x for x in todas if x.fecha.year == anio]
     if not reales:
         return prevista
     meses = dict(prevista["meses"])
+    brutos = prevista.get("brutos") or {}
     cubiertos = {x.fecha.month for x in reales}
     neto_previsto = sum(prevista["meses"].values()) or 1.0
     resto = sum(v for m, v in prevista["meses"].items() if m not in cubiertos) / neto_previsto
     for m in cubiertos:
         meses[m] = sum(float(x.neto) for x in reales if x.fecha.month == m)
+    irpf_resto = prevista["irpf"] * resto
+    tipo = tipo_irpf_actual(reales)
+    if tipo is not None and brutos and prevista.get("tipo") is not None:
+        irpf_resto = 0.0
+        for m in range(1, 13):
+            if m not in cubiertos and brutos.get(m):
+                meses[m] = meses[m] + brutos[m] * (prevista["tipo"] - tipo) / 100
+                irpf_resto += brutos[m] * tipo / 100
     return {"meses": meses,
             "bruto": sum(float(x.bruto) for x in reales) + prevista["bruto"] * resto,
             "ss": sum(float(x.seguridad_social) for x in reales) + prevista["ss"] * resto,
-            "irpf": sum(float(x.retencion_irpf) for x in reales) + prevista["irpf"] * resto,
-            "reales": len(cubiertos)}
+            "irpf": sum(float(x.retencion_irpf) for x in reales) + irpf_resto,
+            "reales": len(cubiertos), "tipo_real": tipo}
 
 
 def _escala(base: float) -> float:
