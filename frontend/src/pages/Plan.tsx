@@ -139,7 +139,7 @@ export default function Plan() {
                       <div className="min-w-0">
                         <div className="font-medium">{i.concepto}</div>
                         <div className="text-xs text-muted">
-                          {i.vence ? `Hasta el ${fecha(i.vence, { day: 'numeric', month: 'long', year: 'numeric' })}`
+                          {i.vence ? `${i.presentado && i.tipo === 'renta' ? 'Se carga el' : 'Hasta el'} ${fecha(i.vence, { day: 'numeric', month: 'long', year: 'numeric' })}`
                             : `Hacia ${fecha(`${i.mes}-01`, { month: 'long', year: 'numeric' })} (fecha aproximada)`}
                         </div>
                       </div>

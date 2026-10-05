@@ -634,6 +634,10 @@ def calcular(s: Session, meses: int = 12) -> dict:
                                     "importe": r["resultado"], "presentado": False, "tipo": "renta",
                                     "vence": f"{anio + 1}-06-30"})
 
+    # Rentas ya presentadas con pagos por llegar (el 2.º plazo si la fraccionaste)
+    for p in plazos_rentas(s, inicio):
+        tabla.setdefault(p["fecha"][:7], Mes(p["fecha"][:7])).impuestos.append(
+            {"concepto": p["concepto"], "importe": p["importe"], "presentado": True, "tipo": "renta", "vence": p["fecha"]})
     for clave, linea in (_regularizacion_reta(s, supuestos, cfg, resumen_anios) + _tributos_locales(s, inicio)):
         if clave >= inicio.strftime("%Y-%m"):
             tabla.setdefault(clave, Mes(clave)).impuestos.append(linea)
@@ -673,6 +677,36 @@ def calcular(s: Session, meses: int = 12) -> dict:
             "liquidez_hoy": round(liquidez, 2), "colchon": round(colchon, 2),
             "meses": filas, "anios": [a for a in resumen_anios if a["anio"] in {d.year for d in ventana}],
             "anios_todos": resumen_anios}
+
+
+# --- Plazos de las rentas ya presentadas -----------------------------------------
+
+def plazos_rentas(s: Session, desde: date) -> list[dict]:
+    """Pagos de las rentas presentadas que aún no han llegado (el 2.º plazo de noviembre si la fraccionaste),
+    leídos del justificante. Las rentas subidas antes de leer los plazos se vuelven a leer de su PDF."""
+    from finanzas.importers import aeat
+    lista = []
+    for d in s.scalars(select(Declaracion).where(Declaracion.modelo == "100", Declaracion.ejercicio >= desde.year - 2)):
+        try:
+            casillas = json.loads(d.casillas) if d.casillas else {}
+        except ValueError:
+            casillas = {}
+        if "plazos" not in casillas and d.pdf:
+            try:
+                casillas = {**casillas, "plazos": aeat.leer_pdf(d.pdf).casillas.get("plazos", [])}
+                d.casillas = json.dumps(casillas)
+                s.commit()
+            except Exception:  # un PDF que ya no se puede leer no rompe la previsión
+                s.rollback()
+                continue
+        fraccionada = len(casillas.get("plazos") or []) > 1
+        for p in casillas.get("plazos") or []:
+            if p.get("fecha") and date.fromisoformat(p["fecha"]) >= desde:
+                lista.append({"anio": d.ejercicio, "plazo": p["plazo"], "importe": float(p["importe"]),
+                              "fecha": p["fecha"], "fraccionada": fraccionada,
+                              "concepto": f"Renta {d.ejercicio}" + (f" ({'1.er' if p['plazo'] == 1 else '2.º'} plazo)"
+                                                                    if fraccionada else "")})
+    return sorted(lista, key=lambda x: x["fecha"])
 
 
 # --- Seguridad Social y tributos locales en la previsión ------------------------

@@ -68,6 +68,10 @@ def pendiente(s: Session, prev: dict | None = None, hoy: date | None = None) -> 
             parte = (hoy.month - 1 + hoy.day / 31) / 12
             lineas.append({"concepto": f"Renta {r['anio']} (lo generado hasta hoy)",
                            "importe": round(r["resultado"] * parte, 2), "tipo": "renta", "en_curso": True})
+    # Rentas presentadas con un pago aún por cargar (el 2.º plazo de noviembre)
+    for p in prevision.plazos_rentas(s, hoy):
+        lineas.append({"concepto": f"{p['concepto']}, se carga el {date.fromisoformat(p['fecha']):%d/%m/%Y}",
+                       "importe": round(p["importe"], 2), "tipo": "renta", "en_curso": False})
     total = round(sum(x["importe"] for x in lineas), 2)
     return {"lineas": lineas, "total": total}
 
