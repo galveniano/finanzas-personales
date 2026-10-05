@@ -251,6 +251,14 @@ class Nomina(Base):
     retencion_irpf: Mapped[Decimal] = mapped_column(Dinero)
     seguridad_social: Mapped[Decimal] = mapped_column(Dinero)
     neto: Mapped[Decimal] = mapped_column(Dinero)
+    # Lo que trae el recibo además de los totales (vacío en las registradas a mano)
+    tipo_irpf: Mapped[Decimal | None] = mapped_column(Porcentaje, nullable=True)
+    base_irpf: Mapped[Decimal | None] = mapped_column(Dinero, nullable=True)
+    especie: Mapped[Decimal | None] = mapped_column(Dinero, nullable=True)
+    otras_deducciones: Mapped[Decimal | None] = mapped_column(Dinero, nullable=True)
+    paga_extra: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    nombre_fichero: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    pdf: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
 
 
 # --- Objetivos y pagos previstos -------------------------------------------
