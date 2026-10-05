@@ -193,10 +193,14 @@ class Cliente(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     nombre: Mapped[str] = mapped_column(String(120), unique=True)
     nif: Mapped[str] = mapped_column(String(20), default="")
+    # Para el documento de la factura
+    direccion: Mapped[str | None] = mapped_column(Text, nullable=True)
+    idioma: Mapped[str | None] = mapped_column(String(2), nullable=True)  # es | en
+    nota_factura: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class Factura(Base):
-    """Factura emitida como autónomo. Se registra aquí, no se emite desde la app."""
+    """Factura emitida como autónomo. Se registra aquí y, si quieres, se genera su documento."""
     __tablename__ = "facturas"
     id: Mapped[int] = mapped_column(primary_key=True)
     numero: Mapped[str] = mapped_column(String(40))
@@ -207,6 +211,8 @@ class Factura(Base):
     tipo_iva: Mapped[Decimal] = mapped_column(Porcentaje, default=Decimal("21"))
     tipo_retencion: Mapped[Decimal] = mapped_column(Porcentaje, default=Decimal("15"))
     fecha_cobro: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # JSON con las horas, el precio por hora y los días trabajados cuando sale del calendario
+    detalle: Mapped[str | None] = mapped_column(Text, nullable=True)
     cliente: Mapped[Cliente] = relationship()
 
     @property
