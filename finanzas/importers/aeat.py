@@ -86,6 +86,8 @@ def interpretar(paginas: list[str]) -> Justificante:
             break
     importe = Decimal("0")
     casillas = _casillas_renta(todo) if modelo == "100" else {}
+    if modelo == "100":
+        casillas["plazos"] = plazos_renta(todo)
     if m := re.search(r"IMPORTE:?\s*(-?[\d.]+,\d{2})", portada, re.IGNORECASE):
         importe = abs(_importe(m.group(1))) * signo
     elif "resultado" in casillas:
@@ -115,6 +117,22 @@ def _casillas_renta(texto: str) -> dict:
         if casilla in CASILLAS_RENTA and CASILLAS_RENTA[casilla] not in valores:
             valores[CASILLAS_RENTA[casilla]] = float(_importe(cifra))
     return valores
+
+
+def plazos_renta(texto: str) -> list[dict]:
+    """Pagos de una renta a ingresar: los dos plazos si la fraccionaste (60 % y 40 %) o el pago único,
+    con el día en que se carga si está domiciliada (si no, la fecha queda vacía)."""
+    cargos = [(m.start(), datetime.strptime(m.group(1), "%d/%m/%Y").date().isoformat())
+              for m in re.finditer(r"se cargar[aá] el d[ií]a\s*:?\s*(\d{2}/\d{2}/\d{4})", texto)]
+    plazos = list(re.finditer(r"Importe del (primer|segundo) plazo[^:]*:\s*([\d.]+,\d{2})", texto))
+    lista = []
+    for i, m in enumerate(plazos):
+        fin = plazos[i + 1].start() if i + 1 < len(plazos) else len(texto)
+        fecha = next((f for pos, f in cargos if m.end() <= pos < fin), None)
+        lista.append({"plazo": 1 if m.group(1) == "primer" else 2, "importe": float(_importe(m.group(2))), "fecha": fecha})
+    if not lista and cargos and (m := re.search(r"Resultado a ingresar o devolver\s*:?\s*([\d.]+,\d{2})", texto)):
+        lista.append({"plazo": 1, "importe": float(_importe(m.group(1))), "fecha": cargos[0][1]})
+    return lista
 
 
 def leer_pdf(contenido: bytes) -> Justificante:

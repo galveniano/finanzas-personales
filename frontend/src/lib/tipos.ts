@@ -206,9 +206,13 @@ export interface SupuestosPrevision {
   gastos_autonomo_mes: number; gasto_habitual_mes: number | null; meses_sin_facturar: number[]
   dias_planificados?: Record<string, Record<string, number>>
 }
+export interface ImpuestoPrevisto {
+  concepto: string; importe: number; presentado: boolean
+  tipo?: 'trimestre' | 'renta' | 'reta' | 'local' | 'ajuste'; vence?: string | null
+}
 export interface MesPrevision {
   mes: string; nomina: number; facturado: number; cobros: number; iva: number; retenciones: number; alquiler: number
-  gastos: number; pagos_previstos: number; impuestos: { concepto: string; importe: number; presentado: boolean }[]
+  gastos: number; pagos_previstos: number; impuestos: ImpuestoPrevisto[]
   total_impuestos: number; neto: number; liquidez: number
   objetivos: { concepto: string; importe: number }[]; total_objetivos: number
   ya_este_mes: { nomina: number; cobros: number; alquiler: number; gastos: number; impuestos: number } | null

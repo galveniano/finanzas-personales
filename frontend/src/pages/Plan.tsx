@@ -42,6 +42,8 @@ export default function Plan() {
   const impuestos = prev?.meses.reduce((s, m) => s + m.total_impuestos, 0) ?? 0
   const bajoColchon = prev?.meses.find((m) => m.bajo_colchon)
   const ya = prev?.meses[0]?.ya_este_mes
+  const proximosImpuestos = (prev?.meses ?? []).flatMap((m) => m.impuestos.filter((i) => i.tipo !== 'ajuste' && i.importe)
+    .map((i) => ({ ...i, mes: m.mes })))
 
   return (
     <>
@@ -55,7 +57,7 @@ export default function Plan() {
           <Dato etiqueta="Tienes hoy" valor={eur(d.liquidez)} nota="Cuentas corrientes y de ahorro" />
           <Dato etiqueta="Pagos en 12 meses" valor={eur(d.pendiente_12_meses)}
             nota={d.financiado_hipoteca ? `Sin los ${eur(d.financiado_hipoteca)} que pone la hipoteca prevista` : 'Los de abajo'} />
-          <Dato etiqueta="Impuestos en 12 meses" valor={sinSupuestos || !prev ? '—' : eur(impuestos)} nota="IVA, 130 y renta" />
+          <Dato etiqueta="Impuestos en 12 meses" valor={sinSupuestos || !prev ? '—' : eur(impuestos)} nota="IVA, 130, renta, autónomos e IBI" />
           {ultimo && !sinSupuestos
             ? <Dato etiqueta={`Tendrás en ${fecha(`${ultimo.mes}-01`, { month: 'long', year: 'numeric' })}`} valor={eur(ultimo.liquidez)}
                 tono={ultimo.liquidez < 0 ? 'neg' : 'pos'} nota={ahorroTexto((ultimo.liquidez - prev!.liquidez_hoy) / prev!.meses.length)} />
@@ -119,6 +121,44 @@ export default function Plan() {
           })}
         </div>
       ) : <Vacio>Crea objetivos como la boda o un viaje y te digo cuánto apartar cada mes.</Vacio>}
+
+      {prev && !sinSupuestos && (
+        <>
+          <div className="mt-8 mb-3 flex items-baseline justify-between gap-3">
+            <h2 className="text-lg font-semibold">Impuestos que vienen</h2>
+            <Link to="/impuestos" className="text-sm text-accent">Ver en Impuestos</Link>
+          </div>
+          <Tarjeta>
+            {proximosImpuestos.length ? (
+              <ol className="relative space-y-1 border-l border-line pl-5">
+                {proximosImpuestos.map((i, n) => {
+                  const dias = i.vence ? diasHasta(i.vence) : null
+                  return (
+                    <li key={`${i.mes}-${n}`} className="relative flex flex-wrap items-center justify-between gap-3 py-2">
+                      <span className={`absolute top-1/2 -left-[27px] size-3 -translate-y-1/2 rounded-full border-2 ${i.importe < 0 ? 'border-accent bg-accent' : 'border-line bg-panel'}`} />
+                      <div className="min-w-0">
+                        <div className="font-medium">{i.concepto}</div>
+                        <div className="text-xs text-muted">
+                          {i.vence ? `${i.presentado && i.tipo === 'renta' ? 'Se carga el' : 'Hasta el'} ${fecha(i.vence, { day: 'numeric', month: 'long', year: 'numeric' })}`
+                            : `Hacia ${fecha(`${i.mes}-01`, { month: 'long', year: 'numeric' })} (fecha aproximada)`}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {i.presentado ? <Etiqueta tono="bien">Presentado</Etiqueta> : <Etiqueta tono="neutro">Estimado</Etiqueta>}
+                        {dias != null && dias <= 30 && <Etiqueta tono={dias < 0 ? 'mal' : 'aviso'}>{cuandoVence(dias)}</Etiqueta>}
+                        <Importe valor={-i.importe} />
+                      </div>
+                    </li>
+                  )
+                })}
+              </ol>
+            ) : <Vacio>No hay impuestos previstos en los próximos 12 meses.</Vacio>}
+            <p className="mt-3 text-xs text-muted">El IVA (303) y el IRPF (130) de cada trimestre, la renta de junio, la regularización de la cuota de autónomos
+              (con la devolución por pluriactividad restada) y los tributos que pagaste el año pasado, como el IBI o el de circulación.
+              Lo no presentado sale de la previsión. La cuota mensual de autónomos va en los gastos.</p>
+          </Tarjeta>
+        </>
+      )}
 
       <h2 className="mt-8 mb-3 text-lg font-semibold">Pagos previstos</h2>
       <Tarjeta>
@@ -206,7 +246,7 @@ export default function Plan() {
             </Tabla>
           </div>
           <div>
-            <p className="mt-3 text-xs text-muted">Clientes es lo que cobras: base más IVA menos retención. El IVA y el 130 de cada trimestre se pagan el mes siguiente; la renta, en junio.
+            <p className="mt-3 text-xs text-muted">Clientes es lo que cobras: base más IVA menos retención. El IVA y el 130 de cada trimestre se pagan el mes siguiente; la renta, en junio; la regularización de autónomos, hacia noviembre del año siguiente.
               «Pagos» son los pagos previstos de arriba y los objetivos con fecha que no tienen pagos apuntados.</p>
             {ya && (
               <p className="mt-2 text-xs text-muted">Este mes ya han pasado por tus cuentas {eur(ya.nomina + ya.cobros + ya.alquiler)} de ingresos,
