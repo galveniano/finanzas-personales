@@ -140,3 +140,47 @@ def test_dias_planificados_mandan_en_ese_mes():
         fila = next(m for m in c.get("/api/prevision").json()["meses"] if m["mes"] == mes)
         assert fila["facturado"] == 8800  # vuelve a los 20 días
         assert c.put("/api/prevision/dias", json={"cliente": "Cliente A", "mes": "nov-2026", "dias": 3}).status_code == 400
+
+
+def test_impuestos_con_fecha_y_tributos_locales_en_la_prevision():
+    """Los trimestres y la renta llevan su plazo; el IBI del año pasado se repite y lo de Hacienda no."""
+    from datetime import date, timedelta
+    from decimal import Decimal as D
+    from finanzas import db
+    from finanzas.models import Categoria, Cuenta, Movimiento
+    from sqlalchemy import select
+    hace_dos = (date.today().replace(day=1) - timedelta(days=40)).replace(day=15)
+    s = db.SessionLocal()
+    impuestos = s.scalar(select(Categoria).where(Categoria.nombre == "Impuestos"))
+    cuenta = Cuenta(nombre="Cuenta tributos ejemplo")
+    s.add(cuenta)
+    s.flush()
+    for n, concepto in enumerate(("RECIBO AYUNTAMIENTO EJEMPLO IBI URBANA", "AEAT MODELO 303 EJEMPLO")):
+        s.add(Movimiento(cuenta_id=cuenta.id, fecha=hace_dos, concepto=concepto, importe=D("-345.67"),
+                         categoria_id=impuestos.id, huella=f"tributo-ej-{n}"))
+    s.commit()
+    s.close()
+    with TestClient(app) as c:
+        c.put("/api/prevision/supuestos", json=SUPUESTOS)
+        d = c.get("/api/prevision").json()
+        lineas = [i for m in d["meses"] for i in m["impuestos"]]
+        assert all(i["vence"] for i in lineas if i["tipo"] in ("trimestre", "renta"))
+        assert all(i["vence"][8:] in ("20", "30") for i in lineas if i["tipo"] == "trimestre")
+        locales = [(m["mes"], i) for m in d["meses"] for i in m["impuestos"] if i["tipo"] == "local"]
+        assert [(mes, i["importe"]) for mes, i in locales] == [(f"{hace_dos.year + 1}-{hace_dos.month:02d}", 345.67)]
+        assert "IBI" in locales[0][1]["concepto"]
+
+
+def test_regularizacion_de_la_cuota_de_autonomos():
+    from datetime import date
+    from finanzas import db, prevision
+    from finanzas.fiscal import reta
+    anio = date.today().year
+    if anio not in reta.TABLAS:
+        pytest.skip("sin tabla de tramos para este año")
+    s = db.SessionLocal()
+    resumen = [{"anio": anio, "entradas": {"facturado": 96000.0}}]
+    lineas = prevision._regularizacion_reta(s, SUPUESTOS, {"gastos_autonomo_mes": 300}, resumen)
+    s.close()
+    (clave, linea), = lineas
+    assert clave == f"{anio + 1}-11" and linea["tipo"] == "reta" and linea["importe"] > 0

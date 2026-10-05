@@ -97,5 +97,12 @@ def calcular(s: Session, regularizacion: list[dict] | None = None) -> list[dict]
             else:
                 texto += ", aunque la devolución por pluriactividad lo compensaría."
             avisos.append({"nivel": "aviso", "texto": texto, "ir": "/impuestos"})
+    from finanzas import prevision
+    for p in prevision.plazos_rentas(s, hoy):
+        cuando = date.fromisoformat(p["fecha"])
+        if (cuando - hoy).days <= 60:
+            avisos.append({"nivel": "aviso" if (cuando - hoy).days <= 15 else "info",
+                           "texto": f"El {cuando:%d/%m/%Y} Hacienda te carga {_eur(p['importe'])} de la {p['concepto'][0].lower()}"
+                                    f"{p['concepto'][1:]}: ten el dinero en la cuenta domiciliada.", "ir": "/impuestos"})
     orden = {"error": 0, "aviso": 1, "info": 2}
     return sorted(avisos, key=lambda a: orden[a["nivel"]])

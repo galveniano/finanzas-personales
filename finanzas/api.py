@@ -522,6 +522,18 @@ class NominaIn(BaseModel):
     retencion_irpf: Decimal
     seguridad_social: Decimal
     neto: Decimal
+    tipo_irpf: Decimal | None = None
+    especie: Decimal | None = None
+    otras_deducciones: Decimal | None = None
+    paga_extra: bool | None = None
+
+
+def _fila_nomina(x: Nomina) -> dict:
+    return {"id": x.id, "empresa": x.empresa, "fecha": f(x.fecha), "bruto": n(x.bruto),
+            "retencion_irpf": n(x.retencion_irpf), "seguridad_social": n(x.seguridad_social), "neto": n(x.neto),
+            "tipo_irpf": n(x.tipo_irpf), "base_irpf": n(x.base_irpf), "especie": n(x.especie),
+            "otras_deducciones": n(x.otras_deducciones), "paga_extra": bool(x.paga_extra),
+            "tiene_pdf": bool(x.nombre_fichero)}
 
 
 def _nominas_banco(s: Session) -> list[Movimiento]:
@@ -538,6 +550,7 @@ def _nominas_banco(s: Session) -> list[Movimiento]:
 def listar_nominas(anio: int | None = None, s: Session = SesionDB):
     """Las nóminas registradas mandan; si no hay, se sacan de los ingresos de nómina del banco
     (solo se ve el neto: bruto, IRPF y Seguridad Social se estiman a partir de él)."""
+    from finanzas import prevision
     anio = anio or date.today().year
     nominas = s.scalars(select(Nomina).order_by(Nomina.fecha.desc())).all()
     del_anio = [x for x in nominas if x.fecha.year == anio]
@@ -546,6 +559,11 @@ def listar_nominas(anio: int | None = None, s: Session = SesionDB):
     hace_un_anio = date.today() - timedelta(days=365)
     ultimos = [x for x in nominas if x.fecha > hace_un_anio]
     bruto_12 = n(sum((x.bruto for x in ultimos), CERO)) if ultimos else None
+    normales = [x for x in ultimos if not x.paga_extra]
+    if normales and len({(x.fecha.year, x.fecha.month) for x in ultimos}) < 12:
+        # Con menos de un año subido, la media de las nóminas normales por las pagas del año
+        pagas = int((prevision.leer(s).get("nomina") or {}).get("pagas") or 14)
+        bruto_12 = round(float(sum((x.bruto for x in normales), CERO)) / len(normales) * pagas, 2)
 
     banco = _nominas_banco(s)
     estimado, fuente = None, "nominas" if del_anio else "ninguna"
@@ -567,9 +585,8 @@ def listar_nominas(anio: int | None = None, s: Session = SesionDB):
     return {"anio": anio, "totales": totales, "fuente": fuente, "bruto_12_meses": bruto_12, "estimado_banco": estimado,
             "banco": [{"id": m.id, "fecha": f(m.fecha), "concepto": m.concepto, "importe": n(m.importe),
                        "cuenta": m.cuenta.nombre} for m in banco],
-            "nominas": [{"id": x.id, "empresa": x.empresa, "fecha": f(x.fecha), "bruto": n(x.bruto),
-                         "retencion_irpf": n(x.retencion_irpf), "seguridad_social": n(x.seguridad_social),
-                         "neto": n(x.neto)} for x in nominas]}
+            "tipo_irpf_actual": prevision.tipo_irpf_actual(nominas),
+            "nominas": [_fila_nomina(x) for x in nominas]}
 
 
 @router.get("/nominas/calculo")
@@ -591,6 +608,87 @@ def crear_nomina(datos: NominaIn, s: Session = SesionDB):
     s.add(Nomina(**datos.model_dump()))
     s.commit()
     return {"ok": True}
+
+
+@router.put("/nominas/{nomina_id}")
+def editar_nomina(nomina_id: int, datos: NominaIn, s: Session = SesionDB):
+    x = _obtener(s, Nomina, nomina_id)
+    for k, v in datos.model_dump().items():
+        setattr(x, k, v)
+    s.commit()
+    return {"ok": True}
+
+
+def _leer_nomina(s: Session, contenido: bytes, nombre: str):
+    """Primero con reglas; si no se puede o no cuadra y hay IA configurada, se lo pide al modelo."""
+    from finanzas import documentos, ia
+    from finanzas.importers import nomina_pdf
+    try:
+        lectura, fallo = nomina_pdf.leer_pdf(contenido), None
+    except nomina_pdf.ErrorNomina as e:
+        lectura, fallo = None, e
+    if lectura and lectura.cuadra and not lectura.avisos:
+        return lectura
+    cfg = ia.configuracion(s)
+    if cfg.lista:
+        try:
+            texto = "\n".join(documentos.texto_pdf(contenido))
+            if texto.strip():
+                datos = ia.extraer(cfg, nomina_pdf.PROMPT, f"Fichero: {nombre}\n\n{texto[:12000]}",
+                                   nomina_pdf.HERRAMIENTA)
+                leida = nomina_pdf.desde_ia(datos)
+                if leida.cuadra or not lectura:
+                    return leida
+        except (ia.ErrorIA, nomina_pdf.ErrorNomina, ValueError):
+            pass
+    if lectura:
+        return lectura
+    raise fallo
+
+
+def _guardar_nomina(s: Session, contenido: bytes, nombre: str) -> dict:
+    from finanzas.importers import nomina_pdf
+    lectura = _leer_nomina(s, contenido, nombre)
+    # La misma nómina subida otra vez (o corregida por la empresa) sustituye a la anterior
+    mismo_mes = [x for x in s.scalars(select(Nomina)).all()
+                 if (x.fecha.year, x.fecha.month) == (lectura.fecha.year, lectura.fecha.month)
+                 and bool(x.paga_extra) == lectura.paga_extra and x.empresa.lower() == lectura.empresa.lower()]
+    x = mismo_mes[0] if mismo_mes else Nomina()
+    for k in ("empresa", "fecha", "bruto", "seguridad_social", "retencion_irpf", "neto", "tipo_irpf", "base_irpf",
+              "especie", "otras_deducciones", "paga_extra"):
+        setattr(x, k, getattr(lectura, k))
+    x.nombre_fichero, x.pdf = nombre[:200], contenido
+    s.add(x)
+    s.commit()
+    mes = f"{nomina_pdf.MESES[lectura.fecha.month - 1]} de {lectura.fecha.year}"
+    texto = (f"Paga extra de {mes}" if lectura.paga_extra else f"Nómina de {mes}") + (
+        " (actualizada)" if mismo_mes else "")
+    return {"mensaje": texto, "avisos": lectura.avisos, "nomina": _fila_nomina(x)}
+
+
+@router.post("/nominas/pdf")
+async def subir_nominas(ficheros: list[UploadFile] = File(...), s: Session = SesionDB):
+    """Nóminas en PDF, varias a la vez: bruto, Seguridad Social, IRPF retenido y líquido de cada una."""
+    from finanzas.importers import nomina_pdf
+    resultados = []
+    for fichero in ficheros:
+        contenido = await fichero.read()
+        nombre = fichero.filename or "nomina.pdf"
+        try:
+            resultados.append({"fichero": nombre, "ok": True, **_guardar_nomina(s, contenido, nombre)})
+        except nomina_pdf.ErrorNomina as e:
+            s.rollback()
+            resultados.append({"fichero": nombre, "ok": False, "mensaje": str(e), "avisos": []})
+    return {"resultados": resultados}
+
+
+@router.get("/nominas/{nomina_id}/pdf")
+def pdf_nomina(nomina_id: int, s: Session = SesionDB):
+    x = _obtener(s, Nomina, nomina_id)
+    if not x.pdf:
+        raise HTTPException(404, "Esta nómina no tiene PDF")
+    return Response(x.pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="nomina-{x.fecha:%Y-%m}.pdf"'})
 
 
 @router.delete("/nominas/{nomina_id}")

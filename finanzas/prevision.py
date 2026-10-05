@@ -78,17 +78,21 @@ def _meses(desde: date, n: int) -> list[date]:
 def _nomina_anual(cfg: dict | None) -> dict:
     """Neto de cada mes del año (con las extras) y totales para la renta."""
     if not cfg or not cfg.get("bruto_anual"):
-        return {"meses": {m: 0.0 for m in range(1, 13)}, "bruto": 0.0, "ss": 0.0, "irpf": 0.0}
+        return {"meses": {m: 0.0 for m in range(1, 13)}, "brutos": {m: 0.0 for m in range(1, 13)},
+                "bruto": 0.0, "ss": 0.0, "irpf": 0.0, "tipo": 0.0}
     bruto = float(cfg["bruto_anual"])
     c = calc_nomina.calcular(bruto, int(cfg.get("pagas", 14)))
     meses = {m: sum(x.neto for x in c.meses if x.mes == m) for m in range(1, 13)}
+    brutos = {m: sum(x.bruto for x in c.meses if x.mes == m) for m in range(1, 13)}
     variable = bruto * float(cfg.get("variable_pct", 0)) / 100
     ss_var = irpf_var = 0.0
     if variable:
         ss_var, irpf_var = variable * SS_TRABAJADOR_PCT / 100, variable * c.tipo_irpf / 100
         mes_var = int(cfg.get("mes_variable", 3))
         meses[mes_var] += variable - ss_var - irpf_var
-    return {"meses": meses, "bruto": bruto + variable, "ss": c.ss_anual + ss_var, "irpf": c.irpf_anual + irpf_var}
+        brutos[mes_var] += variable
+    return {"meses": meses, "brutos": brutos, "bruto": bruto + variable, "ss": c.ss_anual + ss_var,
+            "irpf": c.irpf_anual + irpf_var, "tipo": c.tipo_irpf}
 
 
 def _por_cliente(cfg: dict, d: date) -> list[tuple[str, float, float, float]]:
@@ -236,23 +240,44 @@ def ultima_renta(s: Session) -> dict | None:
     return {"anio": d.ejercicio, "resultado": float(d.importe), "casillas": casillas}
 
 
+def tipo_irpf_actual(nominas: list[Nomina]) -> float | None:
+    """El tipo de retención de la última nómina normal: es el que la empresa te aplica ahora."""
+    for x in sorted(nominas, key=lambda x: (x.fecha, not x.paga_extra), reverse=True):
+        if x.tipo_irpf is not None:
+            return float(x.tipo_irpf)
+        if x.bruto:
+            return round(float(x.retencion_irpf) / float(x.bruto) * 100, 2)
+    return None
+
+
 def _nomina_con_reales(s: Session, anio: int, prevista: dict) -> dict:
     """Las nóminas que hayas subido mandan en sus meses (bruto, Seguridad Social, IRPF retenido y neto);
-    el resto del año sigue la previsión."""
-    reales = [x for x in s.scalars(select(Nomina)).all() if x.fecha.year == anio]
+    el resto del año sigue la previsión, pero con el tipo de retención que te aplica la empresa en la
+    última nómina en vez del calculado."""
+    todas = s.scalars(select(Nomina)).all()
+    reales = [x for x in todas if x.fecha.year == anio]
     if not reales:
         return prevista
     meses = dict(prevista["meses"])
+    brutos = prevista.get("brutos") or {}
     cubiertos = {x.fecha.month for x in reales}
     neto_previsto = sum(prevista["meses"].values()) or 1.0
     resto = sum(v for m, v in prevista["meses"].items() if m not in cubiertos) / neto_previsto
     for m in cubiertos:
         meses[m] = sum(float(x.neto) for x in reales if x.fecha.month == m)
+    irpf_resto = prevista["irpf"] * resto
+    tipo = tipo_irpf_actual(reales)
+    if tipo is not None and brutos and prevista.get("tipo") is not None:
+        irpf_resto = 0.0
+        for m in range(1, 13):
+            if m not in cubiertos and brutos.get(m):
+                meses[m] = meses[m] + brutos[m] * (prevista["tipo"] - tipo) / 100
+                irpf_resto += brutos[m] * tipo / 100
     return {"meses": meses,
             "bruto": sum(float(x.bruto) for x in reales) + prevista["bruto"] * resto,
             "ss": sum(float(x.seguridad_social) for x in reales) + prevista["ss"] * resto,
-            "irpf": sum(float(x.retencion_irpf) for x in reales) + prevista["irpf"] * resto,
-            "reales": len(cubiertos)}
+            "irpf": sum(float(x.retencion_irpf) for x in reales) + irpf_resto,
+            "reales": len(cubiertos), "tipo_real": tipo}
 
 
 def _escala(base: float) -> float:
@@ -604,10 +629,11 @@ def calcular(s: Session, meses: int = 12) -> dict:
                     "iva": round(iva_t, 2), "irpf": round(p130, 2), "exento_130": _exento_130(cfg),
                     "presentado_303": real_303 is not None, "presentado_130": real_130 is not None}
                 destino = tabla.setdefault(pago.strftime("%Y-%m"), Mes(pago.strftime("%Y-%m")))
+                vence = date(pago.year, pago.month, 30 if pago.month == 1 else 20).isoformat()
                 for concepto, importe, real in ((f"IVA {t}T (303)", iva_t, real_303), (f"IRPF {t}T (130)", p130, real_130)):
                     if importe:
                         destino.impuestos.append({"concepto": concepto, "importe": round(importe, 2),
-                                                  "presentado": real is not None})
+                                                  "presentado": real is not None, "tipo": "trimestre", "vence": vence})
         _, alquiler_tributa = _alquiler(s, anio)
         imputacion_app = imputacion_activos(s, anio)
         r = _renta(cfg, nom, facturado_anio, ret_anio, acumulado["pagos130"], alquiler_tributa, imputacion_app)
@@ -623,14 +649,23 @@ def calcular(s: Session, meses: int = 12) -> dict:
         resumen_anios.append(r)
         if r["resultado"] > 0 and cfg.get("fraccionar_renta"):
             # Fraccionada: el 60 % en junio y el 40 % a primeros de noviembre
-            for mes, parte, texto in (("06", 0.6, "1.er plazo"), ("11", 0.4, "2.º plazo")):
+            for mes, dia, parte, texto in (("06", 30, 0.6, "1.er plazo"), ("11", 5, 0.4, "2.º plazo")):
                 destino = tabla.setdefault(f"{anio + 1}-{mes}", Mes(f"{anio + 1}-{mes}"))
                 destino.impuestos.append({"concepto": f"Renta {anio} ({texto})", "importe": round(r["resultado"] * parte, 2),
-                                          "presentado": False})
+                                          "presentado": False, "tipo": "renta", "vence": f"{anio + 1}-{mes}-{dia:02d}"})
         elif r["resultado"]:
             junio = tabla.setdefault(f"{anio + 1}-06", Mes(f"{anio + 1}-06"))
             junio.impuestos.append({"concepto": f"Renta {anio}" + (" (a pagar)" if r["resultado"] > 0 else " (a devolver)"),
-                                    "importe": r["resultado"], "presentado": False})
+                                    "importe": r["resultado"], "presentado": False, "tipo": "renta",
+                                    "vence": f"{anio + 1}-06-30"})
+
+    # Rentas ya presentadas con pagos por llegar (el 2.º plazo si la fraccionaste)
+    for p in plazos_rentas(s, inicio):
+        tabla.setdefault(p["fecha"][:7], Mes(p["fecha"][:7])).impuestos.append(
+            {"concepto": p["concepto"], "importe": p["importe"], "presentado": True, "tipo": "renta", "vence": p["fecha"]})
+    for clave, linea in (_regularizacion_reta(s, supuestos, cfg, resumen_anios) + _tributos_locales(s, inicio)):
+        if clave >= inicio.strftime("%Y-%m"):
+            tabla.setdefault(clave, Mes(clave)).impuestos.append(linea)
 
     # Este mes ya ha pasado en parte y el saldo de hoy lo incluye: solo cuenta lo que falta
     ya = ya_este_mes(s)
@@ -643,7 +678,7 @@ def calcular(s: Session, meses: int = 12) -> dict:
     pendientes = sum(i["importe"] for i in actual.impuestos if i["importe"] > 0)
     if ya["impuestos"] and pendientes:
         actual.impuestos.append({"concepto": "Ya pagado este mes", "importe": -round(min(ya["impuestos"], pendientes), 2),
-                                 "presentado": True})
+                                 "presentado": True, "tipo": "ajuste", "vence": None})
 
     liquidez = float(sum((c.saldo * c.parte for c in s.scalars(select(Cuenta).where(
         Cuenta.activa, Cuenta.tipo.in_(["corriente", "ahorro"])))), Decimal(0)))
@@ -668,3 +703,76 @@ def calcular(s: Session, meses: int = 12) -> dict:
             "meses": filas, "anios": [a for a in resumen_anios if a["anio"] in {d.year for d in ventana}],
             "anios_todos": resumen_anios}
 
+
+# --- Plazos de las rentas ya presentadas -----------------------------------------
+
+def plazos_rentas(s: Session, desde: date) -> list[dict]:
+    """Pagos de las rentas presentadas que aún no han llegado (el 2.º plazo de noviembre si la fraccionaste),
+    leídos del justificante. Las rentas subidas antes de leer los plazos se vuelven a leer de su PDF."""
+    from finanzas.importers import aeat
+    lista = []
+    for d in s.scalars(select(Declaracion).where(Declaracion.modelo == "100", Declaracion.ejercicio >= desde.year - 2)):
+        try:
+            casillas = json.loads(d.casillas) if d.casillas else {}
+        except ValueError:
+            casillas = {}
+        if "plazos" not in casillas and d.pdf:
+            try:
+                casillas = {**casillas, "plazos": aeat.leer_pdf(d.pdf).casillas.get("plazos", [])}
+                d.casillas = json.dumps(casillas)
+                s.commit()
+            except Exception:  # un PDF que ya no se puede leer no rompe la previsión
+                s.rollback()
+                continue
+        fraccionada = len(casillas.get("plazos") or []) > 1
+        for p in casillas.get("plazos") or []:
+            if p.get("fecha") and date.fromisoformat(p["fecha"]) >= desde:
+                lista.append({"anio": d.ejercicio, "plazo": p["plazo"], "importe": float(p["importe"]),
+                              "fecha": p["fecha"], "fraccionada": fraccionada,
+                              "concepto": f"Renta {d.ejercicio}" + (f" ({'1.er' if p['plazo'] == 1 else '2.º'} plazo)"
+                                                                    if fraccionada else "")})
+    return sorted(lista, key=lambda x: x["fecha"])
+
+
+# --- Seguridad Social y tributos locales en la previsión ------------------------
+
+MES_REGULARIZACION_RETA = 11  # aproximado: la Seguridad Social regulariza cuando Hacienda le pasa la renta
+
+
+def _regularizacion_reta(s: Session, supuestos: dict, cfg: dict, resumen_anios: list[dict]) -> list[tuple[str, dict]]:
+    """Lo que la Seguridad Social reclamaría o devolvería de la cuota de autónomos de cada año (con la
+    devolución por pluriactividad ya restada). Se pone en noviembre del año siguiente: la fecha real
+    depende de cuándo lo resuelva, así que es aproximada."""
+    from finanzas import hacienda  # hacienda importa este módulo
+    prev = {"supuestos": supuestos, "anios_todos": resumen_anios, "gastos_autonomo_mes": cfg.get("gastos_autonomo_mes")}
+    lineas = []
+    for r in hacienda.revision_reta(s, prev):
+        neto = round(r["a_pagar"] - r["a_devolver"] - r["devolucion_pluriactividad"], 2)
+        if abs(neto) < 1:
+            continue
+        clave = f"{r['anio'] + 1}-{MES_REGULARIZACION_RETA:02d}"
+        lineas.append((clave, {"concepto": f"Cuota de autónomos {r['anio']} ({'a pagar' if neto > 0 else 'a devolver'})",
+                               "importe": neto, "presentado": False, "tipo": "reta", "vence": None}))
+    return lineas
+
+
+PATRON_TRIBUTO_LOCAL = ("ibi", "i.b.i", "bienes inmuebles", "ivtm", "vehiculo", "vehículo", "circulacion",
+                        "circulación", "basura", "ayuntamiento", "ayto", "region de murcia", "región de murcia",
+                        "atrm", "recaudacion", "recaudación", "tasa ")
+
+
+def _tributos_locales(s: Session, inicio: date) -> list[tuple[str, dict]]:
+    """IBI, impuesto de circulación, basuras...: los cargos en «Impuestos» de los últimos 12 meses que no son
+    de Hacienda se repiten el mismo mes del año siguiente. No están en el gasto habitual (que quita los
+    impuestos), así que sin esto no saldrían en la previsión."""
+    desde = date(inicio.year - 1, inicio.month, 1)
+    lineas = []
+    for m in movimientos_tuyos(s, desde, inicio):
+        concepto = (m.concepto or "").lower()
+        if m.importe >= 0 or m.categoria != "Impuestos" or not any(p in concepto for p in PATRON_TRIBUTO_LOCAL):
+            continue
+        cuando = date(m.fecha.year + 1, m.fecha.month, min(m.fecha.day, 28))
+        lineas.append((cuando.strftime("%Y-%m"), {"concepto": f"{(m.concepto or 'Tributo').strip()[:40]} (como el año pasado)",
+                                                  "importe": round(-m.tuyo, 2), "presentado": False, "tipo": "local",
+                                                  "vence": cuando.isoformat()}))
+    return lineas

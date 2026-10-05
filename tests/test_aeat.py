@@ -58,3 +58,66 @@ def test_renta_resultado_y_casillas():
     assert j.importe == aeat_mod.Decimal("-250.50") and j.resultado == "devolver"
     assert j.casillas["rendimiento_trabajo"] == 30000 and j.casillas["gastos_actividad"] == 5000
     assert j.casillas["cuota"] == 12000 and j.casillas["pagos_130"] == 6000
+
+
+INGRESO_FRACCIONADO = """Resultado a ingresar o devolver
+: 1.000,00
+Declaración a Ingresar. Datos del ingreso
+ Fraccionamiento del pago en dos plazos
+Importe del primer plazo (60% del resultado de la declaración)
+: 600,00
+Forma de pago
+: DOMICILIACIÓN DEL IMPORTE A INGRESAR
+El importe de la domiciliación se cargará el día
+: 30/06/{a}
+Declaración a Ingresar. Datos del ingreso del segundo plazo
+ Importe del segundo plazo (40% del resultado de la declaración)
+: 400,00
+Forma de pago
+: DOMICILIACIÓN DEL IMPORTE A INGRESAR
+El importe de la domiciliación se cargará el día
+: 05/11/{a}
+"""
+
+
+def test_renta_fraccionada_lee_los_dos_plazos():
+    from finanzas.importers.aeat import plazos_renta
+    assert plazos_renta(INGRESO_FRACCIONADO.format(a=2026)) == [
+        {"plazo": 1, "importe": 600.0, "fecha": "2026-06-30"}, {"plazo": 2, "importe": 400.0, "fecha": "2026-11-05"}]
+    unico = "Resultado a ingresar o devolver\n: 250,00\nEl importe de la domiciliación se cargará el día\n: 30/06/2026\n"
+    assert plazos_renta(unico) == [{"plazo": 1, "importe": 250.0, "fecha": "2026-06-30"}]
+    assert plazos_renta("Resultado a ingresar o devolver\n: -80,00\n") == []
+
+
+def test_segundo_plazo_de_la_renta_en_la_prevision():
+    """Una renta presentada a dos plazos: el segundo sale en la previsión, en lo que debes y en los avisos."""
+    import json
+    from datetime import date
+    from finanzas import db
+    from finanzas.importers.aeat import plazos_renta
+    from finanzas.models import Declaracion
+    hoy = date.today()
+    anio_cargo = hoy.year if hoy < date(hoy.year, 11, 5) else hoy.year + 1
+    s = db.SessionLocal()
+    d = Declaracion(modelo="100", ejercicio=anio_cargo - 1, periodo="0A", justificante="100000000ejemplo",
+                    resultado="ingresar", importe=Decimal("1000"),
+                    casillas=json.dumps({"resultado": 1000.0, "plazos": plazos_renta(INGRESO_FRACCIONADO.format(a=anio_cargo))}))
+    s.add(d)
+    s.commit()
+    did = d.id
+    s.close()
+    try:
+        with TestClient(app) as c:
+            meses = {m["mes"]: m for m in c.get("/api/prevision?meses=14").json()["meses"]}
+            nov = meses[f"{anio_cargo}-11"]["impuestos"]
+            assert {"concepto": f"Renta {anio_cargo - 1} (2.º plazo)", "importe": 400.0, "presentado": True,
+                    "tipo": "renta", "vence": f"{anio_cargo}-11-05"} in nov
+            from finanzas import hacienda
+            s = db.SessionLocal()
+            assert any("2.º plazo" in x["concepto"] and x["importe"] == 400 for x in hacienda.pendiente(s)["lineas"])
+            s.close()
+    finally:
+        s = db.SessionLocal()
+        s.delete(s.get(Declaracion, did))
+        s.commit()
+        s.close()
