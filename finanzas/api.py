@@ -335,6 +335,12 @@ def completar_sabadell(datos: CodigoIn, request: Request, s: Session = SesionDB)
 
 # --- Autónomo ---------------------------------------------------------------
 
+class DetalleFactura(BaseModel):
+    horas: float
+    precio_hora: float
+    dias: list[date] = []
+
+
 class FacturaIn(BaseModel):
     numero: str
     cliente: str
@@ -344,6 +350,20 @@ class FacturaIn(BaseModel):
     tipo_iva: Decimal = Decimal("21")
     tipo_retencion: Decimal = Decimal("15")
     fecha_cobro: date | None = None
+    detalle: DetalleFactura | None = None  # vacío al editar: se conserva el que tuviera
+
+    def valores(self) -> dict:
+        v = self.model_dump(exclude={"cliente", "detalle"})
+        v["numero"] = v["numero"].strip()
+        if self.detalle is not None:
+            v["detalle"] = self.detalle.model_dump_json()
+        return v
+
+
+def _numero_libre(s: Session, numero: str, salvo: int | None = None) -> None:
+    otra = s.scalar(select(Factura).where(Factura.numero == numero.strip(), Factura.id != (salvo or 0)))
+    if otra is not None:
+        raise HTTPException(400, f"Ya tienes una factura con el número {numero.strip()} ({otra.fecha:%d/%m/%Y})")
 
 
 class GastoAutonomoIn(BaseModel):
@@ -472,7 +492,8 @@ def ver_autonomo(anio: int | None = None, s: Session = SesionDB):
         "facturas": [{"id": x.id, "numero": x.numero, "cliente": x.cliente.nombre, "fecha": f(x.fecha),
                       "concepto": x.concepto, "base": n(x.base), "tipo_iva": n(x.tipo_iva),
                       "tipo_retencion": n(x.tipo_retencion), "cuota_iva": n(x.cuota_iva),
-                      "retencion": n(x.retencion), "total": n(x.total_a_cobrar), "fecha_cobro": f(x.fecha_cobro)}
+                      "retencion": n(x.retencion), "total": n(x.total_a_cobrar), "fecha_cobro": f(x.fecha_cobro),
+                      "con_detalle": bool(x.detalle)}
                      for x in del_anio],
         "gastos": [{"id": g.id, "fecha": f(g.fecha), "proveedor": g.proveedor, "concepto": g.concepto,
                     "categoria": g.categoria, "base": n(g.base), "tipo_iva": n(g.tipo_iva),
@@ -490,10 +511,11 @@ def crear_factura(datos: FacturaIn, s: Session = SesionDB):
         cli = Cliente(nombre=nombre)
         s.add(cli)
         s.flush()
-    valores = datos.model_dump(exclude={"cliente"})
-    s.add(Factura(cliente_id=cli.id, **valores))
+    _numero_libre(s, datos.numero)
+    factura = Factura(cliente_id=cli.id, **datos.valores())
+    s.add(factura)
     s.commit()
-    return {"ok": True}
+    return {"ok": True, "id": factura.id}
 
 
 @router.post("/autonomo/gastos")
@@ -1632,7 +1654,8 @@ def actualizar_factura(factura_id: int, datos: FacturaIn, s: Session = SesionDB)
         cli = Cliente(nombre=nombre)
         s.add(cli)
         s.flush()
-    for campo, valor in datos.model_dump(exclude={"cliente"}).items():
+    _numero_libre(s, datos.numero, salvo=x.id)
+    for campo, valor in datos.valores().items():
         setattr(x, campo, valor)
     x.cliente_id = cli.id
     s.commit()

@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { CalendarDays, Pencil, Plus } from 'lucide-react'
+import { CalendarDays, CalendarX, FileText, IdCard, Pencil, Plus } from 'lucide-react'
+import CalendarioDias from './CalendarioDias'
+import DatosFacturacion from './DatosFacturacion'
 import PlanificadorFactura from './PlanificadorFactura'
 import { api } from '../lib/api'
 import { eur, eurK, fecha, hoyISO } from '../lib/format'
@@ -64,12 +66,20 @@ function FormGasto({ onHecho }: { onHecho: () => void }) {
   )
 }
 
+/** Abre el documento de la factura en otra pestaña, para imprimirlo o guardarlo en PDF. */
+function VerDocumento({ f }: { f: Factura }) {
+  return (
+    <a href={`/api/autonomo/facturas/${f.id}/documento`} target="_blank" rel="noopener" aria-label={`Ver la factura ${f.numero}`} title="Ver la factura"
+      className="inline-flex items-center rounded-xl px-2 py-1 text-muted transition hover:bg-panel-2 hover:text-ink"><FileText size={14} /></a>
+  )
+}
+
 const anioActual = () => new Date().getFullYear()
 
 export default function SeccionAutonomo() {
   const [actual] = useState(anioActual)
   const [anio, setAnio] = useState(actual)
-  const [dialogo, setDialogo] = useState<'factura' | 'gasto' | 'planificar' | null>(null)
+  const [dialogo, setDialogo] = useState<'factura' | 'gasto' | 'planificar' | 'calendario' | 'datos' | null>(null)
   const [editando, setEditando] = useState<Factura | null>(null)
   const { data: d, isLoading, error } = useQuery({ queryKey: ['autonomo', anio], queryFn: () => api.get<Datos>(`/autonomo?anio=${anio}`) })
   const borrar = useAccion(({ tipo, id }: { tipo: string; id: number }) => api.del(`/autonomo/${tipo}/${id}`), 'Borrado')
@@ -83,7 +93,9 @@ export default function SeccionAutonomo() {
           <Selector value={anio} onChange={(e) => setAnio(Number(e.target.value))} aria-label="Año" className="!w-28">
             {[actual + 1, actual, actual - 1, actual - 2].map((a) => <option key={a} value={a}>{a}</option>)}
           </Selector>
-          <Boton variante="secundario" onClick={() => setDialogo('planificar')}><CalendarDays size={16} />Planificar</Boton>
+          <Boton variante="secundario" onClick={() => setDialogo('datos')}><IdCard size={16} />Datos de facturación</Boton>
+          <Boton variante="secundario" onClick={() => setDialogo('calendario')}><CalendarX size={16} />Vacaciones</Boton>
+          <Boton variante="secundario" onClick={() => setDialogo('planificar')}><CalendarDays size={16} />Generar factura</Boton>
           <Boton variante="secundario" onClick={() => setDialogo('gasto')}><Plus size={16} />Gasto</Boton>
           <Boton onClick={() => setDialogo('factura')}><Plus size={16} />Factura</Boton>
         </div>
@@ -136,7 +148,7 @@ export default function SeccionAutonomo() {
                           <div className="truncate font-medium">{f.cliente}{f.tipo_iva === 0 && <span className="ml-2"><Etiqueta>No sujeta</Etiqueta></span>}</div>
                           <div className="cifra text-xs text-muted">{fecha(f.fecha, { day: '2-digit', month: 'short' })} · Nº {f.numero}</div>
                         </div>
-                        <span className="flex"><Boton variante="fantasma" className="px-2 py-1" onClick={() => setEditando(f)} aria-label={`Editar la factura ${f.numero}`}><Pencil size={14} /></Boton><BorrarEnDosPasos etiqueta={`la factura ${f.numero}`} disabled={borrar.isPending} onBorrar={() => borrar.mutate({ tipo: 'facturas', id: f.id })} /></span>
+                        <span className="flex"><VerDocumento f={f} /><Boton variante="fantasma" className="px-2 py-1" onClick={() => setEditando(f)} aria-label={`Editar la factura ${f.numero}`}><Pencil size={14} /></Boton><BorrarEnDosPasos etiqueta={`la factura ${f.numero}`} disabled={borrar.isPending} onBorrar={() => borrar.mutate({ tipo: 'facturas', id: f.id })} /></span>
                       </div>
                       <dl className="mt-2 space-y-1">
                         <div className="flex justify-between gap-3"><dt className="text-muted">Base</dt><dd><Importe valor={f.base} /></dd></div>
@@ -160,7 +172,7 @@ export default function SeccionAutonomo() {
                         <td className="num"><Importe valor={f.cuota_iva} /></td>
                         <td className="num"><Importe valor={-f.retencion} /></td>
                         <td className="num font-medium"><Importe valor={f.total} /></td>
-                        <td className="whitespace-nowrap text-right"><Boton variante="fantasma" className="px-2 py-1" onClick={() => setEditando(f)} aria-label={`Editar la factura ${f.numero}`}><Pencil size={14} /></Boton><BorrarEnDosPasos etiqueta={`la factura ${f.numero}`} disabled={borrar.isPending} onBorrar={() => borrar.mutate({ tipo: 'facturas', id: f.id })} /></td>
+                        <td className="whitespace-nowrap text-right"><VerDocumento f={f} /><Boton variante="fantasma" className="px-2 py-1" onClick={() => setEditando(f)} aria-label={`Editar la factura ${f.numero}`}><Pencil size={14} /></Boton><BorrarEnDosPasos etiqueta={`la factura ${f.numero}`} disabled={borrar.isPending} onBorrar={() => borrar.mutate({ tipo: 'facturas', id: f.id })} /></td>
                       </tr>
                     ))}
                   </tbody>
@@ -219,7 +231,13 @@ export default function SeccionAutonomo() {
       <Dialogo abierto={!!editando} onCerrar={() => setEditando(null)} titulo={`Editar factura ${editando?.numero ?? ''}`}>
         {editando && <FormFactura key={editando.id} f={editando} clientes={d?.clientes ?? []} onHecho={() => setEditando(null)} />}
       </Dialogo>
-      <Dialogo abierto={dialogo === 'planificar'} onCerrar={() => setDialogo(null)} titulo="Planificar factura por días">
+      <Dialogo abierto={dialogo === 'calendario'} onCerrar={() => setDialogo(null)} titulo="Vacaciones y días que no puedes">
+        <CalendarioDias />
+      </Dialogo>
+      <Dialogo abierto={dialogo === 'datos'} onCerrar={() => setDialogo(null)} titulo="Datos de facturación">
+        <DatosFacturacion onHecho={() => setDialogo(null)} />
+      </Dialogo>
+      <Dialogo abierto={dialogo === 'planificar'} onCerrar={() => setDialogo(null)} titulo="Generar factura por días">
         {dialogo === 'planificar' && <PlanificadorFactura onHecho={() => setDialogo(null)} />}
       </Dialogo>
       <Dialogo abierto={dialogo === 'gasto'} onCerrar={() => setDialogo(null)} titulo="Registrar gasto">
