@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import exc as sa_exc
 
-from finanzas import auth, calendario, config, db, facturacion, sync
+from finanzas import auth, calendario, config, db, facturacion, gastos, sync
 from finanzas.api import COOKIE_ESTADO_BANCO, router
 from finanzas.categorizar import sembrar_categorias
 from finanzas.integrations import enablebanking
@@ -41,6 +41,7 @@ async def lifespan(_app):
 app = FastAPI(title="Finanzas personales", lifespan=lifespan)
 app.include_router(auth.router)
 app.include_router(calendario.router)
+app.include_router(gastos.router)
 app.include_router(facturacion.router)
 app.include_router(router)
 

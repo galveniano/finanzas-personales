@@ -34,9 +34,10 @@ HERRAMIENTAS = [
     {"name": "prevision", "description": "Previsión de los próximos meses: nómina, cobros de clientes, alquiler, gastos, "
      "IVA, 130 y renta estimada, y liquidez mes a mes según los supuestos del usuario.",
      "parameters": {"type": "object", "properties": {"meses": {"type": "integer", "description": "1 a 24, por defecto 12"}}}},
-    {"name": "gastos_recientes", "description": "Media mensual de ingresos, gastos y ahorro de los últimos meses, gasto por "
-     "categoría y suscripciones o recibos que se repiten cada mes.",
-     "parameters": {"type": "object", "properties": {"meses": {"type": "integer", "description": "1 a 12, por defecto 3"}}}},
+    {"name": "gastos", "description": "Análisis de gastos de los últimos meses completos: media mensual de ingresos, gastos "
+     "y ahorro, gasto por categoría y por sitio comparado con el periodo anterior, mayores gastos, y suscripciones y "
+     "recibos fijos (una vez cada uno, con su importe mensual y anual).",
+     "parameters": {"type": "object", "properties": {"meses": {"type": "integer", "description": "1 a 12, por defecto 6"}}}},
     {"name": "hacienda", "description": "Modelos presentados a Hacienda (303, 130, renta) con sus importes.",
      "parameters": {"type": "object", "properties": {}}},
     {"name": "calcular_sueldo", "description": "Neto mensual a partir de un bruto anual, o bruto necesario para un neto.",
@@ -62,8 +63,9 @@ def _ejecutar(s: Session, nombre: str, args: dict):
         return api.listar_inversiones(s=s)
     if nombre == "indexa":
         return api.detalle_indexa(s=s)
-    if nombre == "gastos_recientes":
-        return api.ver_gastos_recientes(meses=int(args.get("meses") or 3), s=s)
+    if nombre == "gastos":
+        from finanzas import gastos
+        return gastos.analisis(s, max(1, min(int(args.get("meses") or 6), 12)))
     if nombre == "prevision":
         return api.ver_prevision(meses=int(args.get("meses") or 12), s=s)
     if nombre == "hacienda":
