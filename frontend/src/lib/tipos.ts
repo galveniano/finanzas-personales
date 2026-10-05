@@ -74,7 +74,13 @@ export type Fuente = 'presentado' | 'previsto' | 'estimado'
 export interface Factura {
   id: number; numero: string; cliente: string; fecha: string; concepto: string; base: number
   tipo_iva: number; tipo_retencion: number; cuota_iva: number; retencion: number; total: number
-  fecha_cobro: string | null
+  fecha_cobro: string | null; con_detalle: boolean
+}
+export type TipoDia = 'vacaciones' | 'no_disponible'
+export interface Emisor { nombre: string; nif: string; direccion: string; email: string; telefono: string; iban: string; pie: string }
+export interface ClienteFacturacion { nombre: string; nif: string; direccion: string; idioma: 'es' | 'en'; nota_factura: string }
+export interface Facturacion {
+  emisor: Emisor; clientes: ClienteFacturacion[]; dias_no_disponibles: Record<string, TipoDia>; siguiente_numero: string
 }
 export interface GastoAutonomo {
   id: number; fecha: string; proveedor: string; concepto: string; categoria: string
