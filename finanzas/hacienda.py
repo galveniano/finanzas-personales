@@ -104,14 +104,17 @@ def revision_reta(s: Session, prev: dict | None = None) -> list[dict]:
         r = reta.regularizar(d.ejercicio, rendimiento, cuota, bruto, f"renta {d.ejercicio}")
         if r:
             filas.append({**r.a_dict(), "previsto": False})
+    # Este año y, mientras su renta no esté presentada, el pasado: con la previsión
     hoy = date.today()
-    actual = next((a for a in prev.get("anios_todos", []) if a["anio"] == hoy.year), None)
-    if actual and hoy.year not in vistos and hoy.year in reta.TABLAS:
-        pagado, meses = cuota_reta_banco(s, hoy.year)
+    for actual in prev.get("anios_todos", []):
+        anio = actual["anio"]
+        if anio not in (hoy.year - 1, hoy.year) or anio in vistos or anio not in reta.TABLAS:
+            continue
+        pagado, meses = cuota_reta_banco(s, anio)
         cuota = pagado / meses * 12 if meses else float(prev.get("gastos_autonomo_mes") or 0) * 12
         gastos = float(prev.get("gastos_autonomo_mes") or 0) * 12
         rendimiento = actual["entradas"]["facturado"] - gastos
-        r = reta.regularizar(hoy.year, rendimiento, cuota, bruto, "previsión del año")
+        r = reta.regularizar(anio, rendimiento, cuota, bruto, "previsión del año")
         if r:
             filas.append({**r.a_dict(), "previsto": True})
     return filas
