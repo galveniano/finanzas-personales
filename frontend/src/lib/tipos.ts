@@ -95,10 +95,11 @@ export interface Autonomo {
 }
 export interface Nomina {
   id: number; empresa: string; fecha: string; bruto: number; retencion_irpf: number
-  seguridad_social: number; neto: number
+  seguridad_social: number; neto: number; tipo_irpf: number | null; base_irpf: number | null
+  especie: number | null; otras_deducciones: number | null; paga_extra: boolean; tiene_pdf: boolean
 }
 export interface Nominas {
-  anio: number; nominas: Nomina[]; bruto_12_meses: number | null
+  anio: number; nominas: Nomina[]; bruto_12_meses: number | null; tipo_irpf_actual: number | null
   totales: { bruto: number; retencion_irpf: number; seguridad_social: number; neto: number }
   fuente: 'nominas' | 'banco' | 'ninguna'
   estimado_banco: { neto_medio_mes: number; meses: number; bruto_anual: number; irpf_anual: number; ss_anual: number; tipo_irpf: number } | null
@@ -211,9 +212,13 @@ export interface SupuestosPrevision {
   gastos_autonomo_mes: number; gasto_habitual_mes: number | null; meses_sin_facturar: number[]
   dias_planificados?: Record<string, Record<string, number>>
 }
+export interface ImpuestoPrevisto {
+  concepto: string; importe: number; presentado: boolean
+  tipo?: 'trimestre' | 'renta' | 'reta' | 'local' | 'ajuste'; vence?: string | null
+}
 export interface MesPrevision {
   mes: string; nomina: number; facturado: number; cobros: number; iva: number; retenciones: number; alquiler: number
-  gastos: number; pagos_previstos: number; impuestos: { concepto: string; importe: number; presentado: boolean }[]
+  gastos: number; pagos_previstos: number; impuestos: ImpuestoPrevisto[]
   total_impuestos: number; neto: number; liquidez: number
   objetivos: { concepto: string; importe: number }[]; total_objetivos: number
   ya_este_mes: { nomina: number; cobros: number; alquiler: number; gastos: number; impuestos: number } | null

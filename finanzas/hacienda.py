@@ -68,6 +68,10 @@ def pendiente(s: Session, prev: dict | None = None, hoy: date | None = None) -> 
             parte = (hoy.month - 1 + hoy.day / 31) / 12
             lineas.append({"concepto": f"Renta {r['anio']} (lo generado hasta hoy)",
                            "importe": round(r["resultado"] * parte, 2), "tipo": "renta", "en_curso": True})
+    # Rentas presentadas con un pago aún por cargar (el 2.º plazo de noviembre)
+    for p in prevision.plazos_rentas(s, hoy):
+        lineas.append({"concepto": f"{p['concepto']}, se carga el {date.fromisoformat(p['fecha']):%d/%m/%Y}",
+                       "importe": round(p["importe"], 2), "tipo": "renta", "en_curso": False})
     total = round(sum(x["importe"] for x in lineas), 2)
     return {"lineas": lineas, "total": total}
 
@@ -104,14 +108,17 @@ def revision_reta(s: Session, prev: dict | None = None) -> list[dict]:
         r = reta.regularizar(d.ejercicio, rendimiento, cuota, bruto, f"renta {d.ejercicio}")
         if r:
             filas.append({**r.a_dict(), "previsto": False})
+    # Este año y, mientras su renta no esté presentada, el pasado: con la previsión
     hoy = date.today()
-    actual = next((a for a in prev.get("anios_todos", []) if a["anio"] == hoy.year), None)
-    if actual and hoy.year not in vistos and hoy.year in reta.TABLAS:
-        pagado, meses = cuota_reta_banco(s, hoy.year)
+    for actual in prev.get("anios_todos", []):
+        anio = actual["anio"]
+        if anio not in (hoy.year - 1, hoy.year) or anio in vistos or anio not in reta.TABLAS:
+            continue
+        pagado, meses = cuota_reta_banco(s, anio)
         cuota = pagado / meses * 12 if meses else float(prev.get("gastos_autonomo_mes") or 0) * 12
         gastos = float(prev.get("gastos_autonomo_mes") or 0) * 12
         rendimiento = actual["entradas"]["facturado"] - gastos
-        r = reta.regularizar(hoy.year, rendimiento, cuota, bruto, "previsión del año")
+        r = reta.regularizar(anio, rendimiento, cuota, bruto, "previsión del año")
         if r:
             filas.append({**r.a_dict(), "previsto": True})
     return filas
