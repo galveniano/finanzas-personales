@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import './index.css'
 import Layout from './components/Layout'
 import { ProveedorAvisos } from './components/ui'
-import { Ajustes, Asistente, Cuentas, Gastos, Impuestos, Ingresos, Inicio, Inmuebles, Plan } from './paginas'
+import { Ajustes, Asistente, Cuentas, Gastos, Impuestos, Ingresos, Inicio, Inmuebles, Inversiones, Plan } from './paginas'
 import Acceso from './components/Acceso'
 
 const qc = new QueryClient({ defaultOptions: { queries: { staleTime: 30_000, retry: 1, refetchOnWindowFocus: false } } })
@@ -21,6 +21,7 @@ createRoot(document.getElementById('root')!).render(
               <Route index element={<Inicio />} />
               <Route path="cuentas" element={<Cuentas />} />
               <Route path="gastos" element={<Gastos />} />
+              <Route path="inversiones" element={<Inversiones />} />
               <Route path="ingresos" element={<Ingresos />} />
               <Route path="impuestos" element={<Impuestos />} />
               <Route path="inmuebles" element={<Inmuebles />} />

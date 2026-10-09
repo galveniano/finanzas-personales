@@ -13,7 +13,7 @@ export interface Resumen {
   fecha: string; neto: number; activos: number; pasivos: number
   grupos: { grupo: string; importe: number }[]
   lineas_activo: Linea[]; lineas_pasivo: Linea[]
-  historico: { fecha: string; neto: number; liquidez: number; inversiones: number; inmuebles: number; vehiculos: number | null; deudas: number }[]
+  historico: PuntoHistorico[]
   proximos_pagos: { id: number; concepto: string; fecha: string; importe: number }[]
   fiscal: {
     trimestre: number; anio: number
@@ -21,11 +21,18 @@ export interface Resumen {
     irpf: { resultado: number; presentado: boolean; previsto: boolean; exento: boolean; notas: string[]; plazo: string }
     renta: { anio: number; resultado: number; cuota: number; neto_mes: number; bruto_mes: number } | null
   }
-  sync: EstadoSync
   liquidez: number; disponible: number
   hacienda_pendiente: Pendiente
+  gastos: GastosResumenInicio
   avisos: Aviso[]
 }
+/** Foto del patrimonio: un punto por día en los últimos 3 meses, por semana hasta un año y por mes más atrás. */
+export interface PuntoHistorico {
+  fecha: string; neto: number; liquidez: number; inversiones: number; inmuebles: number; vehiculos: number | null
+  otros: number; deudas: number
+}
+/** Tarjeta «Este mes» de Inicio: lo gastado, la media de los 3 últimos meses y a cuánto se acabará a este ritmo. */
+export interface GastosResumenInicio { este_mes: number; dia: number; media_mes: number; proyeccion: number }
 export interface Aviso { nivel: 'error' | 'aviso' | 'info'; texto: string; ir: string }
 export interface LineaPendiente { concepto: string; importe: number; tipo: 'iva' | '130' | 'renta'; en_curso: boolean }
 export interface Pendiente { lineas: LineaPendiente[]; total: number }
@@ -192,13 +199,20 @@ export interface Inversiones {
   inversiones: InversionPrivada[]
   totales: { compromiso: number; desembolsado: number; pendiente: number; nav: number; distribuido: number }
 }
+/** Valor de las inversiones en las fotos diarias del patrimonio (GET /inversiones/evolucion). */
+export interface EvolucionInversiones {
+  desde: string; hasta: string; puntos: { fecha: string; inversiones: number }[]; cambio: number | null
+}
+/** Lo mandado a Indexa desde el banco (categoría «Inversión (Indexa)», con tu parte). */
+export interface AportadoBanco { total: number; ultimos_12_meses: number; primera_fecha: string | null }
 
 export interface PosicionIndexa {
   nombre: string; codigo: string; clase: string; gestora: string; titulos: number | null; precio: number | null
   valor: number; coste: number | null; fecha: string | null; peso: number
 }
 export interface CarteraIndexa {
-  cuenta_id: number; nombre: string; numero: string; fecha: string | null
+  cuenta_id: number; nombre: string; numero: string; fecha: string | null; ultima_sincronizacion: string | null
+  aportado_banco: AportadoBanco | null
   tipo?: string | null; producto?: string | null; perfil_riesgo?: number | null
   total?: number; efectivo?: number | null; invertido?: number; coste?: number | null; plusvalia?: number | null
   rentabilidad_anual?: number | null; rentabilidad_total?: number | null; rentabilidad_dinero?: number | null
@@ -243,20 +257,27 @@ export interface Suscripcion {
   importe: number; mes: number; anual: number; ultimo_cargo: string; concepto: string; veces: number
   proximo: string | null; activa: boolean; cuentas: string[]; cobro_doble: boolean
   subida: { antes: number; ahora: number } | null
+  ignorada: boolean
 }
+/** Presupuesto al mes por categoría; las que no están no tienen. */
+export type Presupuestos = Record<string, number>
 export interface SitioGasto {
   nombre: string; total: number; veces: number; mes: number; categoria: string | null; icono: string | null; color: string | null
 }
+export type CompararGastos = 'anterior' | 'anio_pasado'
 export interface AnalisisGastos {
   desde: string; hasta: string; meses: number
+  /** Mes analizado (AAAA-MM) si se eligió uno; con qué se compara y el periodo de comparación (null si no hay datos) */
+  mes: string | null; comparar: CompararGastos; antes: { desde: string; hasta: string; meses: number } | null
   ingresos_mes: number; gastos_mes: number; ahorro_mes: number; tasa_ahorro: number | null; gastos_mes_antes: number | null
-  ultimo_mes: { mes: string | null; gastos: number }; este_mes: { gastos: number; dia: number }
+  ultimo_mes: { mes: string | null; gastos: number }
+  este_mes: { gastos: number; dia: number; por_categoria: Record<string, number> }
   fijo_mes: number; variable_mes: number
   por_mes: { mes: string; ingresos: number; gastos: number; aparte: number }[]
-  categorias: { categoria: string; total: number; mes: number; peso: number; mes_antes: number | null; cambio: number | null
+  categorias: { categoria: string; total: number; mes: number; veces: number; peso: number; mes_antes: number | null; cambio: number | null
     sitios: { nombre: string; total: number; veces: number }[] }[]
   sitios: SitioGasto[]
   mayores: { fecha: string; concepto: string; nombre: string; categoria: string | null; importe: number }[]
   aparte: { total: number; impuestos: number }
-  suscripciones: Suscripcion[]; recibos: Suscripcion[]; suscripciones_mes: number; recibos_mes: number
+  suscripciones: Suscripcion[]; recibos: Suscripcion[]; ignoradas: Suscripcion[]; suscripciones_mes: number; recibos_mes: number
 }
