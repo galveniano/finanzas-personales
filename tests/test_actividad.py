@@ -14,14 +14,6 @@ from finanzas.models import Categoria, Cuenta, Factura, GastoAutonomo, Movimient
 from test_nomina_pdf import RECIBO, _pdf
 
 
-@pytest.fixture(autouse=True)
-def sin_supuestos_al_acabar():
-    """La base de datos de los tests es compartida: no dejar supuestos que cambien Autónomo en otros tests."""
-    yield
-    with TestClient(app) as c:
-        c.put("/api/prevision/supuestos", json={})
-
-
 def _factura(c, numero, cliente, fecha, base, iva=21, ret=15, **extra):
     r = c.post("/api/autonomo/facturas", json={"numero": numero, "cliente": cliente, "fecha": fecha, "base": base,
                                                "tipo_iva": iva, "tipo_retencion": ret, **extra})

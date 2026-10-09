@@ -10,14 +10,6 @@ SUPUESTOS = {"nomina": {"empresa": "Empresa ejemplo", "bruto_anual": 40000, "var
              "gastos_autonomo_mes": 300, "gasto_habitual_mes": 2000, "meses_sin_facturar": [8]}
 
 
-@pytest.fixture(autouse=True)
-def sin_supuestos_al_acabar():
-    """La base de datos de los tests es compartida: no dejar supuestos que cambien Autónomo en otros tests."""
-    yield
-    with TestClient(app) as c:
-        c.put("/api/prevision/supuestos", json={})
-
-
 def test_prevision_meses_e_impuestos():
     with TestClient(app) as c:
         assert c.put("/api/prevision/supuestos", json=SUPUESTOS).status_code == 200
