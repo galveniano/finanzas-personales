@@ -67,13 +67,20 @@ export interface AhorroFiscal {
 export interface Cuenta {
   id: number; nombre: string; entidad: string; tipo: string; iban: string; origen: string
   saldo: number; saldo_fecha: string | null; ultima_sincronizacion: string | null
-  participacion: number; saldo_tuyo: number
+  participacion: number; saldo_tuyo: number; activa: boolean
+  evolucion: { fecha: string; saldo: number }[]  // último saldo de cada uno de los últimos 12 meses (vacío si no guarda saldos)
+  mes: { entran: number; salen: number }  // sumas del mes en curso, las dos en positivo
 }
-export interface Categoria { id: number; nombre: string; tipo: string; ambito: string }
+export interface Categoria { id: number; nombre: string; tipo: string; ambito: string; de_serie: boolean }
+export interface ReglaCategoria { id: number; patron: string; categoria_id: number; categoria: string; aprendida: boolean }
 export interface Movimiento {
-  id: number; cuenta_id: number; cuenta: string; fecha: string; concepto: string
-  importe: number; saldo: number | null; categoria_id: number | null
+  id: number; cuenta_id: number; cuenta: string; fecha: string; fecha_valor: string | null; concepto: string
+  importe: number; saldo: number | null; categoria_id: number | null; nota: string
+  traspaso: boolean  // salida y entrada del mismo importe entre dos cuentas tuyas con pocos días de diferencia
+  manual: boolean  // apuntado a mano en la app: se puede editar y borrar
 }
+/** Una página de movimientos, el total que hay con esos filtros y lo que entra y sale en total (las dos en positivo). */
+export interface Movimientos { movimientos: Movimiento[]; total: number; suma_ingresos: number; suma_gastos: number }
 export interface Trimestre {
   trimestre: number; plazo: string; base: number; iva_repercutido: number; iva_soportado: number
   iva_resultado: number; rendimiento_acumulado: number; retenciones_acumuladas: number

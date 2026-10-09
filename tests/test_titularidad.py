@@ -30,9 +30,9 @@ def test_cuentas_compartidas_y_ajenas():
         assert round(despues["neto"] - antes["neto"], 2) == 500  # solo tu mitad; la de tu madre no cuenta
         assert not any(l["nombre"] == "Madre prueba" for l in despues["lineas_activo"])
 
-        conceptos = {m["concepto"] for m in c.get("/api/movimientos?solo_tuyas=true").json()}
+        conceptos = {m["concepto"] for m in c.get("/api/movimientos?solo_tuyas=true").json()["movimientos"]}
         assert "SUPER PAREJA" in conceptos and "SUPER MADRE" not in conceptos
         # Eligiendo la cuenta sí se ven
-        assert [m["concepto"] for m in c.get(f"/api/movimientos?cuenta_id={ids[1]}").json()] == ["SUPER MADRE"]
+        assert [m["concepto"] for m in c.get(f"/api/movimientos?cuenta_id={ids[1]}").json()["movimientos"]] == ["SUPER MADRE"]
         # Y siguen apareciendo en Cuentas
         assert {"Pareja prueba", "Madre prueba"} <= {x["nombre"] for x in c.get("/api/cuentas").json()}

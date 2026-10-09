@@ -385,13 +385,13 @@ class MovTuyo:
 
 
 def movimientos_tuyos(s: Session, desde: date, hasta: date | None = None) -> list[MovTuyo]:
-    """Movimientos de las cuentas que son (en parte) tuyas, con tu parte del importe."""
+    """Movimientos de las cuentas activas que son (en parte) tuyas, con tu parte del importe."""
     parte = func.coalesce(Cuenta.participacion, 100) / 100
     consulta = (select(Movimiento.id, Movimiento.fecha, Movimiento.cuenta_id, Movimiento.importe,
                        Movimiento.importe * parte, Movimiento.concepto, Categoria.nombre, Categoria.tipo)
                 .join(Cuenta, Movimiento.cuenta_id == Cuenta.id)
                 .join(Categoria, Movimiento.categoria_id == Categoria.id, isouter=True)
-                .where(Movimiento.fecha >= desde, parte > 0))
+                .where(Movimiento.fecha >= desde, parte > 0, Cuenta.activa))
     if hasta:
         consulta = consulta.where(Movimiento.fecha < hasta)
     return [MovTuyo(i, f, c, float(imp), float(t), con or "", cat, tipo)
