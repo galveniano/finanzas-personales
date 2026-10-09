@@ -8,7 +8,7 @@ import FormSupuestos from '../components/FormSupuestos'
 import LoQueGanas from '../components/LoQueGanas'
 import SeccionAutonomo from '../components/SeccionAutonomo'
 import SeccionNomina from '../components/SeccionNomina'
-import { Boton, Cabecera, Dialogo, ErrorCarga, Tarjeta, Vacio } from '../components/ui'
+import { Boton, Cabecera, Dialogo, ErrorCarga, Pestanas, Tarjeta, Vacio } from '../components/ui'
 
 const PESTANAS = [{ id: 'autonomo', texto: 'Autónomo' }, { id: 'nomina', texto: 'Nómina' }] as const
 
@@ -31,14 +31,7 @@ export default function Ingresos() {
           </Tarjeta>
         : <LoQueGanas anios={d.anios} cuota={d.gastos_autonomo_mes} origenCuota={d.origen_gastos_autonomo} accion={botonSupuestos} />)}
 
-      <div className="mt-8 mb-4 flex gap-1 border-b border-line" role="tablist">
-        {PESTANAS.map((p) => (
-          <button key={p.id} role="tab" aria-selected={ver === p.id} onClick={() => setParams(p.id === 'autonomo' ? {} : { ver: p.id }, { replace: true })}
-            className={`-mb-px border-b-2 px-4 py-2 text-sm font-medium ${ver === p.id ? 'border-accent text-accent' : 'border-transparent text-muted hover:text-ink'}`}>
-            {p.texto}
-          </button>
-        ))}
-      </div>
+      <Pestanas className="mt-8 mb-4" pestanas={PESTANAS} activa={ver} onCambiar={(id) => setParams(id === 'autonomo' ? {} : { ver: id }, { replace: true })} />
       {ver === 'nomina' ? <SeccionNomina /> : <SeccionAutonomo />}
 
       <Dialogo abierto={editar} onCerrar={() => setEditar(false)} titulo="Sueldo y tarifas">

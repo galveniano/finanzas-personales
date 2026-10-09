@@ -1,10 +1,12 @@
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { api } from '../lib/api'
-import { DIAS_SEMANA, ESTILO_DIA, MESES, diaISO, festivoDe, festivos, laborables, mesActual, moverMes } from '../lib/festivos'
+import { MESES } from '../lib/format'
+import { ESTILO_DIA, diaISO, laborables, mesActual, moverMes } from '../lib/festivos'
 import type { Facturacion, TipoDia } from '../lib/tipos'
 import { useAvisos } from '../lib/utilidades'
+import RejillaMes from './RejillaMes'
 import { Boton } from './ui'
 
 type Pincel = TipoDia | 'quitar'
@@ -21,9 +23,6 @@ export default function CalendarioDias() {
   const [mes, setMes] = useState(mesActual())
   const [pincel, setPincel] = useState<Pincel>('vacaciones')
   const [anio, m] = mes.split('-').map(Number)
-  const fest = useMemo(() => festivos(anio), [anio])
-  const huecos = (new Date(anio, m - 1, 1).getDay() + 6) % 7
-  const total = new Date(anio, m, 0).getDate()
 
   const marcar = useMutation({
     mutationFn: ({ dias, tipo }: { dias: string[]; tipo: TipoDia | null }) => api.put<{ dias_no_disponibles: Record<string, TipoDia> }>('/facturacion/dias', { dias, tipo }),
@@ -68,22 +67,15 @@ export default function CalendarioDias() {
         ))}
       </div>
 
-      <div className="grid grid-cols-7 gap-1 text-center text-xs">
-        {DIAS_SEMANA.map((d) => <div key={d} className="py-1 font-medium text-muted">{d}</div>)}
-        {Array.from({ length: huecos }, (_, i) => <div key={`h${i}`} />)}
-        {Array.from({ length: total }, (_, i) => i + 1).map((d) => {
+      <RejillaMes mes={mes} onDia={tocar}
+        claseDia={(d, { festivo, finde }) => {
           const tipo = marcados[diaISO(mes, d)]
-          const nombreFestivo = festivoDe(fest, mes, d)
-          const finde = [0, 6].includes(new Date(anio, m - 1, d).getDay())
-          const titulo = [nombreFestivo, tipo === 'vacaciones' ? 'Vacaciones' : tipo === 'no_disponible' ? 'No puedes' : ''].filter(Boolean).join(' · ')
-          return (
-            <button key={d} type="button" title={titulo || undefined} onClick={() => tocar(d)}
-              className={`rounded-lg py-2 font-medium transition ${tipo ? ESTILO_DIA[tipo] : finde || nombreFestivo ? 'text-muted/60' : 'bg-panel-2'} ${nombreFestivo ? 'ring-1 ring-[var(--chart-3)]' : ''}`}>
-              {d}
-            </button>
-          )
-        })}
-      </div>
+          return `rounded-lg py-2 font-medium transition ${tipo ? ESTILO_DIA[tipo] : finde || festivo ? 'text-muted/60' : 'bg-panel-2'} ${festivo ? 'ring-1 ring-[var(--chart-3)]' : ''}`
+        }}
+        tituloDia={(d, { festivo }) => {
+          const tipo = marcados[diaISO(mes, d)]
+          return [festivo, tipo === 'vacaciones' ? 'Vacaciones' : tipo === 'no_disponible' ? 'No puedes' : ''].filter(Boolean).join(' · ') || undefined
+        }} />
 
       <dl className="grid grid-cols-3 gap-3 rounded-xl bg-panel-2 p-4 text-sm">
         <div><dt className="text-xs text-muted">Puedes trabajar</dt><dd className="cifra text-lg font-semibold">{disponibles} días</dd></div>

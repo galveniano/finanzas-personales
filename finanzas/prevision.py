@@ -13,7 +13,7 @@ from decimal import Decimal
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from finanzas import ajustes
+from finanzas import ajustes, declaraciones
 from finanzas.fiscal import alquiler, nomina as calc_nomina
 from finanzas.hipoteca import cuadro_amortizacion, intereses_anio
 from finanzas.models import (Activo, Categoria, Cliente, ContratoAlquiler, Cuenta, Declaracion, Deuda, Factura,
@@ -148,17 +148,25 @@ def _dias_ultimo_mes(s: Session, c: dict) -> tuple[float, str] | None:
 PATRON_CUOTA_AUTONOMO = ("tgss", "seguridad social", "cotizacion autonomo", "cuota autonomo")
 
 
+def cargos_cuota_autonomos(s: Session, desde: date, hasta: date) -> list[tuple[date, float]]:
+    """Cargos de la cuota de autónomos en el banco entre dos fechas (ambas incluidas), en positivo: los de la
+    categoría «Cuota autónomos» o cuyo concepto suena a Seguridad Social. Sobre el importe de la cuenta, sin tu parte."""
+    movs = s.execute(select(Movimiento.fecha, Movimiento.importe, Movimiento.concepto, Categoria.nombre)
+                     .join(Categoria, Movimiento.categoria_id == Categoria.id, isouter=True)
+                     .where(Movimiento.fecha >= desde, Movimiento.fecha <= hasta, Movimiento.importe < 0)).all()
+    return [(f, -float(i)) for f, i, c, cat in movs
+            if cat == "Cuota autónomos" or any(p in (c or "").lower() for p in PATRON_CUOTA_AUTONOMO)]
+
+
 def cuota_autonomo_banco(s: Session) -> float | None:
     """Media mensual de la cuota de autónomos cargada en el banco en los últimos 3 meses completos."""
     fin = date.today().replace(day=1)
     inicio = (fin - timedelta(days=85)).replace(day=1)
-    movs = s.scalars(select(Movimiento).where(Movimiento.fecha >= inicio, Movimiento.fecha < fin,
-                                              Movimiento.importe < 0)).all()
-    cargos = [m for m in movs if any(p in (m.concepto or "").lower() for p in PATRON_CUOTA_AUTONOMO)]
+    cargos = cargos_cuota_autonomos(s, inicio, fin - timedelta(days=1))
     if not cargos:
         return None
-    meses = len({m.fecha.strftime("%Y-%m") for m in cargos})
-    return round(-float(sum((m.importe for m in cargos), Decimal(0))) / meses, 2)
+    meses = len({f.strftime("%Y-%m") for f, _ in cargos})
+    return round(sum(i for _, i in cargos) / meses, 2)
 
 
 def resolver_clientes(s: Session, cfg: dict) -> dict:
@@ -233,11 +241,7 @@ def ultima_renta(s: Session) -> dict | None:
                                                                                   Declaracion.id.desc()))
     if not d:
         return None
-    try:
-        casillas = json.loads(d.casillas) if d.casillas else {}
-    except ValueError:
-        casillas = {}
-    return {"anio": d.ejercicio, "resultado": float(d.importe), "casillas": casillas}
+    return {"anio": d.ejercicio, "resultado": float(d.importe), "casillas": declaraciones.casillas(d)}
 
 
 def tipo_irpf_actual(nominas: list[Nomina]) -> float | None:
@@ -443,20 +447,11 @@ def irpf_de_la_actividad(cfg: dict, actividad: float) -> float:
     return cuota * max(actividad, 0.0) / base
 
 
-def _presentado(s: Session, modelo: str, anio: int, trimestre: int) -> float | None:
-    """Lo ingresado por ese modelo y trimestre; con complementarias, la suma de todas."""
-    decl = s.scalars(select(Declaracion).where(Declaracion.modelo == modelo, Declaracion.ejercicio == anio,
-                                               Declaracion.periodo == f"{trimestre}T")).all()
-    return float(sum((d.importe for d in decl), Decimal(0))) if decl else None
-
-
 def _casillas_130(s: Session, anio: int, trimestre: int) -> dict:
+    """Casillas del último 130 presentado de ese trimestre (la complementaria, si la hay)."""
     d = s.scalar(select(Declaracion).where(Declaracion.modelo == "130", Declaracion.ejercicio == anio,
                                            Declaracion.periodo == f"{trimestre}T").order_by(Declaracion.id.desc()))
-    try:
-        return json.loads(d.casillas) if d and d.casillas else {}
-    except ValueError:
-        return {}
+    return declaraciones.casillas(d)
 
 
 def _facturado_por_mes(s: Session, cfg: dict) -> dict[str, dict]:
@@ -616,7 +611,8 @@ def calcular(s: Session, meses: int = 12) -> dict:
                 iva_t = sum(x.iva for x in del_trimestre)
                 p130 = 0.0 if _exento_130(cfg) else max(
                     0.2 * _rendimiento_130(acumulado["previo"]) - acumulado["ret"] - acumulado["pagos130"], 0.0)
-                real_303, real_130 = _presentado(s, "303", anio, t), _presentado(s, "130", anio, t)
+                real_303 = declaraciones.importe_presentado(s, "303", anio, f"{t}T")
+                real_130 = declaraciones.importe_presentado(s, "130", anio, f"{t}T")
                 iva_t = real_303 if real_303 is not None else iva_t
                 p130 = real_130 if real_130 is not None else p130
                 acumulado["pagos130"] += p130
@@ -712,10 +708,7 @@ def plazos_rentas(s: Session, desde: date) -> list[dict]:
     from finanzas.importers import aeat
     lista = []
     for d in s.scalars(select(Declaracion).where(Declaracion.modelo == "100", Declaracion.ejercicio >= desde.year - 2)):
-        try:
-            casillas = json.loads(d.casillas) if d.casillas else {}
-        except ValueError:
-            casillas = {}
+        casillas = declaraciones.casillas(d)
         if "plazos" not in casillas and d.pdf:
             try:
                 casillas = {**casillas, "plazos": aeat.leer_pdf(d.pdf).casillas.get("plazos", [])}

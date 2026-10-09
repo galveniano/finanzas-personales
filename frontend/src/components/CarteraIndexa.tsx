@@ -1,10 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
-import { eur, fecha } from '../lib/format'
+import { eur, fecha, pct } from '../lib/format'
 import type { CarteraIndexa as Cartera } from '../lib/tipos'
 import { Barra, Dato, ErrorCarga, Etiqueta, Importe, Tabla, Tarjeta } from './ui'
-
-const pct = (v: number | null | undefined) => (v == null ? '—' : `${v.toLocaleString('es-ES', { maximumFractionDigits: 2 })} %`)
 
 const CLASES: Record<string, string> = {
   equity: 'Renta variable', fixed_income: 'Renta fija', cash: 'Liquidez',

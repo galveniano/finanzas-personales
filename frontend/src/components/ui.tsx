@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react'
+import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from 'react'
 import { Trash2, X } from 'lucide-react'
 import { eur } from '../lib/format'
 import { AvisosCtx } from '../lib/utilidades'
@@ -81,6 +81,17 @@ export function Importe({ valor, signo = false, className }: { valor: number | n
   )
 }
 
+/** Línea etiqueta–valor de un desglose; las `fuerte` (totales) llevan borde superior y negrita. Un `valor` numérico
+ *  se pinta como importe. `className` va al contenedor y, si se pasa (p. ej. text-warn), la etiqueta hereda ese color. */
+export function Fila({ etiqueta, valor, fuerte, className }: { etiqueta: ReactNode; valor: number | ReactNode; fuerte?: boolean; className?: string }) {
+  return (
+    <div className={cx('flex justify-between gap-3 py-1.5 text-sm', fuerte && 'border-t border-line pt-2.5 font-semibold', className)}>
+      <span className={fuerte || className ? undefined : 'text-muted'}>{etiqueta}</span>
+      {typeof valor === 'number' ? <Importe valor={valor} /> : valor}
+    </div>
+  )
+}
+
 export function Tabla({ children }: { children: ReactNode }) {
   return (
     <div className="-mx-5 overflow-x-auto px-5">
@@ -122,6 +133,50 @@ export function Selector({ etiqueta, children, className, ...p }: SelectHTMLAttr
   const sel = <select {...p} className={cx(claseCampo, !etiqueta && className)}>{children}</select>
   if (!etiqueta) return sel
   return <label className={cx('flex flex-col gap-1.5 text-xs font-medium text-muted', className)}>{etiqueta}{sel}</label>
+}
+
+export function Area({ etiqueta, ayuda, className, rows = 3, ...p }: TextareaHTMLAttributes<HTMLTextAreaElement> & { etiqueta: string; ayuda?: string }) {
+  return (
+    <label className={cx('flex flex-col gap-1.5 text-xs font-medium text-muted', className)}>
+      {etiqueta}
+      <textarea rows={rows} {...p} className={claseCampo} />
+      {ayuda && <span className="font-normal">{ayuda}</span>}
+    </label>
+  )
+}
+
+// --- Navegación y selección --------------------------------------------------
+
+export function Pestanas<T extends string>({ pestanas, activa, onCambiar, className }: {
+  pestanas: readonly { id: T; texto: string }[]; activa: T; onCambiar: (id: T) => void; className?: string
+}) {
+  return (
+    <div className={cx('flex gap-1 border-b border-line', className)} role="tablist">
+      {pestanas.map((p) => (
+        <button key={p.id} role="tab" aria-selected={activa === p.id} onClick={() => onCambiar(p.id)}
+          className={`-mb-px border-b-2 px-4 py-2 text-sm font-medium ${activa === p.id ? 'border-accent text-accent' : 'border-transparent text-muted hover:text-ink'}`}>
+          {p.texto}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+/** Una opción entre pocas (periodo, modo…). `pequeno`: en texto pequeño y con el acento suave, para la cabecera de una tarjeta. */
+export function Segmentos<T extends string | number>({ opciones, valor, onCambiar, etiqueta, pequeno }: {
+  opciones: readonly { valor: T; texto: string }[]; valor: T; onCambiar: (v: T) => void; etiqueta: string; pequeno?: boolean
+}) {
+  return (
+    <div className={cx('flex rounded-xl border border-line bg-panel p-0.5', pequeno ? 'text-xs' : 'text-sm')} role="group" aria-label={etiqueta}>
+      {opciones.map((o) => (
+        <button key={o.valor} onClick={() => onCambiar(o.valor)} aria-pressed={valor === o.valor}
+          className={cx('cursor-pointer rounded-lg px-3 py-1.5 transition', !pequeno && 'font-medium',
+            valor === o.valor ? (pequeno ? 'bg-accent-soft font-semibold text-accent' : 'bg-accent text-panel') : cx('text-muted', !pequeno && 'hover:text-ink'))}>
+          {o.texto}
+        </button>
+      ))}
+    </div>
+  )
 }
 
 export function Dialogo({ abierto, onCerrar, titulo, children }: { abierto: boolean; onCerrar: () => void; titulo: string; children: ReactNode }) {
@@ -216,11 +271,33 @@ export function ErrorCarga({ error }: { error: Error }) {
   return <Vacio>No se han podido cargar los datos: {error.message}</Vacio>
 }
 
+/** Botón que pide confirmar: el primer clic lo arma, el segundo ejecuta; al perder el foco se desarma. */
+function useDosPasos(onConfirmar: () => void) {
+  const [seguro, setSeguro] = useState(false)
+  return {
+    seguro,
+    onClick: () => { if (!seguro) { setSeguro(true); return } setSeguro(false); onConfirmar() },
+    onBlur: () => setSeguro(false),
+  }
+}
+
+/** La primera vez pasa a `textoConfirmar` (en rojo) y la segunda ejecuta `onConfirmar`. */
+export function EnDosPasos({ texto, textoConfirmar, onConfirmar, disabled, variante = 'secundario', icono, className }: {
+  texto: ReactNode; textoConfirmar: ReactNode; onConfirmar: () => void; disabled?: boolean; variante?: Variante; icono?: ReactNode; className?: string
+}) {
+  const { seguro, onClick, onBlur } = useDosPasos(onConfirmar)
+  return (
+    <Boton variante={seguro ? 'peligro' : variante} className={className} onClick={onClick} onBlur={onBlur} disabled={disabled}>
+      {icono}{seguro ? textoConfirmar : texto}
+    </Boton>
+  )
+}
+
 /** Papelera que pide confirmar. `etiqueta` completa el aria-label («Borrar <etiqueta>»); `texto` se ve junto al icono. */
 export function BorrarEnDosPasos({ onBorrar, etiqueta, texto: visible, disabled }: { onBorrar: () => void; etiqueta?: string; texto?: string; disabled?: boolean }) {
-  const [seguro, setSeguro] = useState(false)
+  const { seguro, onClick, onBlur } = useDosPasos(onBorrar)
   const texto = etiqueta ? `Borrar ${etiqueta}` : 'Borrar'
   return seguro
-    ? <Boton variante="peligro" className="px-2 py-1 text-xs" onClick={() => { setSeguro(false); onBorrar() }} onBlur={() => setSeguro(false)} disabled={disabled} aria-label={`Confirmar: ${texto.toLowerCase()}`} autoFocus>Confirmar</Boton>
-    : <Boton variante="fantasma" className={cx('px-2 py-1', visible && 'text-xs')} onClick={() => setSeguro(true)} disabled={disabled} aria-label={texto} title={texto}><Trash2 size={14} />{visible}</Boton>
+    ? <Boton variante="peligro" className="px-2 py-1 text-xs" onClick={onClick} onBlur={onBlur} disabled={disabled} aria-label={`Confirmar: ${texto.toLowerCase()}`} autoFocus>Confirmar</Boton>
+    : <Boton variante="fantasma" className={cx('px-2 py-1', visible && 'text-xs')} onClick={onClick} disabled={disabled} aria-label={texto} title={texto}><Trash2 size={14} />{visible}</Boton>
 }

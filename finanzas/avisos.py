@@ -4,9 +4,9 @@ from datetime import date, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from finanzas import ajustes, sync
+from finanzas import ajustes, declaraciones, sync
 from finanzas.fechas import ahora_utc
-from finanzas.models import Activo, Declaracion, RegistroSync, Valoracion
+from finanzas.models import Activo, RegistroSync, Valoracion
 
 CLAVE_ULTIMA_COPIA = "ultima_copia"
 
@@ -33,11 +33,6 @@ def plazos(desde: date, hasta: date) -> list[dict]:
         lista.append({"fecha": date(anio + 1, 6, 30), "titulo": f"Fin de la renta {anio}", "detalle": "",
                       "modelos": [("100", anio, "0A")]})
     return sorted((p for p in lista if desde <= p["fecha"] <= hasta), key=lambda p: p["fecha"])
-
-
-def _presentado(s: Session, modelo: str, anio: int, periodo: str) -> bool:
-    return s.scalar(select(Declaracion.id).where(Declaracion.modelo == modelo, Declaracion.ejercicio == anio,
-                                                 Declaracion.periodo == periodo).limit(1)) is not None
 
 
 def calcular(s: Session, regularizacion: list[dict] | None = None) -> list[dict]:
@@ -67,7 +62,7 @@ def calcular(s: Session, regularizacion: list[dict] | None = None) -> list[dict]
             avisos.append({"nivel": "aviso", "texto": f"El permiso de Sabadell caduca en {quedan} días: renuévalo.",
                            "ir": "/ajustes"})
     for p in plazos(hoy, hoy + timedelta(days=15)):
-        if p["modelos"] and all(_presentado(s, *m) for m in p["modelos"]):
+        if p["modelos"] and all(declaraciones.presentada(s, *m) for m in p["modelos"]):
             continue
         dias = (p["fecha"] - hoy).days
         cuando = "hoy" if dias == 0 else "mañana" if dias == 1 else f"en {dias} días"

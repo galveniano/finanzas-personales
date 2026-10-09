@@ -3,14 +3,14 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { ArrowDownRight, ArrowUpRight, Copy, TrendingUp } from 'lucide-react'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { api } from '../lib/api'
-import { eur, eurK, fecha, mesCorto } from '../lib/format'
+import { eur, eurK, fecha, mesCorto, pct } from '../lib/format'
+import { cursorBarra, eje, estiloTooltip } from '../lib/graficas'
 import type { AnalisisGastos, Suscripcion } from '../lib/tipos'
 import IconoServicio from '../components/IconoServicio'
-import { Cabecera, Cargando, Dato, ErrorCarga, Etiqueta, Importe, Tabla, Tarjeta, Vacio } from '../components/ui'
+import { Cabecera, Cargando, Dato, ErrorCarga, Etiqueta, Importe, Segmentos, Tabla, Tarjeta, Vacio } from '../components/ui'
 
-const PERIODOS = [3, 6, 12] as const
+const PERIODOS = [3, 6, 12].map((m) => ({ valor: m, texto: `${m} meses` }))
 const CADA: Record<Suscripcion['periodicidad'], string> = { mensual: 'al mes', trimestral: 'cada 3 meses', semestral: 'cada 6 meses', anual: 'al año' }
-const pct = (v: number) => `${String(Math.abs(v)).replace('.', ',')} %`
 
 export default function Gastos() {
   const [meses, setMeses] = useState<number>(6)
@@ -18,16 +18,7 @@ export default function Gastos() {
     queryKey: ['gastos', meses], queryFn: () => api.get<AnalisisGastos>(`/gastos?meses=${meses}`), placeholderData: keepPreviousData,
   })
 
-  const selector = (
-    <div className="flex rounded-xl border border-line bg-panel p-0.5 text-sm" role="group" aria-label="Periodo">
-      {PERIODOS.map((m) => (
-        <button key={m} onClick={() => setMeses(m)} aria-pressed={meses === m}
-          className={`cursor-pointer rounded-lg px-3 py-1.5 font-medium transition ${meses === m ? 'bg-accent text-panel' : 'text-muted hover:text-ink'}`}>
-          {m} meses
-        </button>
-      ))}
-    </div>
-  )
+  const selector = <Segmentos etiqueta="Periodo" opciones={PERIODOS} valor={meses} onCambiar={setMeses} />
 
   return (
     <>
@@ -65,10 +56,10 @@ function Resumen({ g }: { g: AnalisisGastos }) {
     <Tarjeta>
       <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
         <Dato etiqueta="Gastas al mes" valor={eur(g.gastos_mes)}
-          nota={cambio !== null ? <span className={cambio > 0 ? 'text-neg' : 'text-pos'}>{cambio > 0 ? '▲' : '▼'} {pct(cambio)} que los {g.meses} meses anteriores</span> : 'De media'} />
+          nota={cambio !== null ? <span className={cambio > 0 ? 'text-neg' : 'text-pos'}>{cambio > 0 ? '▲' : '▼'} {pct(Math.abs(cambio), 1)} que los {g.meses} meses anteriores</span> : 'De media'} />
         <Dato etiqueta="Entra al mes" valor={eur(g.ingresos_mes)} nota="De media" />
         <Dato etiqueta="Ahorras al mes" valor={eur(g.ahorro_mes)} tono={g.ahorro_mes >= 0 ? 'pos' : 'neg'}
-          nota={g.tasa_ahorro !== null ? `${pct(g.tasa_ahorro)} de lo que entra` : undefined} />
+          nota={g.tasa_ahorro !== null ? `${pct(Math.abs(g.tasa_ahorro), 1)} de lo que entra` : undefined} />
         <Dato etiqueta="Fijo al mes" valor={eur(g.fijo_mes)}
           nota={`Suscripciones y recibos; el resto, ${eur(g.variable_mes)}, es variable`} />
       </div>
@@ -140,10 +131,9 @@ function MesAMes({ g }: { g: AnalisisGastos }) {
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={g.por_mes} margin={{ top: 8, right: 4, left: 4, bottom: 0 }} barGap={3}>
             <CartesianGrid vertical={false} stroke="var(--line)" />
-            <XAxis dataKey="mes" tickFormatter={mesCorto} tick={{ fill: 'var(--muted)', fontSize: 11 }} axisLine={false} tickLine={false} />
-            <YAxis tickFormatter={eurK} tick={{ fill: 'var(--muted)', fontSize: 11 }} axisLine={false} tickLine={false} width={68} />
-            <Tooltip contentStyle={{ background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 12, fontSize: 12 }}
-              cursor={{ fill: 'var(--panel-2)' }} formatter={(v, n) => [eur(Number(v)), n === 'ingresos' ? 'Entra' : 'Gastas']} labelFormatter={(v) => mesCorto(String(v))} />
+            <XAxis dataKey="mes" tickFormatter={mesCorto} {...eje} />
+            <YAxis tickFormatter={eurK} {...eje} width={68} />
+            <Tooltip {...estiloTooltip} cursor={cursorBarra} formatter={(v, n) => [eur(Number(v)), n === 'ingresos' ? 'Entra' : 'Gastas']} labelFormatter={(v) => mesCorto(String(v))} />
             <Bar dataKey="ingresos" fill="var(--chart-1)" radius={[4, 4, 0, 0]} maxBarSize={22} />
             <Bar dataKey="gastos" fill="var(--chart-3)" radius={[4, 4, 0, 0]} maxBarSize={22} />
           </BarChart>
@@ -164,11 +154,11 @@ function Categorias({ g }: { g: AnalisisGastos }) {
               <details className="group rounded-xl px-2 py-1.5 open:bg-panel-2/60">
                 <summary className="cursor-pointer list-none">
                   <div className="mb-1 flex items-center justify-between gap-2 text-sm">
-                    <span className="truncate">{c.categoria} <span className="text-xs text-muted">· {String(c.peso).replace('.', ',')} %</span></span>
+                    <span className="truncate">{c.categoria} <span className="text-xs text-muted">· {pct(c.peso, 1)}</span></span>
                     <span className="flex items-center gap-2">
                       {c.cambio !== null && Math.abs(c.cambio) >= 10 && (
                         <span className={`flex items-center text-xs ${c.cambio > 0 ? 'text-neg' : 'text-pos'}`} title={`Antes: ${eur(c.mes_antes)} al mes`}>
-                          {c.cambio > 0 ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}{pct(c.cambio)}
+                          {c.cambio > 0 ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}{pct(Math.abs(c.cambio), 1)}
                         </span>)}
                       <Importe valor={c.mes} />
                     </span>

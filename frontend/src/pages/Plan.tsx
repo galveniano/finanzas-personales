@@ -4,13 +4,13 @@ import { Check, Pencil, Plus } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { Bar, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { api } from '../lib/api'
-import { diasHasta, eur, eurK, fecha, hoyISO } from '../lib/format'
+import { cuandoVence, diasHasta, eur, eurK, fecha, hoyISO } from '../lib/format'
+import { cursorBarra, eje, estiloTooltip } from '../lib/graficas'
 import type { Planificacion as Datos, Prevision } from '../lib/tipos'
 import { num, useAccion } from '../lib/utilidades'
 import { Barra, BorrarEnDosPasos, Boton, Cabecera, Campo, Cargando, Dato, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio } from '../components/ui'
 
 const nombreMes = (clave: string) => fecha(`${clave}-01`, { month: 'short', year: '2-digit' })
-const cuandoVence = (dias: number) => (dias < 0 ? 'Vencido' : dias === 0 ? 'Hoy' : dias === 1 ? 'Mañana' : `${dias} días`)
 const ahorroTexto = (v: number) => (v < 0 ? `Gastando unos ${eur(-v)} más de lo que entra al mes` : `Ahorrando unos ${eur(v)} al mes`)
 const TIPO: Record<string, string> = { boda: 'Boda', viaje: 'Viaje', casa: 'Casa', colchon: 'Colchón', otro: 'Objetivo' }
 
@@ -68,11 +68,10 @@ export default function Plan() {
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart data={prev.meses} margin={{ top: 8, right: 4, left: 4, bottom: 0 }}>
                 <CartesianGrid vertical={false} stroke="var(--line)" />
-                <XAxis dataKey="mes" tickFormatter={nombreMes} tick={{ fill: 'var(--muted)', fontSize: 11 }} axisLine={false} tickLine={false} />
-                <YAxis yAxisId="l" tickFormatter={eurK} tick={{ fill: 'var(--muted)', fontSize: 11 }} axisLine={false} tickLine={false} width={68} />
+                <XAxis dataKey="mes" tickFormatter={nombreMes} {...eje} />
+                <YAxis yAxisId="l" tickFormatter={eurK} {...eje} width={68} />
                 <YAxis yAxisId="n" orientation="right" hide />
-                <Tooltip contentStyle={{ background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 12, fontSize: 12 }}
-                  cursor={{ fill: 'var(--panel-2)' }} labelFormatter={(v) => nombreMes(String(v))}
+                <Tooltip {...estiloTooltip} cursor={cursorBarra} labelFormatter={(v) => nombreMes(String(v))}
                   formatter={(v, n) => [eur(Number(v)), n === 'neto' ? 'Ahorro del mes' : 'Dinero disponible']} />
                 <Bar yAxisId="n" dataKey="neto" fill="var(--chart-2)" radius={[4, 4, 0, 0]} maxBarSize={24} />
                 <Line yAxisId="l" dataKey="liquidez" stroke="var(--chart-1)" strokeWidth={2} dot={false} />

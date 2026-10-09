@@ -4,23 +4,17 @@ El IVA que cobras en las facturas no es tuyo: lo guardas hasta el 303. Igual pas
 trimestre en curso y con la renta, que se va generando mes a mes y se paga en junio del año siguiente.
 Todo son estimaciones a partir de la previsión.
 """
-import json
 from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from finanzas import ajustes, prevision
+from finanzas import ajustes, declaraciones, prevision
 from finanzas.fiscal import reta
-from finanzas.models import Categoria, Cuenta, Declaracion, Factura, GastoAutonomo, Movimiento
+from finanzas.models import Cuenta, Declaracion, Factura, GastoAutonomo
 
 CLAVE_HUCHA = "cuenta_hucha"
-
-
-def _presentado(s: Session, modelo: str, anio: int, periodo: str) -> bool:
-    return s.scalar(select(Declaracion.id).where(Declaracion.modelo == modelo, Declaracion.ejercicio == anio,
-                                                 Declaracion.periodo == periodo).limit(1)) is not None
 
 
 def _iva_facturas(s: Session, desde: date, hasta: date) -> float | None:
@@ -47,21 +41,21 @@ def pendiente(s: Session, prev: dict | None = None, hoy: date | None = None) -> 
         inicio_t = date(anio, 3 * t - 2, 1)
         en_curso = (anio, t) == (hoy.year, trimestre_actual)
         fraccion = ((hoy.month - inicio_t.month) + hoy.day / 31) / 3 if en_curso else 1.0
-        if not _presentado(s, "303", anio, f"{t}T"):
+        if not declaraciones.presentada(s, "303", anio, f"{t}T"):
             iva = _iva_facturas(s, inicio_t, hoy) if en_curso else None
             if iva is None and datos:
                 iva = datos["iva"] * fraccion
             if iva and iva > 0:
                 lineas.append({"concepto": f"IVA {t}T {anio} (303)", "importe": round(iva, 2), "tipo": "iva",
                                "en_curso": en_curso})
-        if datos and not datos["exento_130"] and not _presentado(s, "130", anio, f"{t}T"):
+        if datos and not datos["exento_130"] and not declaraciones.presentada(s, "130", anio, f"{t}T"):
             irpf = datos["irpf"] * fraccion
             if irpf > 0:
                 lineas.append({"concepto": f"IRPF {t}T {anio} (130)", "importe": round(irpf, 2), "tipo": "130",
                                "en_curso": en_curso})
     # Renta: la del año pasado si aún no está presentada, y la parte que ya llevas de la de este año
     for r in prev.get("anios_todos", prev.get("anios", [])):
-        if r["anio"] == hoy.year - 1 and r["resultado"] > 0 and not _presentado(s, "100", r["anio"], "0A"):
+        if r["anio"] == hoy.year - 1 and r["resultado"] > 0 and not declaraciones.presentada(s, "100", r["anio"], "0A"):
             lineas.append({"concepto": f"Renta {r['anio']}", "importe": round(r["resultado"], 2), "tipo": "renta",
                            "en_curso": False})
         elif r["anio"] == hoy.year and r["resultado"] > 0:
@@ -78,12 +72,7 @@ def pendiente(s: Session, prev: dict | None = None, hoy: date | None = None) -> 
 
 def cuota_reta_banco(s: Session, anio: int) -> tuple[float, int]:
     """Cuota de autónomos cargada en el banco en un año y en cuántos meses."""
-    movs = s.execute(select(Movimiento.fecha, Movimiento.importe, Movimiento.concepto, Categoria.nombre)
-                     .join(Categoria, Movimiento.categoria_id == Categoria.id, isouter=True)
-                     .where(Movimiento.fecha >= date(anio, 1, 1), Movimiento.fecha <= date(anio, 12, 31),
-                            Movimiento.importe < 0)).all()
-    cargos = [(f, -float(i)) for f, i, c, cat in movs
-              if cat == "Cuota autónomos" or any(p in (c or "").lower() for p in prevision.PATRON_CUOTA_AUTONOMO)]
+    cargos = prevision.cargos_cuota_autonomos(s, date(anio, 1, 1), date(anio, 12, 31))
     return round(sum(i for _, i in cargos), 2), len({f.month for f, _ in cargos})
 
 
@@ -96,10 +85,7 @@ def revision_reta(s: Session, prev: dict | None = None) -> list[dict]:
     rentas = s.scalars(select(Declaracion).where(Declaracion.modelo == "100").order_by(Declaracion.ejercicio)).all()
     vistos = set()
     for d in rentas:
-        try:
-            c = json.loads(d.casillas) if d.casillas else {}
-        except ValueError:
-            c = {}
+        c = declaraciones.casillas(d)
         if d.ejercicio not in reta.TABLAS or d.ejercicio in vistos or "ingresos_actividad" not in c:
             continue
         vistos.add(d.ejercicio)

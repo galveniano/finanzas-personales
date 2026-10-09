@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom'
 import { ArrowUp, RotateCcw, Sparkles } from 'lucide-react'
 import { api } from '../lib/api'
 import type { MensajeChat } from '../lib/tipos'
-import { Boton, Cabecera, ErrorCarga, Vacio } from '../components/ui'
+import { Boton, Cabecera, EnDosPasos, ErrorCarga, Vacio } from '../components/ui'
 
 const CLAVE = 'finanzas:asistente'
 const SUGERENCIAS = [
@@ -33,7 +33,6 @@ export default function Asistente() {
   const [pensando, setPensando] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const fin = useRef<HTMLDivElement>(null)
-  const [seguroNueva, setSeguroNueva] = useState(false)
   const { data: estado, error: errorEstado } = useQuery({
     queryKey: ['asistente'],
     queryFn: () => api.get<{ disponible: boolean; proveedor?: string; proveedor_nombre?: string }>('/asistente/estado'),
@@ -67,10 +66,8 @@ export default function Asistente() {
     <>
       <Cabecera titulo="Asistente" subtitulo="Pregunta lo que quieras sobre tus finanzas: ve todos los datos de la app">
         {mensajes.length > 0 && (
-          <Boton variante={seguroNueva ? 'peligro' : 'secundario'} onBlur={() => setSeguroNueva(false)}
-            onClick={() => { if (!seguroNueva) { setSeguroNueva(true); return } setMensajes([]); setSeguroNueva(false); setError(null) }}>
-            <RotateCcw size={15} />{seguroNueva ? '¿Borrar la conversación? Confirmar' : 'Nueva conversación'}
-          </Boton>
+          <EnDosPasos icono={<RotateCcw size={15} />} texto="Nueva conversación" textoConfirmar="¿Borrar la conversación? Confirmar"
+            onConfirmar={() => { setMensajes([]); setError(null) }} />
         )}
       </Cabecera>
       {errorEstado && !estado ? (

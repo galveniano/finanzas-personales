@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { FileText, Plus, Upload } from 'lucide-react'
 import { api } from '../lib/api'
@@ -7,6 +7,7 @@ import type { Autonomo, Declaracion, Declaraciones, Fuente, Prevision } from '..
 import { RentaEstimada, RentaPresentada } from '../components/Renta'
 import SeccionHacienda from '../components/Hacienda'
 import { num, opc, useAccion, useAvisos } from '../lib/utilidades'
+import { useSubida } from '../lib/subida'
 import { BorrarEnDosPasos, Boton, Cabecera, Campo, Cargando, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio } from '../components/ui'
 
 const RESULTADO: Record<Declaracion['resultado'], { texto: string; tono: 'neutro' | 'bien' | 'aviso' | 'mal' }> = {
@@ -105,9 +106,7 @@ function FormDeclaracion({ onEnviar }: { onEnviar: (v: Record<string, string>) =
 
 export default function Impuestos() {
   const avisar = useAvisos()
-  const input = useRef<HTMLInputElement>(null)
   const [manual, setManual] = useState(false)
-  const [arrastrando, setArrastrando] = useState(false)
   const { data: d, isLoading, error } = useQuery({ queryKey: ['declaraciones'], queryFn: () => api.get<Declaraciones>('/declaraciones') })
 
   const subir = useAccion(async (ficheros: File[]) => {
@@ -125,27 +124,24 @@ export default function Impuestos() {
   }).then(() => setManual(false)), 'Declaración guardada')
   const borrar = useAccion((id: number) => api.del(`/declaraciones/${id}`), 'Borrada')
 
-  const elegir = (lista: FileList | null) => {
-    const validos = [...(lista ?? [])].filter((f) => /\.(pdf|txt)$/i.test(f.name) || f.type === 'application/pdf')
-    if (validos.length && !subir.isPending) subir.mutate(validos)
-  }
+  const { input, elegir, zona, arrastrando } = useSubida({
+    accept: 'application/pdf,.pdf,.txt,text/plain', multiple: true, filtro: (f) => /\.(pdf|txt)$/i.test(f.name) || f.type === 'application/pdf',
+    onFicheros: (ficheros) => { if (!subir.isPending) subir.mutate(ficheros) },
+  })
 
   return (
     <>
       <Cabecera titulo="Impuestos" subtitulo="IVA e IRPF de cada trimestre, la renta y lo que ya has presentado">
         <Boton variante="secundario" onClick={() => setManual(true)}><Plus size={16} />A mano</Boton>
-        <Boton onClick={() => input.current?.click()} disabled={subir.isPending}><Upload size={16} />{subir.isPending ? 'Leyendo…' : 'Subir declaraciones'}</Boton>
+        <Boton onClick={elegir} disabled={subir.isPending}><Upload size={16} />{subir.isPending ? 'Leyendo…' : 'Subir declaraciones'}</Boton>
       </Cabecera>
-      <input ref={input} type="file" accept="application/pdf,.pdf,.txt,text/plain" multiple hidden onChange={(e) => { elegir(e.target.files); e.target.value = '' }} />
+      {input}
 
       <Trimestres />
       <SeccionHacienda />
       <Rentas />
 
-      <div className="mt-8"
-        onDragOver={(e) => { e.preventDefault(); setArrastrando(true) }}
-        onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setArrastrando(false) }}
-        onDrop={(e) => { e.preventDefault(); setArrastrando(false); elegir(e.dataTransfer.files) }}>
+      <div className="mt-8" {...zona}>
       {isLoading ? <Cargando /> : error ? <ErrorCarga error={error} /> : d && (
         <>
           <Tarjeta titulo="Presentadas" className={arrastrando ? 'ring-2 ring-accent' : ''}

@@ -2,13 +2,12 @@ import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { FileText } from 'lucide-react'
 import { api } from '../lib/api'
-import { eur } from '../lib/format'
-import { DIAS_SEMANA, ESTILO_DIA, MESES, diaISO, festivoDe, festivos, laborables, mesActual } from '../lib/festivos'
+import { MESES, MESES_EN, eur } from '../lib/format'
+import { ESTILO_DIA, diaISO, laborables, mesActual } from '../lib/festivos'
 import type { Facturacion, Prevision } from '../lib/tipos'
 import { num, useAccion } from '../lib/utilidades'
+import RejillaMes from './RejillaMes'
 import { Boton, Campo, Importe, Selector } from './ui'
-
-const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 
 const ultimoDia = (mes: string) => { const [a, m] = mes.split('-').map(Number); return diaISO(mes, new Date(a, m, 0).getDate()) }
 
@@ -39,19 +38,16 @@ export default function PlanificadorFactura({ onHecho }: { onHecho: () => void }
   const iva = c?.iva ?? 21, ret = c?.retencion ?? 15
 
   const [anio, m] = mes.split('-').map(Number)
-  const fest = useMemo(() => festivos(anio), [anio])
   const { data: sugerido } = useQuery({
     queryKey: ['facturacion', 'numero', anio],
     queryFn: () => api.get<{ numero: string }>(`/facturacion/siguiente-numero?anio=${anio}`),
   })
-  const huecos = (new Date(anio, m - 1, 1).getDay() + 6) % 7
-  const total = new Date(anio, m, 0).getDate()
   const dias = marcados.size
   const horasTotales = Math.round(h * dias * 100) / 100
   const base = Math.round(t * horasTotales * 100) / 100
   const cuotaIva = Math.round(base * iva) / 100, retencion = Math.round(base * ret) / 100
   const planificado = c ? p?.supuestos.dias_planificados?.[c.nombre]?.[mes] : undefined
-  const conceptoSugerido = ingles ? `Consulting services – ${MONTHS[m - 1]} ${anio}` : `Servicios de consultoría – ${MESES[m - 1]} de ${anio}`
+  const conceptoSugerido = ingles ? `Consulting services – ${MESES_EN[m - 1]} ${anio}` : `Servicios de consultoría – ${MESES[m - 1]} de ${anio}`
   const numeroFactura = numero ?? sugerido?.numero ?? ''
 
   const cambiarMes = (nuevo: string) => { setMes(nuevo); setElegidos(null); setFechaFactura(null); setConcepto(null); setNumero(null) }
@@ -99,22 +95,15 @@ export default function PlanificadorFactura({ onHecho }: { onHecho: () => void }
             <button type="button" className="font-medium text-accent" onClick={() => setElegidos(new Set())}>Ninguno</button>
           </span>
         </div>
-        <div className="grid grid-cols-7 gap-1 text-center text-xs">
-          {DIAS_SEMANA.map((d) => <div key={d} className="py-1 font-medium text-muted">{d}</div>)}
-          {Array.from({ length: huecos }, (_, i) => <div key={`h${i}`} />)}
-          {Array.from({ length: total }, (_, i) => i + 1).map((d) => {
-            const on = marcados.has(d)
-            const nombreFestivo = festivoDe(fest, mes, d)
+        <RejillaMes mes={mes} onDia={alternar} presionado={(d) => marcados.has(d)}
+          claseDia={(d, { festivo }) => {
             const tipo = noDisp[diaISO(mes, d)]
-            const titulo = [nombreFestivo, tipo === 'vacaciones' ? 'Vacaciones' : tipo ? 'No puedes' : ''].filter(Boolean).join(' · ')
-            return (
-              <button key={d} type="button" title={titulo || undefined} onClick={() => alternar(d)} aria-pressed={on}
-                className={`rounded-lg py-2 font-medium transition ${on ? 'bg-accent text-panel' : tipo ? `${ESTILO_DIA[tipo]} opacity-60` : 'bg-panel-2 text-muted'} ${nombreFestivo ? 'ring-1 ring-[var(--chart-3)]' : ''}`}>
-                {d}
-              </button>
-            )
-          })}
-        </div>
+            return `rounded-lg py-2 font-medium transition ${marcados.has(d) ? 'bg-accent text-panel' : tipo ? `${ESTILO_DIA[tipo]} opacity-60` : 'bg-panel-2 text-muted'} ${festivo ? 'ring-1 ring-[var(--chart-3)]' : ''}`
+          }}
+          tituloDia={(d, { festivo }) => {
+            const tipo = noDisp[diaISO(mes, d)]
+            return [festivo, tipo === 'vacaciones' ? 'Vacaciones' : tipo ? 'No puedes' : ''].filter(Boolean).join(' · ') || undefined
+          }} />
       </div>
 
       <dl className="grid grid-cols-2 gap-x-6 gap-y-1.5 rounded-xl bg-panel-2 p-4 text-sm sm:grid-cols-4">

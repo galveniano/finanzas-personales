@@ -6,6 +6,7 @@ import DatosFacturacion from './DatosFacturacion'
 import PlanificadorFactura from './PlanificadorFactura'
 import { api } from '../lib/api'
 import { eur, eurK, fecha, hoyISO } from '../lib/format'
+import { cursorBarra, eje, estiloTooltip } from '../lib/graficas'
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import type { Autonomo as Datos, Factura } from '../lib/tipos'
 import { num, opc, useAccion } from '../lib/utilidades'
@@ -110,10 +111,9 @@ export default function SeccionAutonomo() {
                   <BarChart data={d.por_anio.map((a) => ({ ...a, etiqueta: a.previsto ? `${a.anio} (previsto)` : String(a.anio) }))}
                     margin={{ top: 8, right: 4, left: 4, bottom: 0 }}>
                     <CartesianGrid vertical={false} stroke="var(--line)" />
-                    <XAxis dataKey="etiqueta" tick={{ fill: 'var(--muted)', fontSize: 11 }} axisLine={false} tickLine={false} />
-                    <YAxis tickFormatter={eurK} tick={{ fill: 'var(--muted)', fontSize: 11 }} axisLine={false} tickLine={false} width={68} />
-                    <Tooltip contentStyle={{ background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 12, fontSize: 12 }}
-                      cursor={{ fill: 'var(--panel-2)' }} formatter={(v, n) => [eur(Number(v)), n === 'facturado' ? 'Facturado (sin IVA)' : 'Neto tras gastos e IRPF']} />
+                    <XAxis dataKey="etiqueta" {...eje} />
+                    <YAxis tickFormatter={eurK} {...eje} width={68} />
+                    <Tooltip {...estiloTooltip} cursor={cursorBarra} formatter={(v, n) => [eur(Number(v)), n === 'facturado' ? 'Facturado (sin IVA)' : 'Neto tras gastos e IRPF']} />
                     <Legend formatter={(v) => (v === 'facturado' ? 'Facturado (sin IVA)' : 'Neto tras gastos e IRPF')} wrapperStyle={{ fontSize: 12 }} />
                     <Bar dataKey="facturado" fill="var(--chart-2)" radius={[4, 4, 0, 0]} maxBarSize={36} />
                     <Bar dataKey="neto" fill="var(--chart-1)" radius={[4, 4, 0, 0]} maxBarSize={36} />

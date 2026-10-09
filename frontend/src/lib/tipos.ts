@@ -14,8 +14,6 @@ export interface Resumen {
   grupos: { grupo: string; importe: number }[]
   lineas_activo: Linea[]; lineas_pasivo: Linea[]
   historico: { fecha: string; neto: number; liquidez: number; inversiones: number; inmuebles: number; vehiculos: number | null; deudas: number }[]
-  flujo_mensual: { mes: string; ingresos: number; gastos: number }[]
-  gasto_categorias: { categoria: string; importe: number }[]
   proximos_pagos: { id: number; concepto: string; fecha: string; importe: number }[]
   fiscal: {
     trimestre: number; anio: number

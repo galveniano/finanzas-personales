@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import type { ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
@@ -10,6 +10,7 @@ import { permisoDrive, subirADrive } from '../lib/google'
 import AjustesIA from '../components/AjustesIA'
 import DriveImport from '../components/DriveImport'
 import { useAccion, useAvisos } from '../lib/utilidades'
+import { useSubida } from '../lib/subida'
 import { Boton, Cabecera, Cargando, Etiqueta, ErrorCarga, Tarjeta } from '../components/ui'
 
 function Ultima({ u }: { u: UltimaSync | null }) {
@@ -147,20 +148,19 @@ function useVueltaBanco() {
 
 function ImportarDatos() {
   const avisar = useAvisos()
-  const input = useRef<HTMLInputElement>(null)
   const importar = useAccion(async (f: File) => {
     const fd = new FormData()
     fd.append('fichero', f)
     const r = await api.post<{ mensajes: string[] }>('/importar/datos', fd)
     r.mensajes.forEach((m) => avisar(m))
   })
+  const { input, elegir } = useSubida({ accept: '.json,application/json', onFicheros: (ficheros) => importar.mutate(ficheros[0]) })
   return (
     <Tarjeta titulo="Importar datos">
       <p className="text-sm text-muted">Carga de golpe tus bienes, hipotecas, inversiones y supuestos desde un fichero .json.
         Si algo ya existe, se actualiza en vez de duplicarse.</p>
-      <input ref={input} type="file" accept=".json,application/json" className="hidden"
-        onChange={(e) => { const f = e.target.files?.[0]; if (f) importar.mutate(f); e.target.value = '' }} />
-      <Boton variante="secundario" className="mt-4" onClick={() => input.current?.click()} disabled={importar.isPending}>
+      {input}
+      <Boton variante="secundario" className="mt-4" onClick={elegir} disabled={importar.isPending}>
         <Upload size={16} />{importar.isPending ? 'Importando…' : 'Elegir fichero'}</Boton>
     </Tarjeta>
   )

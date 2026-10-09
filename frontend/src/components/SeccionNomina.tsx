@@ -1,24 +1,23 @@
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { FileText, Pencil, Plus, Upload } from 'lucide-react'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { api } from '../lib/api'
-import { eur, eurK, fecha, hoyISO } from '../lib/format'
+import { capitalizar, eur, eurK, fecha, hoyISO, pct } from '../lib/format'
+import { cursorBarra, eje, estiloTooltip } from '../lib/graficas'
 import type { Nomina, Nominas as Datos, Prevision } from '../lib/tipos'
 import CalculadoraSueldo from './CalculadoraSueldo'
 import { num, useAccion, useAvisos } from '../lib/utilidades'
+import { useSubida } from '../lib/subida'
 import { BorrarEnDosPasos, Boton, Campo, Cargando, Dato, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Tabla, Tarjeta, Vacio } from './ui'
 
-const pct = (v: number) => `${v.toFixed(2).replace('.', ',')} %`
 const mes = (n: Nomina) => fecha(n.fecha, { month: 'long', year: 'numeric' })
-const Mes = (n: Nomina) => { const t = mes(n); return t.charAt(0).toUpperCase() + t.slice(1) }
+const Mes = (n: Nomina) => capitalizar(mes(n))
 
 type Subida = { resultados: { fichero: string; ok: boolean; mensaje: string; avisos: string[] }[] }
 
 export default function SeccionNomina() {
   const avisar = useAvisos()
-  const input = useRef<HTMLInputElement>(null)
-  const [arrastrando, setArrastrando] = useState(false)
   // null: cerrado; 'nueva': registrar a mano; una nómina: corregirla
   const [editando, setEditando] = useState<Nomina | 'nueva' | null>(null)
   const { data: d, isLoading, error } = useQuery({ queryKey: ['nominas'], queryFn: () => api.get<Datos>('/nominas') })
@@ -43,10 +42,10 @@ export default function SeccionNomina() {
     bien.forEach((x) => x.avisos.forEach((a) => avisar(`${x.mensaje}: ${a}`, 'error')))
     r.resultados.filter((x) => !x.ok).forEach((x) => avisar(`${x.fichero}: ${x.mensaje}`, 'error'))
   })
-  const elegir = (lista: FileList | null) => {
-    const validos = [...(lista ?? [])].filter((f) => /\.pdf$/i.test(f.name) || f.type === 'application/pdf')
-    if (validos.length && !subir.isPending) subir.mutate(validos)
-  }
+  const { input, elegir, zona, arrastrando } = useSubida({
+    accept: 'application/pdf,.pdf', multiple: true, filtro: (f) => /\.pdf$/i.test(f.name) || f.type === 'application/pdf',
+    onFicheros: (ficheros) => { if (!subir.isPending) subir.mutate(ficheros) },
+  })
 
   if (isLoading) return <Cargando />
   if (error) return <ErrorCarga error={error} />
@@ -62,15 +61,15 @@ export default function SeccionNomina() {
         <p className="text-sm text-muted">Trabajo por cuenta ajena en {d.anio}</p>
         <div className="flex gap-2">
           <Boton variante="secundario" onClick={() => setEditando('nueva')}><Plus size={16} />A mano</Boton>
-          <Boton onClick={() => input.current?.click()} disabled={subir.isPending}><Upload size={16} />{subir.isPending ? 'Leyendo…' : 'Subir nóminas'}</Boton>
+          <Boton onClick={elegir} disabled={subir.isPending}><Upload size={16} />{subir.isPending ? 'Leyendo…' : 'Subir nóminas'}</Boton>
         </div>
       </div>
-      <input ref={input} type="file" accept="application/pdf,.pdf" multiple hidden onChange={(e) => { elegir(e.target.files); e.target.value = '' }} />
+      {input}
       <Tarjeta>
         {d.fuente === 'banco' && d.estimado_banco && (
           <p className="mb-4 text-sm text-muted">Sacado de los ingresos de nómina de tus cuentas: el banco solo da el neto, así que
             bruto, IRPF y Seguridad Social están estimados (unos {eur(d.estimado_banco.bruto_anual)} brutos al año,
-            {' '}{String(d.estimado_banco.tipo_irpf).replace('.', ',')} % de retención). Si registras una nómina, manda la nómina.</p>
+            {' '}{pct(d.estimado_banco.tipo_irpf)} de retención). Si registras una nómina, manda la nómina.</p>
         )}
         <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
           <Dato etiqueta="Bruto acumulado" valor={eur(t.bruto)} />
@@ -91,10 +90,9 @@ export default function SeccionNomina() {
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={delAnio} margin={{ top: 8, right: 4, left: 4, bottom: 0 }}>
                 <CartesianGrid vertical={false} stroke="var(--line)" />
-                <XAxis dataKey="fecha" tickFormatter={(v) => fecha(v, { month: 'short' })} tick={{ fill: 'var(--muted)', fontSize: 11 }} axisLine={false} tickLine={false} />
-                <YAxis tickFormatter={eurK} tick={{ fill: 'var(--muted)', fontSize: 11 }} axisLine={false} tickLine={false} width={68} />
-                <Tooltip contentStyle={{ background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 12, fontSize: 12 }}
-                  cursor={{ fill: 'var(--panel-2)' }} formatter={(v, n) => [eur(Number(v)), n === 'neto' ? 'Neto' : 'IRPF']} labelFormatter={(v) => fecha(String(v), { month: 'long' })} />
+                <XAxis dataKey="fecha" tickFormatter={(v) => fecha(v, { month: 'short' })} {...eje} />
+                <YAxis tickFormatter={eurK} {...eje} width={68} />
+                <Tooltip {...estiloTooltip} cursor={cursorBarra} formatter={(v, n) => [eur(Number(v)), n === 'neto' ? 'Neto' : 'IRPF']} labelFormatter={(v) => fecha(String(v), { month: 'long' })} />
                 <Bar dataKey="neto" stackId="a" fill="var(--chart-1)" maxBarSize={28} />
                 <Bar dataKey="retencion_irpf" stackId="a" fill="var(--chart-3)" radius={[4, 4, 0, 0]} maxBarSize={28} />
               </BarChart>
@@ -122,9 +120,7 @@ export default function SeccionNomina() {
         </Tarjeta>
       )}
 
-      <div onDragOver={(e) => { e.preventDefault(); setArrastrando(true) }}
-        onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setArrastrando(false) }}
-        onDrop={(e) => { e.preventDefault(); setArrastrando(false); elegir(e.dataTransfer.files) }}>
+      <div {...zona}>
       <Tarjeta className={`mt-4 ${arrastrando ? 'ring-2 ring-[var(--accent)]' : ''}`} titulo="Nóminas registradas">
         {d.nominas.length ? (
           <Tabla>

@@ -1,24 +1,13 @@
 import { useState } from 'react'
-import type { ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Pencil, Plus } from 'lucide-react'
 import { api } from '../lib/api'
-import { eur, fecha, hoyISO } from '../lib/format'
+import { eur, fecha, hoyISO, pct } from '../lib/format'
 import type { Inmueble, VenderOAlquilar } from '../lib/tipos'
 import { num, opc, useAccion } from '../lib/utilidades'
-import { Barra, BorrarEnDosPasos, Boton, Cabecera, Campo, Cargando, Dato, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio } from '../components/ui'
+import { Barra, BorrarEnDosPasos, Boton, Cabecera, Campo, Cargando, Dato, Dialogo, Etiqueta, ErrorCarga, Fila, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio } from '../components/ui'
 
 type Accion = { tipo: 'valoracion' | 'hipoteca' | 'contrato' | 'renta' | 'gasto' | 'nuevo' | 'editar' | 'escritura' | 'editarContrato'; inmueble?: Inmueble; contratoId?: number }
-
-function Fila({ etiqueta, valor, fuerte }: { etiqueta: ReactNode; valor: number; fuerte?: boolean }) {
-  return (
-    <div className={`flex justify-between gap-3 py-1.5 text-sm ${fuerte ? 'border-t border-line pt-2.5 font-semibold' : ''}`}>
-      <span className={fuerte ? '' : 'text-muted'}>{etiqueta}</span><Importe valor={valor} />
-    </div>
-  )
-}
-
-const pct = (v: number | null) => (v === null ? '—' : `${v.toLocaleString('es-ES', { maximumFractionDigits: 2 })} %`)
 
 function Ficha({ i, abrir }: { i: Inmueble; abrir: (a: Accion) => void }) {
   const enObra = i.tipo === 'inmueble_en_construccion'
@@ -90,7 +79,7 @@ function Ficha({ i, abrir }: { i: Inmueble; abrir: (a: Accion) => void }) {
             <div className="mb-1 flex justify-between text-xs text-muted"><span>{eur(h.capital_inicial - h.pendiente)} amortizado</span><span>{eur(h.capital_inicial)}</span></div>
             <Barra valor={h.capital_inicial - h.pendiente} max={h.capital_inicial} />
             <Fila etiqueta="Cuota mensual" valor={h.cuota} />
-            <Fila etiqueta={`Interés ${String(h.tipo_interes_anual).replace('.', ',')} %, intereses este año`} valor={h.intereses_anio} />
+            <Fila etiqueta={`Interés ${pct(h.tipo_interes_anual, 3)}, intereses este año`} valor={h.intereses_anio} />
             {h.futura
               ? <p className="mt-2 text-xs text-muted">Empieza el {fecha(h.fecha_inicio)}. Hasta entonces no cuenta como deuda; sus cuotas ya cuentan en el Plan.</p>
               : <Fila etiqueta="Pendiente hoy" valor={h.pendiente} fuerte />}

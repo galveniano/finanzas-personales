@@ -1,6 +1,5 @@
 """API JSON que consume el frontal (carpeta frontend/)."""
 import json
-from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
@@ -11,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from finanzas import auth, config, db, patrimonio, sync
+from finanzas import auth, config, db, declaraciones, patrimonio, sync
 from finanzas.fechas import iso_utc
 from finanzas.fiscal import alquiler, autonomo, nomina as calc_nomina
 from finanzas.hipoteca import cuota_mensual, intereses_anio, saldo_pendiente
@@ -45,35 +44,6 @@ def _obtener(s: Session, modelo, id_: int):
 
 
 # --- Resumen (panel) --------------------------------------------------------
-
-def _gasto_por_mes(s: Session, meses: int = 6) -> list[dict]:
-    from finanzas import prevision
-    desde = (date.today().replace(day=1) - timedelta(days=31 * (meses - 1))).replace(day=1)
-    movs = prevision.movimientos_tuyos(s, desde)
-    traspasos = prevision.ids_traspaso(movs)
-    por_mes: dict[str, dict] = defaultdict(lambda: {"ingresos": 0.0, "gastos": 0.0})
-    for m in movs:
-        if m.tipo == "transferencia" or m.id in traspasos:
-            continue
-        clave = m.fecha.strftime("%Y-%m")
-        if m.tuyo >= 0:
-            por_mes[clave]["ingresos"] += m.tuyo
-        else:
-            por_mes[clave]["gastos"] += -m.tuyo
-    return [{"mes": k, "ingresos": round(v["ingresos"], 2), "gastos": round(v["gastos"], 2)}
-            for k, v in sorted(por_mes.items())]
-
-
-def _gasto_por_categoria(s: Session, dias: int = 30) -> list[dict]:
-    from finanzas import prevision
-    movs = prevision.movimientos_tuyos(s, date.today() - timedelta(days=dias))
-    traspasos = prevision.ids_traspaso(movs)
-    por_cat: dict[str, float] = defaultdict(float)
-    for m in movs:
-        if m.importe < 0 and m.tipo != "transferencia" and m.id not in traspasos:
-            por_cat[m.categoria or "Sin categoría"] += -m.tuyo
-    return sorted(({"categoria": c, "importe": round(t, 2)} for c, t in por_cat.items()), key=lambda x: -x["importe"])
-
 
 @router.get("/resumen")
 def resumen(s: Session = SesionDB):
@@ -110,8 +80,6 @@ def resumen(s: Session = SesionDB):
                        "inversiones": n(i.inversiones), "inmuebles": n(i.inmuebles), "vehiculos": n(i.vehiculos),
                        "deudas": n(i.deudas)}
                       for i in historico],
-        "flujo_mensual": _gasto_por_mes(s),
-        "gasto_categorias": _gasto_por_categoria(s),
         "proximos_pagos": [{"id": pp.id, "concepto": pp.concepto, "fecha": f(pp.fecha), "importe": n(pp.importe)}
                            for pp in proximos],
         "fiscal": {
@@ -156,7 +124,6 @@ def _cuenta(c: Cuenta) -> dict:
 @router.get("/indexa")
 def detalle_indexa(s: Session = SesionDB):
     """Posiciones y rentabilidad de cada cuenta de Indexa (de la última sincronización)."""
-    import json
     cuentas = s.scalars(select(Cuenta).where(Cuenta.origen == "indexa", Cuenta.activa).order_by(Cuenta.nombre))
     return [{"cuenta_id": c.id, "nombre": c.nombre, "numero": c.id_externo, "fecha": f(c.saldo_fecha),
              **json.loads(c.detalle or "{}")} for c in cuentas]
@@ -225,7 +192,6 @@ def actualizar_cuenta(cuenta_id: int, datos: CuentaPatch, s: Session = SesionDB)
             raise HTTPException(400, "La parte tuya tiene que estar entre 0 y 100 %")
         c.participacion = datos.participacion
     s.commit()
-    from finanzas import sync
     sync.guardar_instantanea(s)  # el patrimonio cambia
     return _cuenta(c)
 
@@ -397,16 +363,9 @@ def _presentadas(s: Session, anio: int) -> dict[tuple[str, int], Presentada]:
     return res
 
 
-def _casillas(d: Declaracion | Presentada | None) -> dict:
-    try:
-        return json.loads(d.casillas) if d and d.casillas else {}
-    except ValueError:
-        return {}
-
-
 def _presentados_130(presentadas: dict[tuple[str, int], Declaracion]) -> dict[int, tuple]:
     """Los 130 presentados por trimestre, con su importe y casillas, para que la estimación parta de ellos."""
-    return {t: (d.importe, _casillas(d)) for (mod, t), d in presentadas.items() if mod == "130"}
+    return {t: (d.importe, declaraciones.casillas(d)) for (mod, t), d in presentadas.items() if mod == "130"}
 
 
 def _autonomo_por_anio(s: Session, facturas, gastos, previsto: dict) -> list[dict]:
@@ -414,8 +373,8 @@ def _autonomo_por_anio(s: Session, facturas, gastos, previsto: dict) -> list[dic
     El año en curso, si hay previsión, se completa con lo previsto."""
     from finanzas import prevision
     cfg = prevision.resolver_clientes(s, prevision.leer(s))
-    rentas = {d.ejercicio: _casillas(d) for d in s.scalars(select(Declaracion).where(Declaracion.modelo == "100")
-                                                           .order_by(Declaracion.id))}
+    rentas = {d.ejercicio: declaraciones.casillas(d) for d in s.scalars(select(Declaracion).where(Declaracion.modelo == "100")
+                                                                        .order_by(Declaracion.id))}
     anios = sorted({x.fecha.year for x in facturas} | {int(k[:4]) for k in previsto}
                    | {a for a, c in rentas.items() if c.get("ingresos_actividad")})
     filas = []
@@ -458,7 +417,7 @@ def ver_autonomo(anio: int | None = None, s: Session = SesionDB):
         m130 = autonomo.calcular_130(anio, t, facturas, gastos, _presentados_130(presentadas))
         d303, d130 = presentadas.get(("303", t)), presentadas.get(("130", t))
         p = previsto.get(f"{anio}-{t}")
-        c130 = _casillas(d130)
+        c130 = declaraciones.casillas(d130)
         if "ingresos" in c130:
             ingresos_declarados, ultimo_130 = c130["ingresos"], t
         trimestres.append({
@@ -1382,7 +1341,6 @@ def importar_drive(datos: ImportarDriveIn, s: Session = SesionDB):
 
 @router.get("/drive/documentos")
 def listar_documentos_drive(s: Session = SesionDB):
-    import json
     orden = {"pendiente": 0, "error": 1, "importado": 2, "ignorado": 3}
     docs = sorted(s.scalars(select(DocumentoDrive)), key=lambda d: (orden.get(d.estado, 9), d.nombre))
     from finanzas import ia

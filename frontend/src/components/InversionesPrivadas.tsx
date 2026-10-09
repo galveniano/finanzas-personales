@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Check, Plus } from 'lucide-react'
 import { api } from '../lib/api'
-import { eur, fecha, hoyISO } from '../lib/format'
+import { eur, fecha, hoyISO, pct } from '../lib/format'
 import type { InversionPrivada, Inversiones } from '../lib/tipos'
 import { num, useAccion } from '../lib/utilidades'
 import { Barra, BorrarEnDosPasos, Boton, Campo, Dato, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Tarjeta, Vacio } from './ui'
@@ -99,7 +99,7 @@ function Fondo({ inv, onEditar }: { inv: InversionPrivada; onEditar: () => void 
       <div className="mt-5 text-sm">
         <div className="mb-1.5 flex justify-between gap-2">
           <span>Desembolsado <span className="cifra font-medium">{eur(inv.desembolsado)}</span> de {eur(inv.compromiso)}</span>
-          <span className="cifra whitespace-nowrap text-muted">{(inv.pct_desembolsado ?? 0).toLocaleString('es-ES', { maximumFractionDigits: 1 })} %</span>
+          <span className="cifra whitespace-nowrap text-muted">{pct(inv.pct_desembolsado ?? 0, 1)}</span>
         </div>
         <Barra valor={inv.desembolsado} max={inv.compromiso} />
         {inv.sin_calendario > 0 && (

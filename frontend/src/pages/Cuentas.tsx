@@ -7,6 +7,7 @@ import type { Categoria, Cuenta, Movimiento } from '../lib/tipos'
 import CarteraIndexa from '../components/CarteraIndexa'
 import InversionesPrivadas from '../components/InversionesPrivadas'
 import { num, useAccion, useAvisos } from '../lib/utilidades'
+import { useSubida } from '../lib/subida'
 import { BorrarEnDosPasos, Boton, Cabecera, Campo, Cargando, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio } from '../components/ui'
 
 const ORIGEN: Record<string, { texto: string; tono: 'acento' | 'neutro' | 'bien' }> = {
@@ -25,16 +26,17 @@ function Importar({ cuenta, onCerrar }: { cuenta: Cuenta; onCerrar: () => void }
     avisar(`${r.nuevos} movimientos nuevos, ${r.duplicados} ya estaban`)
     onCerrar()
   })
+  const { input, elegir, zona, arrastrando } = useSubida({ accept: '.xls,.xlsx,.csv', onFicheros: (ficheros) => accion.mutate(ficheros[0]) })
   return (
     <div className="space-y-4 text-sm">
       <p className="text-muted">Descarga los movimientos desde la web de Sabadell (Excel o CSV) y súbelos aquí. Si un movimiento ya estaba, no se duplica.</p>
-      <label className="flex cursor-pointer flex-col items-center gap-2 rounded-2xl border-2 border-dashed border-line px-4 py-8 text-center hover:border-accent">
+      <button type="button" onClick={elegir} disabled={accion.isPending} {...zona}
+        className={`flex w-full cursor-pointer flex-col items-center gap-2 rounded-2xl border-2 border-dashed border-line px-4 py-8 text-center hover:border-accent ${arrastrando ? 'ring-2 ring-accent' : ''}`}>
         <Upload className="text-accent" />
         <span className="font-medium">{accion.isPending ? 'Importando…' : 'Elegir extracto'}</span>
         <span className="text-xs text-muted">.xls, .xlsx o .csv</span>
-        <input type="file" accept=".xls,.xlsx,.csv" className="sr-only" disabled={accion.isPending}
-          onChange={(e) => { const f = e.target.files?.[0]; if (f) accion.mutate(f) }} />
-      </label>
+      </button>
+      {input}
     </div>
   )
 }

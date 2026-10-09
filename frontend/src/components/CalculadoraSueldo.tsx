@@ -1,12 +1,12 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
-import { eur } from '../lib/format'
+import { MESES, capitalizar, eur } from '../lib/format'
 import type { CalculoNomina } from '../lib/tipos'
 import { num } from '../lib/utilidades'
-import { Dato, Selector, Tabla, Tarjeta } from './ui'
+import { Dato, Segmentos, Selector, Tabla, Tarjeta } from './ui'
 
-const MESES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre']
+const MODOS = [{ valor: 'bruto', texto: 'Bruto a neto' }, { valor: 'neto', texto: 'Neto a bruto' }] as const
 
 /** De bruto anual a neto de cada mes, o qué bruto hace falta para cobrar un neto. */
 export default function CalculadoraSueldo({ brutoInicial }: { brutoInicial: number | null }) {
@@ -24,13 +24,7 @@ export default function CalculadoraSueldo({ brutoInicial }: { brutoInicial: numb
 
   return (
     <Tarjeta className="mt-4" titulo="Calculadora de sueldo" accion={
-      <div className="flex rounded-xl border border-line p-0.5 text-xs">
-        {(['bruto', 'neto'] as const).map((m) => (
-          <button key={m} onClick={() => setModo(m)} className={`rounded-lg px-3 py-1.5 ${modo === m ? 'bg-accent-soft font-semibold text-accent' : 'text-muted'}`}>
-            {m === 'bruto' ? 'Bruto a neto' : 'Neto a bruto'}
-          </button>
-        ))}
-      </div>}>
+      <Segmentos pequeno etiqueta="Modo de cálculo" opciones={MODOS} valor={modo} onCambiar={setModo} />}>
       <div className="grid gap-3 sm:grid-cols-4">
         <label className="flex flex-col gap-1.5 text-xs font-medium text-muted">
           {modo === 'bruto' ? 'Bruto anual (€)' : 'Neto que quieres al mes (€)'}
@@ -65,7 +59,7 @@ export default function CalculadoraSueldo({ brutoInicial }: { brutoInicial: numb
                 <tbody>
                   {c.meses.map((m, i) => (
                     <tr key={i}>
-                      <td>{MESES[m.mes - 1]}{m.paga_extra && <span className="ml-1 text-xs text-muted">(paga extra)</span>}</td>
+                      <td>{capitalizar(MESES[m.mes - 1])}{m.paga_extra && <span className="ml-1 text-xs text-muted">(paga extra)</span>}</td>
                       <td className="num cifra">{eur(m.bruto)}</td><td className="num cifra">{eur(m.seguridad_social)}</td>
                       <td className="num cifra">{eur(m.irpf)}</td><td className="num cifra font-medium">{eur(m.neto)}</td>
                     </tr>

@@ -3,7 +3,8 @@ import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { api } from '../lib/api'
-import { diasHasta, eur, eurK, fecha } from '../lib/format'
+import { cuandoVence, diasHasta, eur, eurK, fecha } from '../lib/format'
+import { eje, estiloTooltip } from '../lib/graficas'
 import type { Aviso, Resumen } from '../lib/tipos'
 import { Cabecera, Cargando, Dato, ErrorCarga, Importe, Tarjeta } from '../components/ui'
 
@@ -60,11 +61,6 @@ function PorAnio({ r }: { r: Resumen }) {
   )
 }
 
-const estiloTooltip = {
-  contentStyle: { background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 12, fontSize: 12, color: 'var(--ink)' },
-  labelStyle: { color: 'var(--muted)' },
-}
-
 function Composicion({ r }: { r: Resumen }) {
   const total = r.activos || 1
   return (
@@ -111,8 +107,8 @@ function Evolucion({ r }: { r: Resumen }) {
             </linearGradient>
           </defs>
           <CartesianGrid vertical={false} stroke="var(--line)" />
-          <XAxis dataKey="fecha" tickFormatter={(v) => fecha(v, { day: '2-digit', month: 'short' })} tick={{ fill: 'var(--muted)', fontSize: 11 }} axisLine={false} tickLine={false} minTickGap={40} />
-          <YAxis tickFormatter={eurK} tick={{ fill: 'var(--muted)', fontSize: 11 }} axisLine={false} tickLine={false} width={76} domain={['auto', 'auto']} />
+          <XAxis dataKey="fecha" tickFormatter={(v) => fecha(v, { day: '2-digit', month: 'short' })} {...eje} minTickGap={40} />
+          <YAxis tickFormatter={eurK} {...eje} width={76} domain={['auto', 'auto']} />
           <Tooltip {...estiloTooltip} formatter={(v) => [eur(Number(v)), 'Patrimonio neto']} labelFormatter={(v) => fecha(String(v))} />
           <Area type="monotone" dataKey="neto" stroke="var(--chart-1)" strokeWidth={2} fill="url(#neto)" />
         </AreaChart>
@@ -187,7 +183,7 @@ export default function Inicio() {
                   <li key={p.id} className="flex items-center justify-between gap-3 py-2 text-sm first:pt-0">
                     <div className="min-w-0">
                       <div className="truncate">{p.concepto}</div>
-                      <div className="text-xs text-muted">{dias < 0 ? 'Vencido' : dias === 0 ? 'Hoy' : dias === 1 ? 'Mañana' : `En ${dias} días`}</div>
+                      <div className="text-xs text-muted">{cuandoVence(dias)}</div>
                     </div>
                     <Importe valor={p.importe} />
                   </li>

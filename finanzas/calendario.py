@@ -21,7 +21,7 @@ def token() -> str:
 
 
 def _texto(v: str) -> str:
-    return v.replace("\\", "\\\\").replace(";", "\;").replace(",", "\\,").replace("\n", "\\n")
+    return v.replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
 
 
 def ics(hoy: date | None = None) -> str:

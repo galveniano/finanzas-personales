@@ -2,10 +2,10 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { CalendarPlus, Copy } from 'lucide-react'
 import { api } from '../lib/api'
-import { eur, fecha } from '../lib/format'
+import { eur, fecha, pct } from '../lib/format'
 import type { AhorroFiscal, Hacienda } from '../lib/tipos'
 import { num, useAccion, useAvisos } from '../lib/utilidades'
-import { Boton, Campo, Dato, ErrorCarga, Cargando, Importe, Selector, Tarjeta } from './ui'
+import { Boton, Campo, Dato, ErrorCarga, Cargando, Fila, Importe, Selector, Tarjeta } from './ui'
 
 /** Lo que debes a Hacienda y aún no has pagado, y la cuenta donde lo apartas. */
 function Hucha({ h }: { h: Hacienda }) {
@@ -14,15 +14,12 @@ function Hucha({ h }: { h: Hacienda }) {
   return (
     <Tarjeta titulo="Lo que debes a Hacienda">
       {h.pendiente.lineas.length ? (
-        <ul className="mb-4 divide-y divide-line text-sm">
+        <div className="mb-4 divide-y divide-line">
           {h.pendiente.lineas.map((l) => (
-            <li key={l.concepto} className="flex justify-between gap-3 py-1.5">
-              <span>{l.concepto}{l.en_curso && <span className="text-xs text-muted"> · en curso</span>}</span>
-              <Importe valor={l.importe} />
-            </li>
+            <Fila key={l.concepto} etiqueta={<>{l.concepto}{l.en_curso && <span className="text-xs text-muted"> · en curso</span>}</>} valor={l.importe} />
           ))}
-          <li className="flex justify-between gap-3 py-1.5 font-semibold"><span>Total hoy</span><Importe valor={h.pendiente.total} /></li>
-        </ul>
+          <Fila etiqueta="Total hoy" valor={h.pendiente.total} fuerte />
+        </div>
       ) : <p className="mb-4 text-sm text-muted">Ahora mismo no debes nada a Hacienda.</p>}
       <Selector etiqueta="Cuenta donde lo apartas (la hucha)" value={hucha.cuenta_id ?? ''} disabled={elegir.isPending}
         onChange={(e) => elegir.mutate(e.target.value ? Number(e.target.value) : null)}>
@@ -53,14 +50,14 @@ function CuotaAutonomos({ h }: { h: Hacienda }) {
         {h.cuota_autonomos.map((r) => (
           <div key={r.anio} className="text-sm">
             <div className="mb-1 font-medium">{r.anio} <span className="text-xs font-normal text-muted">· según {r.fuente}</span></div>
-            <dl className="space-y-1">
-              <div className="flex justify-between gap-3"><dt className="text-muted">Rendimiento para cotizar</dt><dd><Importe valor={r.rendimiento_computable_mes} /> al mes</dd></div>
-              <div className="flex justify-between gap-3"><dt className="text-muted">Te toca (tramo {r.tramo})</dt><dd><Importe valor={r.cuota_minima_anual} /> al año como mínimo</dd></div>
-              <div className="flex justify-between gap-3"><dt className="text-muted">{r.previsto ? 'Llevas camino de pagar' : 'Pagaste'}</dt><dd><Importe valor={r.cuota_pagada} /></dd></div>
-              {r.a_pagar > 0 && <div className="flex justify-between gap-3 text-warn"><dt>Puede reclamarte</dt><dd><Importe valor={r.a_pagar} /></dd></div>}
-              {r.a_devolver > 0 && <div className="flex justify-between gap-3 text-pos"><dt>Te devolvería</dt><dd><Importe valor={r.a_devolver} /></dd></div>}
-              {r.devolucion_pluriactividad > 0 && <div className="flex justify-between gap-3 text-pos"><dt>Devolución por pluriactividad</dt><dd><Importe valor={r.devolucion_pluriactividad} /></dd></div>}
-            </dl>
+            <div>
+              <Fila etiqueta="Rendimiento para cotizar" valor={<><Importe valor={r.rendimiento_computable_mes} /> al mes</>} />
+              <Fila etiqueta={`Te toca (tramo ${r.tramo})`} valor={<><Importe valor={r.cuota_minima_anual} /> al año como mínimo</>} />
+              <Fila etiqueta={r.previsto ? 'Llevas camino de pagar' : 'Pagaste'} valor={r.cuota_pagada} />
+              {r.a_pagar > 0 && <Fila etiqueta="Puede reclamarte" valor={r.a_pagar} className="text-warn" />}
+              {r.a_devolver > 0 && <Fila etiqueta="Te devolvería" valor={r.a_devolver} className="text-pos" />}
+              {r.devolucion_pluriactividad > 0 && <Fila etiqueta="Devolución por pluriactividad" valor={r.devolucion_pluriactividad} className="text-pos" />}
+            </div>
           </div>
         ))}
       </div>
@@ -83,7 +80,7 @@ function AhorroFiscalTarjeta({ h }: { h: Hacienda }) {
   const sup = h.supuestos
   return (
     <Tarjeta titulo="Pagar menos en la renta">
-      {h.renta && <p className="mb-3 text-sm">Cada euro más que ganas paga ahora un <strong className="cifra">{h.renta.tipo_marginal.toLocaleString('es-ES')} %</strong>,
+      {h.renta && <p className="mb-3 text-sm">Cada euro más que ganas paga ahora un <strong className="cifra">{pct(h.renta.tipo_marginal)}</strong>,
         así que cada euro que te deduces te ahorra casi lo mismo.</p>}
       <div className="grid gap-3 sm:grid-cols-3">
         <Campo etiqueta="Plan de pensiones (€/año)" inputMode="decimal" value={pensiones} onChange={(e) => setPensiones(e.target.value)} ayuda="Hasta 1.500 €" />
