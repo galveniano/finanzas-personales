@@ -14,7 +14,8 @@ const PESTANAS = [{ id: 'autonomo', texto: 'Autónomo' }, { id: 'nomina', texto:
 
 export default function Ingresos() {
   const [params, setParams] = useSearchParams()
-  const ver = params.get('ver') === 'nomina' ? 'nomina' : 'autonomo'
+  // ?ver=nomina abre esa pestaña; ?accion=factura abre «Registrar factura» (en Autónomo) desde fuera
+  const ver = params.get('accion') === 'factura' ? 'autonomo' : params.get('ver') === 'nomina' ? 'nomina' : 'autonomo'
   const [editar, setEditar] = useState(false)
   const { data: d, error } = useQuery({ queryKey: ['prevision'], queryFn: () => api.get<Prevision>('/prevision') })
   const sinDatos = d && !d.supuestos.nomina && !d.supuestos.clientes.length

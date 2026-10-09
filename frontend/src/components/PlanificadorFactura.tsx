@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { FileText } from 'lucide-react'
+import { FileText, X } from 'lucide-react'
 import { api } from '../lib/api'
-import { MESES, MESES_EN, eur } from '../lib/format'
+import { MESES, MESES_EN, eur, fecha } from '../lib/format'
 import { ESTILO_DIA, diaISO, laborables, mesActual } from '../lib/festivos'
 import type { Facturacion, Prevision } from '../lib/tipos'
 import { num, useAccion } from '../lib/utilidades'
@@ -57,6 +57,11 @@ export default function PlanificadorFactura({ onHecho }: { onHecho: () => void }
     setElegidos(n)
   }
   const prever = useAccion(() => api.put('/prevision/dias', { cliente: c.nombre, mes, dias }), 'Días guardados en la previsión')
+  const quitar = useAccion((x: { cliente: string; mes: string }) => api.put('/prevision/dias', { ...x, dias: null }), 'Quitado de la previsión')
+  // Todo lo planificado, por mes y cliente, para poder quitarlo sin buscar el mes
+  const planes = Object.entries(p?.supuestos.dias_planificados ?? {})
+    .flatMap(([cli, meses]) => Object.entries(meses).map(([m, d]) => ({ cliente: cli, mes: m, dias: d })))
+    .sort((a, b) => a.mes.localeCompare(b.mes) || a.cliente.localeCompare(b.cliente))
   const crear = useAccion(() => api.post<{ ok: boolean; id: number }>('/autonomo/facturas', {
     numero: numeroFactura, cliente: c.nombre, fecha: fechaFactura ?? ultimoDia(mes), base, tipo_iva: iva, tipo_retencion: ret,
     concepto: concepto ?? conceptoSugerido,
@@ -113,6 +118,20 @@ export default function PlanificadorFactura({ onHecho }: { onHecho: () => void }
         <div><dt className="text-xs text-muted">Te ingresan</dt><dd className="text-lg font-semibold"><Importe valor={base + cuotaIva - retencion} /></dd></div>
       </dl>
       {planificado !== undefined && <p className="text-xs text-muted">En la previsión tienes {planificado} días para este mes.</p>}
+      {planes.length > 0 && (
+        <details className="text-sm">
+          <summary className="cursor-pointer text-xs font-medium text-accent">Días planificados en la previsión ({planes.length})</summary>
+          <ul className="mt-2 divide-y divide-line rounded-xl border border-line px-3">
+            {planes.map((x) => (
+              <li key={`${x.cliente}-${x.mes}`} className="flex items-center justify-between gap-3 py-1.5">
+                <span className="min-w-0 truncate"><span className="font-medium">{x.cliente}</span> · {fecha(`${x.mes}-01`, { month: 'long', year: 'numeric' })}: <span className="cifra">{x.dias}</span> {x.dias === 1 ? 'día' : 'días'}</span>
+                <Boton variante="fantasma" className="px-2 py-1" disabled={quitar.isPending} onClick={() => quitar.mutate({ cliente: x.cliente, mes: x.mes })}
+                  aria-label={`Quitar los días de ${x.cliente} en ${x.mes}`} title="Quitar: la previsión vuelve a usar los días al mes del cliente"><X size={14} /></Boton>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2">
         <Campo etiqueta="Número de factura" value={numeroFactura} onChange={(e) => setNumero(e.target.value)} />

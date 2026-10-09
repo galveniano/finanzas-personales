@@ -5,7 +5,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -301,6 +301,14 @@ def completar_sabadell(datos: CodigoIn, request: Request, s: Session = SesionDB)
 
 # --- Autónomo ---------------------------------------------------------------
 
+def recorte(**limites: int):
+    """Validador que recorta un texto a lo que cabe en su columna (`campo=largo`); así un nombre demasiado largo
+    no acaba en un error 500 de Postgres."""
+    def validar(cls, v, info):
+        return v.strip()[:limites[info.field_name]] if isinstance(v, str) else v
+    return field_validator(*limites)(classmethod(validar))
+
+
 class DetalleFactura(BaseModel):
     horas: float
     precio_hora: float
@@ -317,6 +325,7 @@ class FacturaIn(BaseModel):
     tipo_retencion: Decimal = Decimal("15")
     fecha_cobro: date | None = None
     detalle: DetalleFactura | None = None  # vacío al editar: se conserva el que tuviera
+    recortar = recorte(numero=40, cliente=120)
 
     def valores(self) -> dict:
         v = self.model_dump(exclude={"cliente", "detalle"})
@@ -340,6 +349,7 @@ class GastoAutonomoIn(BaseModel):
     base: Decimal
     tipo_iva: Decimal = Decimal("21")
     deducible_pct: Decimal = Decimal("100")
+    recortar = recorte(proveedor=120, categoria=30)
 
 
 @dataclass
@@ -409,7 +419,8 @@ def ver_autonomo(anio: int | None = None, s: Session = SesionDB):
     hay_facturas = any(x.fecha.year == anio for x in facturas)
     presentadas = _presentadas(s, anio)
     # Lo no presentado se estima con la previsión (sueldo, tarifas y días del último mes) si está configurada
-    from finanzas import prevision
+    from finanzas import actividad, prevision
+    hoy = date.today()
     previsto = prevision.calcular(s)["trimestres"] if prevision.tiene_clientes(prevision.leer(s)) else {}
     trimestres, ingresos_declarados, ultimo_130 = [], None, None
     for t in range(1, 5):
@@ -452,13 +463,17 @@ def ver_autonomo(anio: int | None = None, s: Session = SesionDB):
                       "concepto": x.concepto, "base": n(x.base), "tipo_iva": n(x.tipo_iva),
                       "tipo_retencion": n(x.tipo_retencion), "cuota_iva": n(x.cuota_iva),
                       "retencion": n(x.retencion), "total": n(x.total_a_cobrar), "fecha_cobro": f(x.fecha_cobro),
-                      "con_detalle": bool(x.detalle)}
+                      "con_detalle": bool(x.detalle), "cobrada": x.fecha_cobro is not None,
+                      "dias_pendiente": actividad.dias_pendiente(x, hoy)}
                      for x in del_anio],
         "gastos": [{"id": g.id, "fecha": f(g.fecha), "proveedor": g.proveedor, "concepto": g.concepto,
                     "categoria": g.categoria, "base": n(g.base), "tipo_iva": n(g.tipo_iva),
                     "cuota_iva": n(g.cuota_iva), "deducible_pct": n(g.deducible_pct)}
                    for g in gastos if g.fecha.year == anio],
         "clientes": [c.nombre for c in s.scalars(select(Cliente).order_by(Cliente.nombre))],
+        # Lo que te deben (de cualquier año), los ingresos del banco que parecen cobros y los saltos de numeración
+        **actividad.estado_cobros(s, facturas, hoy),
+        "avisos_numeracion": actividad.avisos_numeracion(del_anio),
     }
 
 
@@ -497,16 +512,18 @@ def borrar_autonomo(tipo: str, item_id: int, s: Session = SesionDB):
 # --- Nóminas ----------------------------------------------------------------
 
 class NominaIn(BaseModel):
-    empresa: str = "Indra"
+    empresa: str = "Empresa"
     fecha: date
     bruto: Decimal
     retencion_irpf: Decimal
     seguridad_social: Decimal
     neto: Decimal
     tipo_irpf: Decimal | None = None
+    base_irpf: Decimal | None = None
     especie: Decimal | None = None
     otras_deducciones: Decimal | None = None
     paga_extra: bool | None = None
+    recortar = recorte(empresa=80)
 
 
 def _fila_nomina(x: Nomina) -> dict:
@@ -525,6 +542,55 @@ def _nominas_banco(s: Session) -> list[Movimiento]:
         .where(Categoria.nombre == "Nómina", Movimiento.importe > 0, PARTE > 0,
                Movimiento.fecha >= date.today() - timedelta(days=730))
         .order_by(Movimiento.fecha.desc())).all()
+
+
+DIAS_COBRO_MES_ANTERIOR = 7  # un cobro de nómina en los primeros días del mes es el del mes que acaba de terminar
+
+
+def _meses_nomina(del_anio: list[Nomina], banco: list[Movimiento], anio: int) -> list[dict]:
+    """Mes a mes del año hasta hoy: el neto de las nóminas registradas frente a lo que entró en el banco como
+    nómina. Cuadra si hay las dos cosas y se llevan menos de 1 €."""
+    hoy = date.today()
+    if anio > hoy.year:
+        return []
+    ultimo = 12 if anio < hoy.year else hoy.month
+    neto: dict[int, Decimal] = {}
+    for x in del_anio:
+        neto[x.fecha.month] = neto.get(x.fecha.month, CERO) + x.neto
+    cobros: dict[int, list[Movimiento]] = {}
+    for m in banco:
+        mes = (m.fecha - timedelta(days=m.fecha.day)) if m.fecha.day <= DIAS_COBRO_MES_ANTERIOR else m.fecha
+        if mes.year == anio:
+            cobros.setdefault(mes.month, []).append(m)
+    filas = []
+    for mes in range(1, ultimo + 1):
+        importe = sum((m.importe for m in cobros.get(mes, [])), CERO) if mes in cobros else None
+        filas.append({"mes": f"{anio}-{mes:02d}", "nomina_neto": n(neto.get(mes)), "banco_importe": n(importe),
+                      "banco_fecha": f(min(m.fecha for m in cobros[mes])) if mes in cobros else None,
+                      "cuadra": mes in neto and importe is not None and abs(neto[mes] - importe) <= 1})
+    return filas
+
+
+def _retencion_recomendada(s: Session, nominas: list[Nomina], anio: int) -> dict | None:
+    """Tipo de retención que, pedido a la empresa desde el mes que viene, dejaría la renta del año en cero: lo que la
+    previsión dice que saldrá a pagar, repartido entre el bruto que queda por cobrar este año. Solo si sube más de un
+    punto y no pasa del 47 % (el máximo de la escala)."""
+    from finanzas import prevision
+    hoy = date.today()
+    cfg = prevision.leer(s)
+    tipo_actual = prevision.tipo_irpf_actual(nominas)
+    if anio != hoy.year or tipo_actual is None or not cfg.get("nomina") or hoy.month == 12:
+        return None
+    renta = next((a for a in prevision.calcular(s)["anios"] if a["anio"] == anio), None)
+    brutos = prevision._nomina_anual(cfg["nomina"])["brutos"]
+    restante = sum(v for m, v in brutos.items() if m > hoy.month)
+    if renta is None or restante <= 0:
+        return None
+    recomendado = round(tipo_actual + renta["resultado"] / restante * 100, 1)
+    if recomendado <= tipo_actual + 1 or recomendado > 47:
+        return None
+    return {"tipo_actual": tipo_actual, "tipo_recomendado": recomendado, "resultado_previsto": renta["resultado"],
+            "meses_restantes": 12 - hoy.month}
 
 
 @router.get("/nominas")
@@ -567,19 +633,24 @@ def listar_nominas(anio: int | None = None, s: Session = SesionDB):
             "banco": [{"id": m.id, "fecha": f(m.fecha), "concepto": m.concepto, "importe": n(m.importe),
                        "cuenta": m.cuenta.nombre} for m in banco],
             "tipo_irpf_actual": prevision.tipo_irpf_actual(nominas),
-            "nominas": [_fila_nomina(x) for x in nominas]}
+            "nominas": [_fila_nomina(x) for x in del_anio],
+            "meses": _meses_nomina(del_anio, banco, anio),
+            "retencion_recomendada": _retencion_recomendada(s, nominas, anio)}
 
 
 @router.get("/nominas/calculo")
 def calcular_nomina(bruto_anual: float | None = None, neto_mes: float | None = None, pagas: int = 14,
-                    hijos: int = 0, temporal: bool = False):
-    """De bruto anual a neto de cada mes, o el bruto que hace falta para un neto mensual."""
+                    hijos: int = 0, temporal: bool = False, tipo_irpf: float | None = None):
+    """De bruto anual a neto de cada mes, o el bruto que hace falta para un neto mensual. Con `tipo_irpf` se usa
+    esa retención en vez de la calculada (para ver qué neto queda si le pides a la empresa un tipo más alto)."""
+    if tipo_irpf is not None and not 0 <= tipo_irpf <= 47:
+        raise HTTPException(400, "La retención tiene que estar entre 0 y 47 %")
     try:
         if neto_mes is not None:
             return calc_nomina.bruto_para_neto(neto_mes, pagas, hijos, temporal).a_dict()
         if bruto_anual is None:
             raise HTTPException(400, "Indica el bruto anual o el neto mensual")
-        return calc_nomina.calcular(bruto_anual, pagas, hijos, temporal).a_dict()
+        return calc_nomina.calcular(bruto_anual, pagas, hijos, temporal, tipo_irpf).a_dict()
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -630,10 +701,11 @@ def _leer_nomina(s: Session, contenido: bytes, nombre: str):
 def _guardar_nomina(s: Session, contenido: bytes, nombre: str) -> dict:
     from finanzas.importers import nomina_pdf
     lectura = _leer_nomina(s, contenido, nombre)
-    # La misma nómina subida otra vez (o corregida por la empresa) sustituye a la anterior
+    # La misma nómina subida otra vez (o corregida por la empresa, o apuntada antes a mano) sustituye a la
+    # anterior: se empareja por mes y tipo de paga, sin mirar la empresa (a mano suele quedar «Empresa»)
     mismo_mes = [x for x in s.scalars(select(Nomina)).all()
                  if (x.fecha.year, x.fecha.month) == (lectura.fecha.year, lectura.fecha.month)
-                 and bool(x.paga_extra) == lectura.paga_extra and x.empresa.lower() == lectura.empresa.lower()]
+                 and bool(x.paga_extra) == lectura.paga_extra]
     x = mismo_mes[0] if mismo_mes else Nomina()
     for k in ("empresa", "fecha", "bruto", "seguridad_social", "retencion_irpf", "neto", "tipo_irpf", "base_irpf",
               "especie", "otras_deducciones", "paga_extra"):
@@ -910,8 +982,10 @@ def guardar_supuestos(datos: SupuestosPrevision, s: Session = SesionDB):
         raise HTTPException(400, "Las pagas tienen que ser 12 o 14")
     nuevos = datos.model_dump()
     if nuevos["dias_planificados"] is None:  # el formulario de supuestos no los manda: se conservan
-        nuevos["dias_planificados"] = prevision.leer(s).get("dias_planificados") or {}
-    prevision.guardar(s, nuevos)
+        del nuevos["dias_planificados"]
+    # Solo cambian los campos de este formulario (nomina: null sí quita la nómina, que el formulario la manda
+    # explícita); lo de «Pagar menos en la renta» (pensiones, fraccionar, rentas del ahorro...) se conserva
+    prevision.guardar(s, {**prevision.leer(s), **nuevos})
     return {"ok": True}
 
 

@@ -10,10 +10,11 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from finanzas import ajustes, auth, db
+from finanzas.api import recorte
 from finanzas.fechas import MESES, MESES_EN
 from finanzas.models import Cliente, Factura
 
@@ -40,6 +41,12 @@ class DatosCliente(BaseModel):
     direccion: str = ""
     idioma: Literal["es", "en"] = "es"
     nota_factura: str = ""
+    recortar = recorte(nif=20)
+
+
+class RenombrarCliente(BaseModel):
+    nuevo_nombre: str
+    recortar = recorte(nuevo_nombre=120)
 
 
 class CambioDias(BaseModel):
@@ -101,18 +108,20 @@ def numero_para(s: Session, anio: int) -> str:
     return numero
 
 
-def _cliente(c: Cliente) -> dict:
+def _cliente(c: Cliente, facturas: int = 0) -> dict:
     return {"nombre": c.nombre, "nif": c.nif or "", "direccion": c.direccion or "", "idioma": c.idioma or "es",
-            "nota_factura": c.nota_factura or ""}
+            "nota_factura": c.nota_factura or "", "facturas": facturas}
 
 
 @router.get("/facturacion")
 def ver_facturacion(s: Session = SesionDB):
     from finanzas import prevision
-    clientes ={c.nombre: _cliente(c) for c in s.scalars(select(Cliente))}
+    cuantas = dict(s.execute(select(Factura.cliente_id, func.count()).group_by(Factura.cliente_id)).all())
+    clientes = {c.nombre: _cliente(c, cuantas.get(c.id, 0)) for c in s.scalars(select(Cliente))}
     for c in prevision.leer(s).get("clientes") or []:  # los de Sueldo y tarifas aunque aún no tengan facturas
         if c.get("nombre"):
-            clientes.setdefault(c["nombre"], {"nombre": c["nombre"], "nif": "", "direccion": "", "idioma": "es", "nota_factura": ""})
+            clientes.setdefault(c["nombre"], {"nombre": c["nombre"], "nif": "", "direccion": "", "idioma": "es",
+                                              "nota_factura": "", "facturas": 0})
     return {
         "emisor": leer_emisor(s).model_dump(),
         "clientes": sorted(clientes.values(), key=lambda c: c["nombre"].lower()),
@@ -139,6 +148,59 @@ def guardar_cliente(nombre: str, datos: DatosCliente, s: Session = SesionDB):
         c = Cliente(nombre=nombre)
         s.add(c)
     c.nif, c.direccion, c.idioma, c.nota_factura = datos.nif.strip(), datos.direccion.strip(), datos.idioma, datos.nota_factura.strip()
+    s.commit()
+    return {"ok": True}
+
+
+def _en_supuestos(cfg: dict, nombre: str) -> bool:
+    return any(c.get("nombre") == nombre for c in cfg.get("clientes") or [])
+
+
+@router.patch("/facturacion/clientes/{nombre}")
+def renombrar_cliente(nombre: str, datos: RenombrarCliente, s: Session = SesionDB):
+    """Cambia el nombre del cliente en sus facturas y, si está en «Sueldo y tarifas», también ahí (con sus días planificados)."""
+    from finanzas import prevision
+    nombre, nuevo = nombre.strip(), datos.nuevo_nombre
+    if not nuevo:
+        raise HTTPException(400, "Pon el nombre nuevo")
+    c = s.scalar(select(Cliente).where(Cliente.nombre == nombre))
+    cfg = prevision.leer(s)
+    if c is None and not _en_supuestos(cfg, nombre):
+        raise HTTPException(404, "No existe ese cliente")
+    if nuevo == nombre:
+        return {"ok": True}
+    if s.scalar(select(Cliente.id).where(Cliente.nombre == nuevo)) or _en_supuestos(cfg, nuevo):
+        raise HTTPException(400, f"Ya tienes un cliente que se llama {nuevo}")
+    if c is not None:
+        c.nombre = nuevo
+    if _en_supuestos(cfg, nombre):
+        cfg["clientes"] = [{**x, "nombre": nuevo} if x.get("nombre") == nombre else x for x in cfg["clientes"]]
+        planes = cfg.get("dias_planificados") or {}
+        if nombre in planes:
+            planes[nuevo] = planes.pop(nombre)
+        prevision.guardar(s, {**cfg, "dias_planificados": planes})
+    s.commit()
+    return {"ok": True}
+
+
+@router.delete("/facturacion/clientes/{nombre}")
+def borrar_cliente(nombre: str, s: Session = SesionDB):
+    """Solo si no tiene facturas. Si está en «Sueldo y tarifas», se quita también de ahí."""
+    from finanzas import prevision
+    nombre = nombre.strip()
+    c = s.scalar(select(Cliente).where(Cliente.nombre == nombre))
+    cfg = prevision.leer(s)
+    if c is None and not _en_supuestos(cfg, nombre):
+        raise HTTPException(404, "No existe ese cliente")
+    if c is not None:
+        cuantas = s.scalar(select(func.count()).select_from(Factura).where(Factura.cliente_id == c.id))
+        if cuantas:
+            raise HTTPException(400, f"{nombre} tiene {cuantas} factura{'s' if cuantas != 1 else ''}: no se puede borrar")
+        s.delete(c)
+    if _en_supuestos(cfg, nombre):
+        planes = {k: v for k, v in (cfg.get("dias_planificados") or {}).items() if k != nombre}
+        prevision.guardar(s, {**cfg, "clientes": [x for x in cfg["clientes"] if x.get("nombre") != nombre],
+                              "dias_planificados": planes})
     s.commit()
     return {"ok": True}
 

@@ -73,10 +73,15 @@ export interface Factura {
   id: number; numero: string; cliente: string; fecha: string; concepto: string; base: number
   tipo_iva: number; tipo_retencion: number; cuota_iva: number; retencion: number; total: number
   fecha_cobro: string | null; con_detalle: boolean
+  cobrada: boolean; dias_pendiente: number | null  // días desde la factura si aún no está cobrada
 }
+/** Facturas sin cobrar, de cualquier año. */
+export interface PorCobrar { total: number; facturas: number; mas_antigua_dias: number | null }
+/** Ingreso del banco que cuadra con una factura pendiente (mismo total ±1 €). */
+export interface SugerenciaCobro { factura_id: number; movimiento_id: number; fecha: string; importe: number }
 export type TipoDia = 'vacaciones' | 'no_disponible'
 export interface Emisor { nombre: string; nif: string; direccion: string; email: string; telefono: string; iban: string; pie: string }
-export interface ClienteFacturacion { nombre: string; nif: string; direccion: string; idioma: 'es' | 'en'; nota_factura: string }
+export interface ClienteFacturacion { nombre: string; nif: string; direccion: string; idioma: 'es' | 'en'; nota_factura: string; facturas: number }
 export interface Facturacion {
   emisor: Emisor; clientes: ClienteFacturacion[]; dias_no_disponibles: Record<string, TipoDia>
 }
@@ -90,18 +95,36 @@ export interface Autonomo {
   ingresos_declarados: number | null; ultimo_130: number | null; pagado_iva: number; pagado_irpf: number
   por_cliente: { cliente: string; base: number }[]
   facturas: Factura[]; gastos: GastoAutonomo[]; clientes: string[]
+  por_cobrar: PorCobrar; sugerencias_cobro: SugerenciaCobro[]; avisos_numeracion: string[]
 }
+/** Lo del año que hace falta para el 390 y para saber si toca el 347. */
+export interface ResumenAnual {
+  anio: number; facturas: number; gastos: number
+  repercutido: { tipo: number; base: number; cuota: number }[]
+  base_total: number; iva_repercutido: number; base_soportada: number; iva_soportado: number; retenciones: number
+  trimestres: { trimestre: number; calculado: number; presentado: number | null }[]
+  presentado_303: number | null; calculado_303: number; umbral_347: number
+  terceros_347: { nombre: string; nif: string; tipo: 'cliente' | 'proveedor'; importe: number; operaciones: number; con_retencion: boolean }[]
+}
+/** Cargo de la cuota de autónomos en el banco que aún no está apuntado como gasto. */
+export interface CargoTgss { fecha: string; importe: number }
+export interface CargosTgss { cargos: CargoTgss[]; n: number; total: number }
 export interface Nomina {
   id: number; empresa: string; fecha: string; bruto: number; retencion_irpf: number
   seguridad_social: number; neto: number; tipo_irpf: number | null; base_irpf: number | null
   especie: number | null; otras_deducciones: number | null; paga_extra: boolean; tiene_pdf: boolean
 }
+/** Un mes del año: el neto de las nóminas registradas frente a lo que entró en el banco como nómina. */
+export interface MesNomina { mes: string; nomina_neto: number | null; banco_importe: number | null; banco_fecha: string | null; cuadra: boolean }
+/** Tipo de retención que, pedido a la empresa desde el mes que viene, dejaría la renta del año en cero. */
+export interface RetencionRecomendada { tipo_actual: number; tipo_recomendado: number; resultado_previsto: number; meses_restantes: number }
 export interface Nominas {
   anio: number; nominas: Nomina[]; bruto_12_meses: number | null; tipo_irpf_actual: number | null
   totales: { bruto: number; retencion_irpf: number; seguridad_social: number; neto: number }
   fuente: 'nominas' | 'banco' | 'ninguna'
   estimado_banco: { neto_medio_mes: number; meses: number; bruto_anual: number; irpf_anual: number; ss_anual: number; tipo_irpf: number } | null
   banco: { id: number; fecha: string; concepto: string; importe: number; cuenta: string }[]
+  meses: MesNomina[]; retencion_recomendada: RetencionRecomendada | null
 }
 export interface Rendimiento {
   anio: number; ingresos: number; gastos_limitados: number; gastos_otros: number; amortizacion: number
@@ -163,7 +186,8 @@ export interface CalculoNomina {
 export interface DocumentoDrive {
   id: number; nombre: string; enlace: string; tipo: 'emitida' | 'recibida' | 'aeat' | 'otro'
   estado: 'importado' | 'pendiente' | 'ignorado' | 'error'; mensaje: string; revisado: string
-  datos: { fecha?: string; contraparte?: string; concepto?: string; base?: number; tipo_iva?: number; total?: number; avisos?: string[] }
+  datos: { fecha?: string; contraparte?: string; concepto?: string; base?: number; tipo_iva?: number; tipo_retencion?: number
+    total?: number; categoria_gasto?: string; avisos?: string[] }
 }
 export interface DocumentosDrive { ia: boolean; google_client_id: string | null; documentos: DocumentoDrive[] }
 export interface MensajeChat { role: 'user' | 'assistant'; content: string }

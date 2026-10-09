@@ -7,12 +7,25 @@ import { ESTILO_DIA, diaISO, laborables, mesActual, moverMes } from '../lib/fest
 import type { Facturacion, TipoDia } from '../lib/tipos'
 import { useAvisos } from '../lib/utilidades'
 import RejillaMes from './RejillaMes'
-import { Boton } from './ui'
+import { Boton, Campo } from './ui'
 
 type Pincel = TipoDia | 'quitar'
 const PINCELES: { valor: Pincel; texto: string }[] = [
   { valor: 'vacaciones', texto: 'Vacaciones' }, { valor: 'no_disponible', texto: 'No puedo' }, { valor: 'quitar', texto: 'Borrar' },
 ]
+const MAX_DIAS_RANGO = 370
+
+/** Días laborables (sin fines de semana ni festivos) entre dos fechas «AAAA-MM-DD», ambas incluidas. */
+function laborablesEntre(desde: string, hasta: string): string[] {
+  const dias: string[] = []
+  let d = new Date(`${desde}T00:00:00`)
+  const fin = new Date(`${hasta}T00:00:00`)
+  for (let i = 0; d <= fin && i <= MAX_DIAS_RANGO; d.setDate(d.getDate() + 1), i++) {
+    const mes = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+    if (laborables(mes).has(d.getDate())) dias.push(diaISO(mes, d.getDate()))
+  }
+  return dias
+}
 
 /** Calendario donde marcas tus vacaciones y los días que no puedes trabajar; el planificador de facturas ya no los cuenta. */
 export default function CalendarioDias() {
@@ -43,6 +56,19 @@ export default function CalendarioDias() {
     const tipo = pincel === 'quitar' || marcados[clave] === pincel ? null : pincel
     marcar.mutate({ dias: [clave], tipo })
   }
+  // Un tramo entero (las vacaciones de agosto) con el pincel elegido, solo los días laborables
+  const [desde, setDesde] = useState('')
+  const [hasta, setHasta] = useState('')
+  const rangoValido = !!desde && !!hasta && hasta >= desde
+  const marcarRango = () => {
+    const dias = laborablesEntre(desde, hasta)
+    if (!dias.length) return avisar('En ese tramo no hay días laborables', 'error')
+    if (dias.length > 260) return avisar('Marca como mucho un año de cada vez', 'error')
+    marcar.mutate({ dias, tipo: pincel === 'quitar' ? null : pincel })
+    setMes(desde.slice(0, 7))
+    setDesde('')
+    setHasta('')
+  }
 
   const delMes = Object.entries(marcados).filter(([k]) => k.startsWith(mes))
   const vacacionesAnio = Object.entries(marcados).filter(([k, v]) => k.startsWith(String(anio)) && v === 'vacaciones'
@@ -66,6 +92,14 @@ export default function CalendarioDias() {
           </button>
         ))}
       </div>
+
+      <form className="flex flex-wrap items-end gap-2" onSubmit={(e) => { e.preventDefault(); if (rangoValido) marcarRango() }} aria-label="Marcar un tramo de días">
+        <Campo etiqueta="Del día" type="date" value={desde} onChange={(e) => setDesde(e.target.value)} className="min-w-0 flex-1 basis-36" />
+        <Campo etiqueta="al" type="date" value={hasta} min={desde || undefined} onChange={(e) => setHasta(e.target.value)} className="min-w-0 flex-1 basis-36" />
+        <Boton type="submit" variante="secundario" disabled={!rangoValido || marcar.isPending}>
+          {pincel === 'quitar' ? 'Borrar el tramo' : `Marcar ${pincel === 'vacaciones' ? 'vacaciones' : 'que no puedo'}`}
+        </Boton>
+      </form>
 
       <RejillaMes mes={mes} onDia={tocar}
         claseDia={(d, { festivo, finde }) => {
