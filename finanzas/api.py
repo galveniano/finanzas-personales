@@ -45,9 +45,20 @@ def _obtener(s: Session, modelo, id_: int):
 
 # --- Resumen (panel) --------------------------------------------------------
 
+def _gasto_del_mes(g: dict, hoy: date) -> dict:
+    """Tarjeta «Este mes» de Inicio: lo que llevas gastado y a cuánto acabarás a este ritmo (estimación ponderada:
+    lo que falta de mes se supone que irá como la media de los últimos 3 meses; nunca por debajo de lo ya gastado)."""
+    from calendar import monthrange
+    dias_mes = monthrange(hoy.year, hoy.month)[1]
+    este, media = g["este_mes"]["gastos"], g["gastos_mes"]
+    proyeccion = max(este, este + (media - este) * (dias_mes - hoy.day) / dias_mes)
+    return {"este_mes": este, "dia": hoy.day, "media_mes": media, "proyeccion": round(proyeccion, 2)}
+
+
 @router.get("/resumen")
 def resumen(s: Session = SesionDB):
     from finanzas import avisos, hacienda, prevision
+    from finanzas.gastos import analisis as analisis_gastos
     hoy = date.today()
     prev_completa = prevision.calcular(s)
     pendiente = hacienda.pendiente(s, prev_completa)
@@ -65,8 +76,7 @@ def resumen(s: Session = SesionDB):
     cfg = prevision.leer(s)
     p_t = prev_completa["trimestres"].get(f"{anio_t}-{t}") if prevision.tiene_clientes(cfg) else None
     renta = next((a for a in prev_completa["anios"] if a["anio"] == hoy.year), None) if prevision.tiene_supuestos(cfg) else None
-    sync.rellenar_vehiculos(s)
-    historico = s.scalars(select(Instantanea).order_by(Instantanea.fecha)).all()
+    historico = sync.historico(s, hoy)
     proximos = s.scalars(select(PagoPrevisto).where(~PagoPrevisto.pagado).order_by(PagoPrevisto.fecha).limit(6))
     return {
         "fecha": f(hoy),
@@ -78,7 +88,7 @@ def resumen(s: Session = SesionDB):
                           for l in p.pasivos],
         "historico": [{"fecha": f(i.fecha), "neto": n(i.neto), "liquidez": n(i.liquidez),
                        "inversiones": n(i.inversiones), "inmuebles": n(i.inmuebles), "vehiculos": n(i.vehiculos),
-                       "deudas": n(i.deudas)}
+                       "otros": n(i.otros), "deudas": n(i.deudas)}
                       for i in historico],
         "proximos_pagos": [{"id": pp.id, "concepto": pp.concepto, "fecha": f(pp.fecha), "importe": n(pp.importe)}
                            for pp in proximos],
@@ -96,10 +106,10 @@ def resumen(s: Session = SesionDB):
                       "neto_mes": renta["ingresos"]["total"]["neto_mes"],
                       "bruto_mes": renta["ingresos"]["total"]["bruto_mes"]} if renta else None,
         },
-        "sync": sync.estado(s),
         "liquidez": n(p.por_grupo().get("Liquidez", CERO)),
         "hacienda_pendiente": pendiente,
         "disponible": round(float(p.por_grupo().get("Liquidez", CERO)) - pendiente["total"], 2),
+        "gastos": _gasto_del_mes(analisis_gastos(s, 3, hoy), hoy),
         "avisos": avisos.calcular(s, hacienda.revision_reta(s, prev_completa)),
     }
 
@@ -123,9 +133,12 @@ def _cuenta(c: Cuenta) -> dict:
 
 @router.get("/indexa")
 def detalle_indexa(s: Session = SesionDB):
-    """Posiciones y rentabilidad de cada cuenta de Indexa (de la última sincronización)."""
-    cuentas = s.scalars(select(Cuenta).where(Cuenta.origen == "indexa", Cuenta.activa).order_by(Cuenta.nombre))
+    """Posiciones y rentabilidad de cada cuenta de Indexa (de la última sincronización) y lo aportado desde el banco."""
+    from finanzas.integrations import indexa
+    cuentas = s.scalars(select(Cuenta).where(Cuenta.origen == "indexa", Cuenta.activa).order_by(Cuenta.nombre)).all()
+    aportado = indexa.aportaciones_banco(s, cuentas)
     return [{"cuenta_id": c.id, "nombre": c.nombre, "numero": c.id_externo, "fecha": f(c.saldo_fecha),
+             "ultima_sincronizacion": iso_utc(c.ultima_sincronizacion), "aportado_banco": aportado.get(c.id),
              **json.loads(c.detalle or "{}")} for c in cuentas]
 
 
@@ -1129,6 +1142,7 @@ class InversionPatch(BaseModel):
     nombre: str | None = None
     gestora: str | None = None
     compromiso: Decimal | None = None
+    fecha_compromiso: date | None = None
     nav: Decimal | None = None
     nav_fecha: date | None = None
     distribuido: Decimal | None = None
