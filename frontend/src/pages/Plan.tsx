@@ -8,7 +8,7 @@ import { cuandoVence, diasHasta, eur, eurK, fecha, hoyISO } from '../lib/format'
 import { cursorBarra, eje, estiloTooltip } from '../lib/graficas'
 import type { Planificacion as Datos, Prevision } from '../lib/tipos'
 import { num, useAccion } from '../lib/utilidades'
-import { Barra, BorrarEnDosPasos, Boton, Cabecera, Campo, Cargando, Dato, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio } from '../components/ui'
+import { Barra, BorrarEnDosPasos, Boton, Cabecera, Campo, Cargando, Casilla, Dato, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio } from '../components/ui'
 
 const nombreMes = (clave: string) => fecha(`${clave}-01`, { month: 'short', year: '2-digit' })
 const ahorroTexto = (v: number) => (v < 0 ? `Gastando unos ${eur(-v)} más de lo que entra al mes` : `Ahorrando unos ${eur(v)} al mes`)
@@ -278,7 +278,7 @@ export default function Plan() {
           <Selector etiqueta="Objetivo" name="objetivo_id" defaultValue="">
             <option value="">Ninguno</option>{d.objetivos.map((o) => <option key={o.id} value={o.id}>{o.nombre}</option>)}
           </Selector>
-          <label className="flex items-center gap-2 text-sm"><input type="checkbox" name="pagado" className="size-4 accent-[var(--accent)]" />Ya está pagado</label>
+          <Casilla etiqueta="Ya está pagado" name="pagado" />
         </Formulario>
       </Dialogo>
     </>

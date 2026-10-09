@@ -8,9 +8,10 @@ import { api } from '../lib/api'
 import { eur, eurK, fecha, hoyISO } from '../lib/format'
 import { cursorBarra, eje, estiloTooltip } from '../lib/graficas'
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import type { Autonomo as Datos, Factura } from '../lib/tipos'
+import type { Autonomo as Datos, Factura, GastoAutonomo } from '../lib/tipos'
 import { num, opc, useAccion } from '../lib/utilidades'
-import { BorrarEnDosPasos, Boton, Campo, Cargando, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio } from './ui'
+import type { Columna } from './ui'
+import { BorrarEnDosPasos, Boton, Campo, Cargando, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, SelectorAnio, TablaResponsive, Tarjeta, Vacio } from './ui'
 
 function FormFactura({ clientes, onHecho, f }: { clientes: string[]; onHecho: () => void; f?: Factura }) {
   const [tipo, setTipo] = useState<'nacional' | 'extranjero'>(f && f.tipo_iva === 0 && f.tipo_retencion === 0 ? 'extranjero' : 'nacional')
@@ -30,10 +31,8 @@ function FormFactura({ clientes, onHecho, f }: { clientes: string[]; onHecho: ()
         <option value="extranjero">Empresa de fuera de España (sin IVA ni retención)</option>
       </Selector>
       <Campo etiqueta="Número" name="numero" required defaultValue={f?.numero} />
-      <label className="flex flex-col gap-1.5 text-xs font-medium text-muted">Cliente
-        <input name="cliente" list="clientes" required defaultValue={f?.cliente} className="w-full rounded-xl border border-line bg-panel px-3 py-2 text-sm text-ink" />
-        <datalist id="clientes">{clientes.map((c) => <option key={c} value={c} />)}</datalist>
-      </label>
+      <Campo etiqueta="Cliente" name="cliente" list="clientes" required defaultValue={f?.cliente} />
+      <datalist id="clientes">{clientes.map((c) => <option key={c} value={c} />)}</datalist>
       <Campo etiqueta="Fecha" name="fecha" type="date" defaultValue={f?.fecha ?? hoyISO()} required />
       <Campo etiqueta="Base imponible (€)" name="base" inputMode="decimal" required defaultValue={f ? String(f.base) : undefined} />
       {tipo === 'nacional' && <>
@@ -75,11 +74,31 @@ function VerDocumento({ f }: { f: Factura }) {
   )
 }
 
-const anioActual = () => new Date().getFullYear()
+const diaMes = (iso: string) => fecha(iso, { day: '2-digit', month: 'short' })
+
+const COLUMNAS_FACTURAS: Columna<Factura>[] = [
+  { cabecera: 'Fecha', celda: (f) => diaMes(f.fecha), claseTd: 'cifra whitespace-nowrap text-muted', papel: 'subtitulo',
+    celdaMovil: (f) => <span className="cifra">{diaMes(f.fecha)} · Nº {f.numero}</span> },
+  { cabecera: 'Nº', celda: (f) => f.numero, claseTd: 'cifra', papel: 'oculta' },
+  { cabecera: 'Cliente', celda: (f) => <>{f.cliente}{f.tipo_iva === 0 && <span className="ml-2"><Etiqueta>No sujeta</Etiqueta></span>}</>, claseTd: 'whitespace-nowrap', papel: 'titulo' },
+  { cabecera: 'Base', celda: (f) => <Importe valor={f.base} />, num: true },
+  { cabecera: 'IVA', celda: (f) => <Importe valor={f.cuota_iva} />, num: true },
+  { cabecera: 'Retención', celda: (f) => <Importe valor={-f.retencion} />, num: true },
+  { cabecera: 'Cobras', celda: (f) => <Importe valor={f.total} />, num: true, claseTd: 'font-medium', fuerte: true },
+]
+
+const COLUMNAS_GASTOS: Columna<GastoAutonomo>[] = [
+  { cabecera: 'Fecha', celda: (g) => diaMes(g.fecha), claseTd: 'cifra whitespace-nowrap text-muted', papel: 'subtitulo',
+    celdaMovil: (g) => <><span className="cifra">{diaMes(g.fecha)}</span> · {g.categoria.replace('_', ' ')}</> },
+  { cabecera: 'Proveedor', celda: (g) => g.proveedor || g.concepto, papel: 'titulo' },
+  { cabecera: 'Categoría', celda: (g) => g.categoria.replace('_', ' '), claseTd: 'text-muted', papel: 'oculta' },
+  { cabecera: 'Base', celda: (g) => <Importe valor={g.base} />, num: true },
+  { cabecera: 'IVA', celda: (g) => <Importe valor={g.cuota_iva} />, num: true },
+  { cabecera: 'Deducible', celda: (g) => <span className="cifra">{g.deducible_pct} %</span>, num: true },
+]
 
 export default function SeccionAutonomo() {
-  const [actual] = useState(anioActual)
-  const [anio, setAnio] = useState(actual)
+  const [anio, setAnio] = useState(() => new Date().getFullYear())
   const [dialogo, setDialogo] = useState<'factura' | 'gasto' | 'planificar' | 'calendario' | 'datos' | null>(null)
   const [editando, setEditando] = useState<Factura | null>(null)
   const { data: d, isLoading, error } = useQuery({ queryKey: ['autonomo', anio], queryFn: () => api.get<Datos>(`/autonomo?anio=${anio}`) })
@@ -91,9 +110,7 @@ export default function SeccionAutonomo() {
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-muted">{d ? `${eur(d.total_facturado)} facturados en ${anio}` : ''}</p>
         <div className="flex flex-wrap items-center gap-2">
-          <Selector value={anio} onChange={(e) => setAnio(Number(e.target.value))} aria-label="Año" className="!w-28">
-            {[actual + 1, actual, actual - 1, actual - 2].map((a) => <option key={a} value={a}>{a}</option>)}
-          </Selector>
+          <SelectorAnio valor={anio} onCambiar={setAnio} />
           <Boton variante="secundario" onClick={() => setDialogo('datos')}><IdCard size={16} />Datos de facturación</Boton>
           <Boton variante="secundario" onClick={() => setDialogo('calendario')}><CalendarX size={16} />Vacaciones</Boton>
           <Boton variante="secundario" onClick={() => setDialogo('planificar')}><CalendarDays size={16} />Generar factura</Boton>
@@ -139,88 +156,16 @@ export default function SeccionAutonomo() {
             </Tarjeta>
 
             <Tarjeta className="xl:col-span-2" titulo="Facturas emitidas">
-              {d.facturas.length ? (<>
-                <ul className="divide-y divide-line sm:hidden">
-                  {d.facturas.map((f) => (
-                    <li key={f.id} className="py-3 text-sm first:pt-0 last:pb-0">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <div className="truncate font-medium">{f.cliente}{f.tipo_iva === 0 && <span className="ml-2"><Etiqueta>No sujeta</Etiqueta></span>}</div>
-                          <div className="cifra text-xs text-muted">{fecha(f.fecha, { day: '2-digit', month: 'short' })} · Nº {f.numero}</div>
-                        </div>
-                        <span className="flex"><VerDocumento f={f} /><Boton variante="fantasma" className="px-2 py-1" onClick={() => setEditando(f)} aria-label={`Editar la factura ${f.numero}`}><Pencil size={14} /></Boton><BorrarEnDosPasos etiqueta={`la factura ${f.numero}`} disabled={borrar.isPending} onBorrar={() => borrar.mutate({ tipo: 'facturas', id: f.id })} /></span>
-                      </div>
-                      <dl className="mt-2 space-y-1">
-                        <div className="flex justify-between gap-3"><dt className="text-muted">Base</dt><dd><Importe valor={f.base} /></dd></div>
-                        <div className="flex justify-between gap-3"><dt className="text-muted">IVA</dt><dd><Importe valor={f.cuota_iva} /></dd></div>
-                        <div className="flex justify-between gap-3"><dt className="text-muted">Retención</dt><dd><Importe valor={-f.retencion} /></dd></div>
-                        <div className="flex justify-between gap-3 font-medium"><dt>Cobras</dt><dd><Importe valor={f.total} /></dd></div>
-                      </dl>
-                    </li>
-                  ))}
-                </ul>
-                <div className="hidden sm:block">
-                <Tabla>
-                  <thead><tr><th>Fecha</th><th>Nº</th><th>Cliente</th><th className="num">Base</th><th className="num">IVA</th><th className="num">Retención</th><th className="num">Cobras</th><th /></tr></thead>
-                  <tbody>
-                    {d.facturas.map((f) => (
-                      <tr key={f.id}>
-                        <td className="cifra whitespace-nowrap text-muted">{fecha(f.fecha, { day: '2-digit', month: 'short' })}</td>
-                        <td className="cifra">{f.numero}</td>
-                        <td className="whitespace-nowrap">{f.cliente}{f.tipo_iva === 0 && <span className="ml-2"><Etiqueta>No sujeta</Etiqueta></span>}</td>
-                        <td className="num"><Importe valor={f.base} /></td>
-                        <td className="num"><Importe valor={f.cuota_iva} /></td>
-                        <td className="num"><Importe valor={-f.retencion} /></td>
-                        <td className="num font-medium"><Importe valor={f.total} /></td>
-                        <td className="whitespace-nowrap text-right"><VerDocumento f={f} /><Boton variante="fantasma" className="px-2 py-1" onClick={() => setEditando(f)} aria-label={`Editar la factura ${f.numero}`}><Pencil size={14} /></Boton><BorrarEnDosPasos etiqueta={`la factura ${f.numero}`} disabled={borrar.isPending} onBorrar={() => borrar.mutate({ tipo: 'facturas', id: f.id })} /></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </Tabla>
-                </div>
-              </>) : <Vacio>Registra tus facturas para ver el IVA y el IRPF de cada trimestre.</Vacio>}
+              <TablaResponsive filas={d.facturas} columnas={COLUMNAS_FACTURAS} clave={(f) => f.id}
+                acciones={(f) => <><VerDocumento f={f} /><Boton variante="fantasma" className="px-2 py-1" onClick={() => setEditando(f)} aria-label={`Editar la factura ${f.numero}`}><Pencil size={14} /></Boton><BorrarEnDosPasos etiqueta={`la factura ${f.numero}`} disabled={borrar.isPending} onBorrar={() => borrar.mutate({ tipo: 'facturas', id: f.id })} /></>}
+                vacio="Registra tus facturas para ver el IVA y el IRPF de cada trimestre." />
             </Tarjeta>
           </div>
 
           <Tarjeta className="mt-4" titulo="Gastos de la actividad">
-            {d.gastos.length ? (<>
-              <ul className="divide-y divide-line sm:hidden">
-                {d.gastos.map((g) => (
-                  <li key={g.id} className="py-3 text-sm first:pt-0 last:pb-0">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className="truncate font-medium">{g.proveedor || g.concepto}</div>
-                        <div className="text-xs text-muted"><span className="cifra">{fecha(g.fecha, { day: '2-digit', month: 'short' })}</span> · {g.categoria.replace('_', ' ')}</div>
-                      </div>
-                      <BorrarEnDosPasos etiqueta={`el gasto ${g.proveedor || g.concepto}`} disabled={borrar.isPending} onBorrar={() => borrar.mutate({ tipo: 'gastos', id: g.id })} />
-                    </div>
-                    <dl className="mt-2 space-y-1">
-                      <div className="flex justify-between gap-3"><dt className="text-muted">Base</dt><dd><Importe valor={g.base} /></dd></div>
-                      <div className="flex justify-between gap-3"><dt className="text-muted">IVA</dt><dd><Importe valor={g.cuota_iva} /></dd></div>
-                      <div className="flex justify-between gap-3"><dt className="text-muted">Deducible</dt><dd><span className="cifra">{g.deducible_pct} %</span></dd></div>
-                    </dl>
-                  </li>
-                ))}
-              </ul>
-              <div className="hidden sm:block">
-              <Tabla>
-                <thead><tr><th>Fecha</th><th>Proveedor</th><th>Categoría</th><th className="num">Base</th><th className="num">IVA</th><th className="num">Deducible</th><th /></tr></thead>
-                <tbody>
-                  {d.gastos.map((g) => (
-                    <tr key={g.id}>
-                      <td className="cifra whitespace-nowrap text-muted">{fecha(g.fecha, { day: '2-digit', month: 'short' })}</td>
-                      <td>{g.proveedor || g.concepto}</td>
-                      <td className="text-muted">{g.categoria.replace('_', ' ')}</td>
-                      <td className="num"><Importe valor={g.base} /></td>
-                      <td className="num"><Importe valor={g.cuota_iva} /></td>
-                      <td className="num cifra">{g.deducible_pct} %</td>
-                      <td className="text-right"><BorrarEnDosPasos etiqueta={`el gasto ${g.proveedor || g.concepto}`} disabled={borrar.isPending} onBorrar={() => borrar.mutate({ tipo: 'gastos', id: g.id })} /></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </Tabla>
-              </div>
-            </>) : <Vacio>Apunta la cuota de autónomos, la gestoría o el software: bajan tu IRPF y, si llevan IVA, también el 303.</Vacio>}
+            <TablaResponsive filas={d.gastos} columnas={COLUMNAS_GASTOS} clave={(g) => g.id}
+              acciones={(g) => <BorrarEnDosPasos etiqueta={`el gasto ${g.proveedor || g.concepto}`} disabled={borrar.isPending} onBorrar={() => borrar.mutate({ tipo: 'gastos', id: g.id })} />}
+              vacio="Apunta la cuota de autónomos, la gestoría o el software: bajan tu IRPF y, si llevan IVA, también el 303." />
           </Tarjeta>
         </>
       )}

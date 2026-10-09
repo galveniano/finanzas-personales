@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
+from finanzas.fechas import sumar_meses
 from finanzas.models import Deuda
 
 CENT = Decimal("0.01")
@@ -16,13 +17,6 @@ class Cuota:
     intereses: Decimal
     amortizado: Decimal
     pendiente: Decimal
-
-
-def _sumar_meses(d: date, meses: int) -> date:
-    m = d.month - 1 + meses
-    anio, mes = d.year + m // 12, m % 12 + 1
-    dia = min(d.day, 28)
-    return date(anio, mes, dia)
 
 
 def cuota_mensual(capital: Decimal, interes_anual: Decimal, plazo_meses: int) -> Decimal:
@@ -47,7 +41,7 @@ def cuadro_amortizacion(deuda: Deuda) -> list[Cuota]:
         if n == deuda.plazo_meses:
             amortizado = pendiente
         pendiente -= amortizado
-        filas.append(Cuota(n, _sumar_meses(deuda.fecha_inicio, n), amortizado + intereses,
+        filas.append(Cuota(n, sumar_meses(deuda.fecha_inicio, n), amortizado + intereses,
                            intereses, amortizado, pendiente))
     return filas
 

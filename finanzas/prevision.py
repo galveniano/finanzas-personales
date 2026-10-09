@@ -6,6 +6,7 @@ renta del año se estima con la escala general (estatal + autonómica) para el p
 Es una estimación: no sustituye al borrador de la renta.
 """
 import json
+import statistics
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal
@@ -13,8 +14,8 @@ from decimal import Decimal
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from finanzas import ajustes, declaraciones
-from finanzas.fiscal import alquiler, nomina as calc_nomina
+from finanzas import ajustes, declaraciones, patrimonio
+from finanzas.fiscal import alquiler, autonomo, nomina as calc_nomina
 from finanzas.hipoteca import cuadro_amortizacion, intereses_anio
 from finanzas.models import (Activo, Categoria, Cliente, ContratoAlquiler, Cuenta, Declaracion, Deuda, Factura,
                              GastoInmueble, Movimiento, Nomina, Objetivo, PagoPrevisto)
@@ -48,6 +49,16 @@ def leer(s: Session) -> dict:
 
 def guardar(s: Session, datos: dict) -> None:
     ajustes.guardar(s, CLAVE, json.dumps({k: datos.get(k, v) for k, v in VACIO.items()}))
+
+
+def tiene_clientes(cfg: dict) -> bool:
+    """Con clientes la previsión sabe facturar y puede estimar los trimestres no presentados."""
+    return bool(cfg.get("clientes"))
+
+
+def tiene_supuestos(cfg: dict) -> bool:
+    """Hay previsión configurada: clientes o nómina."""
+    return bool(cfg.get("clientes") or cfg.get("nomina"))
 
 
 @dataclass
@@ -297,11 +308,9 @@ def _alquiler(s: Session, anio: int) -> tuple[float, float]:
             continue
         renta_mes += float(sum((c.renta_en(hoy) for c in contratos
                                 if c.fecha_inicio <= hoy and (not c.fecha_fin or c.fecha_fin >= hoy)), Decimal(0)))
-        gastos = list(s.scalars(select(GastoInmueble).where(GastoInmueble.activo_id == a.id)))
-        if not any(g.tipo == "intereses" and g.fecha.year == anio for g in gastos):
-            for d in s.scalars(select(Deuda).where(Deuda.activo_id == a.id)):
-                gastos.append(GastoInmueble(fecha=date(anio, 12, 31), tipo="intereses", importe=intereses_anio(d, anio)))
-        tributa += float(alquiler.calcular_rendimiento(a, contratos, gastos, anio).rendimiento_reducido)
+        gastos = s.scalars(select(GastoInmueble).where(GastoInmueble.activo_id == a.id)).all()
+        deudas = s.scalars(select(Deuda).where(Deuda.activo_id == a.id)).all()
+        tributa += float(alquiler.rendimiento_del_anio(a, contratos, gastos, deudas, anio).rendimiento_reducido)
     return renta_mes, tributa
 
 
@@ -375,8 +384,7 @@ def gasto_habitual(s: Session) -> float | None:
     for m in movs:
         if es_gasto_corriente(m, excluidos):
             por_mes[m.fecha.strftime("%Y-%m")] -= m.tuyo
-    totales = sorted(por_mes.values())
-    mediana = totales[len(totales) // 2] if len(totales) % 2 else (totales[len(totales) // 2 - 1] + totales[len(totales) // 2]) / 2
+    mediana = statistics.median(por_mes.values())
     return round(mediana, 2) if mediana else None
 
 
@@ -625,7 +633,7 @@ def calcular(s: Session, meses: int = 12) -> dict:
                     "iva": round(iva_t, 2), "irpf": round(p130, 2), "exento_130": _exento_130(cfg),
                     "presentado_303": real_303 is not None, "presentado_130": real_130 is not None}
                 destino = tabla.setdefault(pago.strftime("%Y-%m"), Mes(pago.strftime("%Y-%m")))
-                vence = date(pago.year, pago.month, 30 if pago.month == 1 else 20).isoformat()
+                vence = autonomo.vencimiento(anio, t).isoformat()
                 for concepto, importe, real in ((f"IVA {t}T (303)", iva_t, real_303), (f"IRPF {t}T (130)", p130, real_130)):
                     if importe:
                         destino.impuestos.append({"concepto": concepto, "importe": round(importe, 2),
@@ -676,8 +684,7 @@ def calcular(s: Session, meses: int = 12) -> dict:
         actual.impuestos.append({"concepto": "Ya pagado este mes", "importe": -round(min(ya["impuestos"], pendientes), 2),
                                  "presentado": True, "tipo": "ajuste", "vence": None})
 
-    liquidez = float(sum((c.saldo * c.parte for c in s.scalars(select(Cuenta).where(
-        Cuenta.activa, Cuenta.tipo.in_(["corriente", "ahorro"])))), Decimal(0)))
+    liquidez = float(patrimonio.liquidez(s))
     filas, saldo = [], liquidez
     for d in ventana:
         m = tabla[d.strftime("%Y-%m")]

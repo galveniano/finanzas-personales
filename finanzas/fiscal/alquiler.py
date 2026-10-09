@@ -4,7 +4,8 @@ from datetime import date
 from decimal import Decimal
 from typing import Iterable
 
-from finanzas.models import Activo, ContratoAlquiler, GastoInmueble
+from finanzas.hipoteca import intereses_anio
+from finanzas.models import Activo, ContratoAlquiler, Deuda, GastoInmueble
 
 CERO = Decimal("0")
 CENT = Decimal("0.01")
@@ -114,3 +115,15 @@ def calcular_rendimiento(
             "se pueden compensar en los 4 años siguientes."
         )
     return r
+
+
+def rendimiento_del_anio(activo: Activo, contratos: Iterable[ContratoAlquiler], gastos: Iterable[GastoInmueble],
+                         deudas: Iterable[Deuda], anio: int) -> RendimientoAlquiler:
+    """Rendimiento del año con los gastos apuntados. Si no hay intereses de ese año apuntados, se añaden
+    los de cada hipoteca según su cuadro de amortización."""
+    gastos = list(gastos)
+    if not any(g.tipo == "intereses" and g.fecha.year == anio for g in gastos):
+        for d in deudas:
+            gastos.append(GastoInmueble(activo_id=activo.id, fecha=date(anio, 12, 31), tipo="intereses",
+                                        importe=intereses_anio(d, anio)))
+    return calcular_rendimiento(activo, contratos, gastos, anio)

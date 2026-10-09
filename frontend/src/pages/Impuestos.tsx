@@ -8,7 +8,8 @@ import { RentaEstimada, RentaPresentada } from '../components/Renta'
 import SeccionHacienda from '../components/Hacienda'
 import { num, opc, useAccion, useAvisos } from '../lib/utilidades'
 import { useSubida } from '../lib/subida'
-import { BorrarEnDosPasos, Boton, Cabecera, Campo, Cargando, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio } from '../components/ui'
+import type { Columna } from '../components/ui'
+import { BorrarEnDosPasos, Boton, Cabecera, Campo, Cargando, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, SelectorAnio, TablaResponsive, Tarjeta } from '../components/ui'
 
 const RESULTADO: Record<Declaracion['resultado'], { texto: string; tono: 'neutro' | 'bien' | 'aviso' | 'mal' }> = {
   ingresar: { texto: 'A ingresar', tono: 'aviso' }, domiciliar: { texto: 'Domiciliado', tono: 'aviso' },
@@ -17,6 +18,15 @@ const RESULTADO: Record<Declaracion['resultado'], { texto: string; tono: 'neutro
 }
 
 const periodoTexto = (p: string) => (p === '0A' ? 'Anual' : p.endsWith('T') ? `${p[0]}º trim.` : p)
+
+const COLUMNAS: Columna<Declaracion>[] = [
+  { cabecera: 'Modelo', celda: (x) => <><span className="cifra font-medium">{x.modelo}</span> <span className="text-muted">{x.nombre}</span></>, claseTd: 'whitespace-nowrap', papel: 'titulo' },
+  { cabecera: 'Periodo', celda: (x) => `${periodoTexto(x.periodo)} ${x.ejercicio}`, claseTd: 'whitespace-nowrap', papel: 'subtitulo' },
+  { cabecera: 'Presentada', celda: (x) => <span className="cifra">{x.fecha_presentacion ? fecha(x.fecha_presentacion) : '—'}</span>, claseTd: 'whitespace-nowrap text-muted' },
+  { cabecera: 'Resultado', celda: (x) => <Etiqueta tono={RESULTADO[x.resultado].tono}>{RESULTADO[x.resultado].texto}</Etiqueta> },
+  { cabecera: 'Importe', num: true, claseTd: 'font-medium', fuerte: true,
+    celda: (x) => <><Importe valor={x.importe} />{x.estimado != null && <span className="block text-xs font-normal text-muted">la app calculaba {eur(x.estimado)}</span>}</> },
+]
 
 function Modelo({ nombre, valor, fuente, exento }: { nombre: string; valor: number; fuente: Fuente; exento?: boolean }) {
   return (
@@ -38,9 +48,7 @@ function Trimestres() {
     <section>
       <div className="mb-3 flex items-center justify-between gap-3">
         <h2 className="text-lg font-semibold">IVA e IRPF por trimestre</h2>
-        <Selector value={anio} onChange={(e) => setAnio(Number(e.target.value))} aria-label="Año" className="!w-28">
-          {[actual + 1, actual, actual - 1, actual - 2].map((a) => <option key={a} value={a}>{a}</option>)}
-        </Selector>
+        <SelectorAnio valor={anio} onCambiar={setAnio} />
       </div>
       {d ? <>
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -146,57 +154,15 @@ export default function Impuestos() {
         <>
           <Tarjeta titulo="Presentadas" className={arrastrando ? 'ring-2 ring-accent' : ''}
             accion={<span className="text-xs text-muted">Arrastra aquí los PDF o .txt de Hacienda</span>}>
-            {d.declaraciones.length ? (<>
-              <ul className="divide-y divide-line sm:hidden">
-                {d.declaraciones.map((x) => (
-                  <li key={x.id} className="py-3 text-sm first:pt-0 last:pb-0">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <span className="cifra font-medium">{x.modelo}</span> <span className="text-muted">{x.nombre}</span>
-                        <div className="text-xs text-muted">{periodoTexto(x.periodo)} {x.ejercicio}</div>
-                      </div>
-                      <Etiqueta tono={RESULTADO[x.resultado].tono}>{RESULTADO[x.resultado].texto}</Etiqueta>
-                    </div>
-                    <dl className="mt-2 space-y-1">
-                      <div className="flex justify-between gap-3"><dt className="text-muted">Importe</dt><dd className="font-medium"><Importe valor={x.importe} /></dd></div>
-                      {x.estimado != null && <div className="flex justify-between gap-3"><dt className="text-muted">La app calculaba</dt><dd><Importe valor={x.estimado} /></dd></div>}
-                      <div className="flex justify-between gap-3"><dt className="text-muted">Presentada</dt><dd className="cifra">{x.fecha_presentacion ? fecha(x.fecha_presentacion) : '—'}</dd></div>
-                    </dl>
-                    <div className="mt-1 flex justify-end gap-1">
-                      {x.tiene_pdf && (
-                        <a href={`/api/declaraciones/${x.id}/pdf`} target="_blank" rel="noreferrer" aria-label="Ver justificante"
-                          className="inline-flex rounded-lg p-1.5 text-muted hover:bg-panel-2 hover:text-ink"><FileText size={15} /></a>
-                      )}
-                      <BorrarEnDosPasos etiqueta={`el modelo ${x.modelo} de ${periodoTexto(x.periodo)} ${x.ejercicio}`} disabled={borrar.isPending} onBorrar={() => borrar.mutate(x.id)} />
-                    </div>
-                  </li>
-                ))}
-              </ul>
-              <div className="hidden sm:block">
-              <Tabla>
-                <thead><tr><th>Modelo</th><th>Periodo</th><th>Presentada</th><th>Resultado</th><th className="num">Importe</th><th /></tr></thead>
-                <tbody>
-                  {d.declaraciones.map((x) => (
-                    <tr key={x.id}>
-                      <td className="whitespace-nowrap"><span className="cifra font-medium">{x.modelo}</span> <span className="text-muted">{x.nombre}</span></td>
-                      <td className="whitespace-nowrap">{periodoTexto(x.periodo)} {x.ejercicio}</td>
-                      <td className="cifra whitespace-nowrap text-muted">{x.fecha_presentacion ? fecha(x.fecha_presentacion) : '—'}</td>
-                      <td><Etiqueta tono={RESULTADO[x.resultado].tono}>{RESULTADO[x.resultado].texto}</Etiqueta></td>
-                      <td className="num font-medium"><Importe valor={x.importe} />
-                        {x.estimado != null && <span className="block text-xs font-normal text-muted">la app calculaba {eur(x.estimado)}</span>}</td>
-                      <td className="whitespace-nowrap text-right">
-                        {x.tiene_pdf && (
-                          <a href={`/api/declaraciones/${x.id}/pdf`} target="_blank" rel="noreferrer" aria-label="Ver justificante"
-                            className="inline-flex rounded-lg p-1.5 text-muted hover:bg-panel-2 hover:text-ink"><FileText size={15} /></a>
-                        )}
-                        <BorrarEnDosPasos etiqueta={`el modelo ${x.modelo} de ${periodoTexto(x.periodo)} ${x.ejercicio}`} disabled={borrar.isPending} onBorrar={() => borrar.mutate(x.id)} />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </Tabla>
-              </div>
-            </>) : <Vacio>Sube los justificantes de tus 303, 130 y la renta (PDF o .txt). Los antiguos se descargan en la sede de Hacienda con Cl@ve, en «Mis expedientes».</Vacio>}
+            <TablaResponsive filas={d.declaraciones} columnas={COLUMNAS} clave={(x) => x.id}
+              acciones={(x) => <>
+                {x.tiene_pdf && (
+                  <a href={`/api/declaraciones/${x.id}/pdf`} target="_blank" rel="noreferrer" aria-label="Ver justificante"
+                    className="inline-flex rounded-lg p-1.5 text-muted hover:bg-panel-2 hover:text-ink"><FileText size={15} /></a>
+                )}
+                <BorrarEnDosPasos etiqueta={`el modelo ${x.modelo} de ${periodoTexto(x.periodo)} ${x.ejercicio}`} disabled={borrar.isPending} onBorrar={() => borrar.mutate(x.id)} />
+              </>}
+              vacio="Sube los justificantes de tus 303, 130 y la renta (PDF o .txt). Los antiguos se descargan en la sede de Hacienda con Cl@ve, en «Mis expedientes»." />
           </Tarjeta>
         </>
       )}

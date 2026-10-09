@@ -158,8 +158,7 @@ export default function Cuentas() {
           </Selector>
           <label className="relative">
             <Search size={15} className="absolute top-1/2 left-3 -translate-y-1/2 text-muted" />
-            <input value={filtro.q} onChange={(e) => setFiltro({ ...filtro, q: e.target.value })} placeholder="Buscar concepto"
-              className="w-full rounded-xl border border-line bg-panel py-2 pr-3 pl-9 text-sm" />
+            <Campo value={filtro.q} onChange={(e) => setFiltro({ ...filtro, q: e.target.value })} placeholder="Buscar concepto" className="pl-9" />
           </label>
         </div>
         {aprendido && (

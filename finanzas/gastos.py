@@ -4,6 +4,7 @@ Cada servicio sale una sola vez aunque se cobre en varias cuentas o con concepto
 («NETFLIX.COM», «COMPRA TARJ NETFLIX»…). Los traspasos entre tus cuentas no son gasto, las cuentas
 que no son tuyas no cuentan y de las compartidas solo cuenta tu parte."""
 import re
+import statistics
 import unicodedata
 from collections import defaultdict
 from datetime import date, timedelta
@@ -157,13 +158,6 @@ def _inicio_mes(d: date, atras: int = 0) -> date:
     return d
 
 
-def _mediana(valores: list[float]) -> float:
-    v = sorted(valores)
-    if not v:
-        return 0.0
-    return v[len(v) // 2] if len(v) % 2 else (v[len(v) // 2 - 1] + v[len(v) // 2]) / 2
-
-
 def _gastos(s: Session, desde: date, hasta: date) -> tuple[list[MovTuyo], list[MovTuyo], list[MovTuyo]]:
     """(ingresos, gastos del día a día, gastos aparte) de tus cuentas, sin traspasos entre ellas.
     Aparte van los impuestos y los pagos previstos (plazos de la casa, llamadas de capital…)."""
@@ -218,7 +212,7 @@ def suscripciones(s: Session, hoy: date | None = None) -> list[dict]:
             cuentas_mes[k].add(m.cuenta_id)
         meses = sorted(por_mes)
         importes = [por_mes[k] for k in meses]
-        mediana = _mediana(importes)
+        mediana = statistics.median(importes)
         if not sv:
             # Un cargo cualquiera: varios meses, como mucho una vez al mes y siempre por lo mismo (±20 %)
             if (len(meses) < 2 or len(cargos) > len(meses) + 1 or mediana <= 0
@@ -228,7 +222,7 @@ def suscripciones(s: Session, hoy: date | None = None) -> list[dict]:
         primeros = [min(m.fecha for m in cargos if m.fecha.strftime("%Y-%m") == k) for k in meses]
         saltos = [(b - a).days for a, b in zip(primeros, primeros[1:])]
         if saltos:
-            salto = _mediana(saltos)
+            salto = statistics.median(saltos)
             cada = 1 if salto < 45 else 3 if salto < 135 else 6 if salto < 270 else 12
         else:
             # Un solo cargo de un servicio conocido, de hace más de mes y medio: si es caro (≥ 30 €) será un
@@ -238,7 +232,7 @@ def suscripciones(s: Session, hoy: date | None = None) -> list[dict]:
         ultimo_importe = por_mes[meses[-1]]
         activa = (hoy - ultimo.fecha).days <= cada * 31 + 20
         # Lo de ahora: la mediana de los 3 últimos meses (si te suben el precio, cuenta el nuevo)
-        al_mes = _mediana(importes[-3:]) if cada == 1 else ultimo_importe / cada
+        al_mes = statistics.median(importes[-3:]) if cada == 1 else ultimo_importe / cada
         subida = None
         doble = {k for k, v in cuentas_mes.items() if len(v) > 1}
         if cada == 1 and sv and sv[2] in GRUPOS_SUSCRIPCION:  # la luz o el teléfono cambian cada mes

@@ -11,7 +11,7 @@ import AjustesIA from '../components/AjustesIA'
 import DriveImport from '../components/DriveImport'
 import { useAccion, useAvisos } from '../lib/utilidades'
 import { useSubida } from '../lib/subida'
-import { Boton, Cabecera, Cargando, Etiqueta, ErrorCarga, Tarjeta } from '../components/ui'
+import { Boton, Cabecera, Campo, Cargando, Etiqueta, ErrorCarga, Tarjeta } from '../components/ui'
 
 function Ultima({ u }: { u: UltimaSync | null }) {
   if (!u) return <p className="text-sm text-muted">Todavía no se ha sincronizado.</p>
@@ -100,8 +100,8 @@ function Sabadell({ s, enVercel }: { s: EstadoSync['sabadell']; enVercel: boolea
           <p>Se ha abierto la página de Sabadell en otra pestaña. Si no, <a href={urlBanco} target="_blank" rel="noreferrer" className="font-medium text-accent">ábrela aquí</a>.</p>
           <p className="text-muted">Al terminar, el navegador irá a una página de localhost que no carga. Es normal: copia la dirección completa de esa pestaña y pégala aquí.</p>
           <div className="flex flex-col gap-2 sm:flex-row">
-            <input value={vuelta} onChange={(e) => setVuelta(e.target.value)} placeholder="https://localhost:8000/sabadell/vuelta?code=…"
-              className="min-w-0 flex-1 rounded-xl border border-line bg-panel px-3 py-2" aria-label="Dirección de vuelta" />
+            <Campo value={vuelta} onChange={(e) => setVuelta(e.target.value)} placeholder="https://localhost:8000/sabadell/vuelta?code=…"
+              className="min-w-0 flex-1" aria-label="Dirección de vuelta" />
             <Boton onClick={() => completar.mutate(undefined)} disabled={!vuelta || completar.isPending}>{completar.isPending ? 'Conectando…' : 'Terminar'}</Boton>
           </div>
         </div>

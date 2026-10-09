@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from finanzas import ajustes, auth, db
+from finanzas.fechas import MESES, MESES_EN
 from finanzas.models import Cliente, Factura
 
 router = APIRouter(prefix="/api", dependencies=[Depends(auth.requiere_sesion)])
@@ -22,10 +23,6 @@ SesionDB = Depends(db.get_session)
 CLAVE_EMISOR = "facturacion_emisor"
 CLAVE_DIAS = "dias_no_disponibles"
 TIPOS_DIA = ("vacaciones", "no_disponible")
-MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre",
-         "noviembre", "diciembre"]
-MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
-          "November", "December"]
 
 
 class Emisor(BaseModel):
@@ -110,10 +107,9 @@ def _cliente(c: Cliente) -> dict:
 
 
 @router.get("/facturacion")
-def ver_facturacion(anio: int | None = None, s: Session = SesionDB):
+def ver_facturacion(s: Session = SesionDB):
     from finanzas import prevision
-    anio = anio or date.today().year
-    clientes = {c.nombre: _cliente(c) for c in s.scalars(select(Cliente))}
+    clientes ={c.nombre: _cliente(c) for c in s.scalars(select(Cliente))}
     for c in prevision.leer(s).get("clientes") or []:  # los de Sueldo y tarifas aunque aún no tengan facturas
         if c.get("nombre"):
             clientes.setdefault(c["nombre"], {"nombre": c["nombre"], "nif": "", "direccion": "", "idioma": "es", "nota_factura": ""})
@@ -121,7 +117,6 @@ def ver_facturacion(anio: int | None = None, s: Session = SesionDB):
         "emisor": leer_emisor(s).model_dump(),
         "clientes": sorted(clientes.values(), key=lambda c: c["nombre"].lower()),
         "dias_no_disponibles": dias_no_disponibles(s),
-        "siguiente_numero": numero_para(s, anio),
     }
 
 
@@ -193,7 +188,7 @@ def _cifra(v: float, idioma: str) -> str:
 
 
 def _fecha(d: date, idioma: str) -> str:
-    return f"{MONTHS[d.month - 1]} {d.day}, {d.year}" if idioma == "en" else d.strftime("%d/%m/%Y")
+    return f"{MESES_EN[d.month - 1]} {d.day}, {d.year}" if idioma == "en" else d.strftime("%d/%m/%Y")
 
 
 def _dias_texto(dias: list[date], idioma: str) -> str:
@@ -204,7 +199,7 @@ def _dias_texto(dias: list[date], idioma: str) -> str:
     partes = []
     for (anio, mes), nums in por_mes.items():
         lista = ", ".join(str(x) for x in nums)
-        partes.append(f"{MONTHS[mes - 1]} {lista}, {anio}" if idioma == "en" else f"{lista} de {MESES[mes - 1]} de {anio}")
+        partes.append(f"{MESES_EN[mes - 1]} {lista}, {anio}" if idioma == "en" else f"{lista} de {MESES[mes - 1]} de {anio}")
     return "; ".join(partes)
 
 

@@ -5,7 +5,7 @@ import { api } from '../lib/api'
 import { eur, fecha, hoyISO, pct } from '../lib/format'
 import type { InversionPrivada, Inversiones } from '../lib/tipos'
 import { num, useAccion } from '../lib/utilidades'
-import { Barra, BorrarEnDosPasos, Boton, Campo, Dato, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Tarjeta, Vacio } from './ui'
+import { Barra, BorrarEnDosPasos, Boton, Campo, Casilla, Dato, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Tarjeta, Vacio } from './ui'
 
 type Fila = { fecha: string; importe: string; pagado: boolean }
 const filaVacia = (): Fila => ({ fecha: '', importe: '', pagado: false })
@@ -33,13 +33,9 @@ function Nueva({ onCerrar }: { onCerrar: () => void }) {
         <div className="space-y-2">
           {filas.map((f, i) => (
             <div key={i} className="grid grid-cols-[1fr_1fr_auto] items-center gap-2">
-              <input type="date" value={f.fecha} onChange={(e) => cambiar(i, { fecha: e.target.value })} aria-label="Fecha"
-                className="min-w-0 rounded-xl border border-line bg-panel px-3 py-2 text-sm" />
-              <input inputMode="decimal" value={f.importe} onChange={(e) => cambiar(i, { importe: e.target.value })} placeholder="Importe €" aria-label="Importe"
-                className="min-w-0 rounded-xl border border-line bg-panel px-3 py-2 text-sm" />
-              <label className="flex items-center gap-1.5 text-xs text-muted">
-                <input type="checkbox" checked={f.pagado} onChange={(e) => cambiar(i, { pagado: e.target.checked })} className="size-4 accent-[var(--accent)]" />Pagada
-              </label>
+              <Campo type="date" value={f.fecha} onChange={(e) => cambiar(i, { fecha: e.target.value })} aria-label="Fecha" className="min-w-0" />
+              <Campo inputMode="decimal" value={f.importe} onChange={(e) => cambiar(i, { importe: e.target.value })} placeholder="Importe €" aria-label="Importe" className="min-w-0" />
+              <Casilla etiqueta="Pagada" className="text-xs text-muted" checked={f.pagado} onChange={(e) => cambiar(i, { pagado: e.target.checked })} />
             </div>
           ))}
         </div>
@@ -71,7 +67,7 @@ function Actualizar({ inv, onCerrar }: { inv: InversionPrivada; onCerrar: () => 
         <Formulario onEnviar={(v) => llamada.mutateAsync(v)} textoBoton="Añadir">
           <Campo etiqueta="Fecha" name="fecha" type="date" required />
           <Campo etiqueta="Importe (€)" name="importe" inputMode="decimal" required />
-          <label className="flex items-center gap-2 text-sm"><input type="checkbox" name="pagado" className="size-4 accent-[var(--accent)]" />Ya pagada</label>
+          <Casilla etiqueta="Ya pagada" name="pagado" />
         </Formulario>
       </div>
     </div>

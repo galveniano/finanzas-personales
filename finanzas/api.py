@@ -62,9 +62,9 @@ def resumen(s: Session = SesionDB):
     m130 = autonomo.calcular_130(anio_t, t, facturas, gastos, _presentados_130(presentadas))
     d303, d130 = presentadas.get(("303", t)), presentadas.get(("130", t))
     # Si hay previsión, lo no presentado sale de ella, igual que en Autónomo y Previsión
-    prev = prev_completa if prevision.leer(s).get("clientes") or prevision.leer(s).get("nomina") else None
-    p_t = (prev or {}).get("trimestres", {}).get(f"{anio_t}-{t}")
-    renta = next((a for a in (prev or {}).get("anios", []) if a["anio"] == hoy.year), None)
+    cfg = prevision.leer(s)
+    p_t = prev_completa["trimestres"].get(f"{anio_t}-{t}") if prevision.tiene_clientes(cfg) else None
+    renta = next((a for a in prev_completa["anios"] if a["anio"] == hoy.year), None) if prevision.tiene_supuestos(cfg) else None
     sync.rellenar_vehiculos(s)
     historico = s.scalars(select(Instantanea).order_by(Instantanea.fecha)).all()
     proximos = s.scalars(select(PagoPrevisto).where(~PagoPrevisto.pagado).order_by(PagoPrevisto.fecha).limit(6))
@@ -410,7 +410,7 @@ def ver_autonomo(anio: int | None = None, s: Session = SesionDB):
     presentadas = _presentadas(s, anio)
     # Lo no presentado se estima con la previsión (sueldo, tarifas y días del último mes) si está configurada
     from finanzas import prevision
-    previsto = prevision.calcular(s)["trimestres"] if prevision.leer(s).get("clientes") else {}
+    previsto = prevision.calcular(s)["trimestres"] if prevision.tiene_clientes(prevision.leer(s)) else {}
     trimestres, ingresos_declarados, ultimo_130 = [], None, None
     for t in range(1, 5):
         m303 = autonomo.calcular_303(anio, t, facturas, gastos)
@@ -766,12 +766,7 @@ def listar_inmuebles(anio: int | None = None, s: Session = SesionDB):
         pagos = s.scalars(select(PagoPrevisto).where(PagoPrevisto.activo_id == a.id).order_by(PagoPrevisto.fecha)).all()
         rend = None
         if contratos:
-            gastos_calc = list(gastos)
-            if not any(g.tipo == "intereses" and g.fecha.year == anio for g in gastos):
-                for d in deudas:
-                    gastos_calc.append(GastoInmueble(activo_id=a.id, fecha=date(anio, 12, 31),
-                                                     tipo="intereses", importe=intereses_anio(d, anio)))
-            r = alquiler.calcular_rendimiento(a, contratos, gastos_calc, anio)
+            r = alquiler.rendimiento_del_anio(a, contratos, gastos, deudas, anio)
             rend = {"anio": anio, "ingresos": n(r.ingresos), "gastos_limitados": n(r.gastos_limitados_aplicables),
                     "gastos_otros": n(r.gastos_otros), "amortizacion": n(r.amortizacion),
                     "rendimiento_neto": n(r.rendimiento_neto), "reduccion_pct": n(r.reduccion_pct),
@@ -1000,8 +995,7 @@ def ver_planificacion(s: Session = SesionDB):
     financiado = sum((d.capital_inicial for d in s.scalars(select(Deuda).where(
         Deuda.fecha_inicio > hoy, Deuda.fecha_inicio <= hoy + timedelta(days=365)))), CERO)
     pendiente_12m = max(pendiente_12m - financiado, CERO)
-    liquidez = sum((c.saldo * c.parte for c in s.scalars(select(Cuenta).where(Cuenta.activa, Cuenta.tipo.in_(
-        ["corriente", "ahorro"])))), CERO)
+    liquidez = patrimonio.liquidez(s)
     return {
         "liquidez": n(liquidez), "pendiente_12_meses": n(pendiente_12m), "financiado_hipoteca": n(financiado),
         "objetivos": [{

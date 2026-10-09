@@ -4,7 +4,7 @@ import { api } from '../lib/api'
 import { MESES, capitalizar, eur } from '../lib/format'
 import type { CalculoNomina } from '../lib/tipos'
 import { num } from '../lib/utilidades'
-import { Dato, Segmentos, Selector, Tabla, Tarjeta } from './ui'
+import { Campo, Casilla, Dato, Segmentos, Selector, Tabla, Tarjeta } from './ui'
 
 const MODOS = [{ valor: 'bruto', texto: 'Bruto a neto' }, { valor: 'neto', texto: 'Neto a bruto' }] as const
 
@@ -28,8 +28,7 @@ export default function CalculadoraSueldo({ brutoInicial }: { brutoInicial: numb
       <div className="grid gap-3 sm:grid-cols-4">
         <label className="flex flex-col gap-1.5 text-xs font-medium text-muted">
           {modo === 'bruto' ? 'Bruto anual (€)' : 'Neto que quieres al mes (€)'}
-          <input value={importe} onChange={(e) => setImporte(e.target.value)} inputMode="decimal"
-            className="cifra w-full rounded-xl border border-line bg-panel px-3 py-2 text-sm text-ink" />
+          <Campo value={importe} onChange={(e) => setImporte(e.target.value)} inputMode="decimal" className="cifra" />
         </label>
         <Selector etiqueta="Pagas" value={pagas} onChange={(e) => setPagas(e.target.value)}>
           <option value="14">14 (extras jun. y dic.)</option><option value="12">12 (prorrateadas)</option>
@@ -37,9 +36,7 @@ export default function CalculadoraSueldo({ brutoInicial }: { brutoInicial: numb
         <Selector etiqueta="Hijos" value={hijos} onChange={(e) => setHijos(e.target.value)}>
           {[0, 1, 2, 3].map((h) => <option key={h} value={h}>{h === 3 ? '3 o más' : h}</option>)}
         </Selector>
-        <label className="flex items-center gap-2 self-end pb-2 text-sm">
-          <input type="checkbox" checked={temporal} onChange={(e) => setTemporal(e.target.checked)} className="size-4 accent-[var(--accent)]" />Contrato temporal
-        </label>
+        <Casilla etiqueta="Contrato temporal" className="self-end pb-2" checked={temporal} onChange={(e) => setTemporal(e.target.checked)} />
       </div>
 
       {c && (

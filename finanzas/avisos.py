@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from finanzas import ajustes, declaraciones, sync
 from finanzas.fechas import ahora_utc
+from finanzas.fiscal import autonomo
 from finanzas.models import Activo, RegistroSync, Valoracion
 
 CLAVE_ULTIMA_COPIA = "ultima_copia"
@@ -19,8 +20,8 @@ def plazos(desde: date, hasta: date) -> list[dict]:
     """Plazos de los modelos que presentas (303, 130, 390 y renta) entre dos fechas."""
     lista = []
     for anio in range(desde.year - 1, hasta.year + 1):
-        for t, (mes, dia, anio_pago) in enumerate(((4, 20, anio), (7, 20, anio), (10, 20, anio), (1, 30, anio + 1)), 1):
-            lista.append({"fecha": date(anio_pago, mes, dia), "titulo": f"303 y 130 del {t}T {anio}",
+        for t in range(1, 5):
+            lista.append({"fecha": autonomo.vencimiento(anio, t), "titulo": f"303 y 130 del {t}T {anio}",
                           "detalle": "IVA y pago fraccionado del IRPF. Si domicilias el pago, cinco días antes.",
                           "modelos": [("303", anio, f"{t}T"), ("130", anio, f"{t}T")]})
         lista.append({"fecha": date(anio + 1, 1, 30), "titulo": f"390 de {anio}", "detalle": "Resumen anual del IVA.",

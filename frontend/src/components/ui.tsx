@@ -106,6 +106,64 @@ export function Vacio({ children }: { children: ReactNode }) {
   return <p className="rounded-xl border border-dashed border-line px-4 py-6 text-center text-sm text-muted">{children}</p>
 }
 
+export type Columna<T> = {
+  cabecera: ReactNode               // th
+  celda: (x: T) => ReactNode        // td y, en móvil, el valor de la fila del dl (o el título o subtítulo de la tarjeta)
+  celdaMovil?: (x: T) => ReactNode  // si en móvil se pinta distinto (p. ej. un subtítulo que junta dos columnas)
+  num?: boolean                     // alinea a la derecha (clase num)
+  papel?: 'titulo' | 'subtitulo' | 'oculta'  // en móvil: línea principal de la tarjeta, línea pequeña gris debajo, o no sale; sin papel = fila del dl
+  claseTd?: string                  // p. ej. 'whitespace-nowrap' o 'cifra text-muted'
+  fuerte?: boolean                  // la fila del dl en negrita (en escritorio ponlo en claseTd)
+}
+
+/** Lista de tarjetas en móvil y tabla en escritorio con las mismas celdas. `acciones` va a la derecha de la
+ *  cabecera de cada tarjeta y en la última columna de la tabla. */
+export function TablaResponsive<T>({ filas, columnas, clave, acciones, vacio }: {
+  filas: T[]; columnas: Columna<T>[]; clave: (x: T) => string | number; acciones?: (x: T) => ReactNode; vacio?: ReactNode
+}) {
+  if (!filas.length) return vacio ? <Vacio>{vacio}</Vacio> : null
+  const movil = (c: Columna<T>, x: T) => (c.celdaMovil ?? c.celda)(x)
+  const titulo = columnas.find((c) => c.papel === 'titulo'), subtitulo = columnas.find((c) => c.papel === 'subtitulo')
+  const detalle = columnas.filter((c) => !c.papel)
+  return (
+    <>
+      <ul className="divide-y divide-line sm:hidden">
+        {filas.map((x) => (
+          <li key={clave(x)} className="py-3 text-sm first:pt-0 last:pb-0">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                {titulo && <div className="truncate font-medium">{movil(titulo, x)}</div>}
+                {subtitulo && <div className="text-xs text-muted">{movil(subtitulo, x)}</div>}
+              </div>
+              {acciones && <span className="flex">{acciones(x)}</span>}
+            </div>
+            <dl className="mt-2 space-y-1">
+              {detalle.map((c, i) => (
+                <div key={i} className={cx('flex justify-between gap-3', c.fuerte && 'font-medium')}>
+                  <dt className={c.fuerte ? undefined : 'text-muted'}>{c.cabecera}</dt><dd>{movil(c, x)}</dd>
+                </div>
+              ))}
+            </dl>
+          </li>
+        ))}
+      </ul>
+      <div className="hidden sm:block">
+        <Tabla>
+          <thead><tr>{columnas.map((c, i) => <th key={i} className={c.num ? 'num' : undefined}>{c.cabecera}</th>)}{acciones && <th />}</tr></thead>
+          <tbody>
+            {filas.map((x) => (
+              <tr key={clave(x)}>
+                {columnas.map((c, i) => <td key={i} className={cx(c.num && 'num', c.claseTd) || undefined}>{c.celda(x)}</td>)}
+                {acciones && <td className="whitespace-nowrap text-right">{acciones(x)}</td>}
+              </tr>
+            ))}
+          </tbody>
+        </Tabla>
+      </div>
+    </>
+  )
+}
+
 export function Barra({ valor, max }: { valor: number; max: number }) {
   const pct = max > 0 ? Math.min(100, Math.max(0, (valor / max) * 100)) : 0
   return (
@@ -119,11 +177,14 @@ export function Barra({ valor, max }: { valor: number; max: number }) {
 
 const claseCampo = 'w-full rounded-xl border border-line bg-panel px-3 py-2 text-sm text-ink placeholder:text-muted/70'
 
-export function Campo({ etiqueta, ayuda, className, ...p }: InputHTMLAttributes<HTMLInputElement> & { etiqueta: string; ayuda?: string }) {
+/** Sin `etiqueta` devuelve solo el <input> (y `className` va a él). */
+export function Campo({ etiqueta, ayuda, className, ...p }: InputHTMLAttributes<HTMLInputElement> & { etiqueta?: string; ayuda?: string }) {
+  const input = <input {...p} className={cx(claseCampo, !etiqueta && className)} />
+  if (!etiqueta) return input
   return (
     <label className={cx('flex flex-col gap-1.5 text-xs font-medium text-muted', className)}>
       {etiqueta}
-      <input {...p} className={claseCampo} />
+      {input}
       {ayuda && <span className="font-normal">{ayuda}</span>}
     </label>
   )
@@ -142,6 +203,21 @@ export function Area({ etiqueta, ayuda, className, rows = 3, ...p }: TextareaHTM
       <textarea rows={rows} {...p} className={claseCampo} />
       {ayuda && <span className="font-normal">{ayuda}</span>}
     </label>
+  )
+}
+
+export function Casilla({ etiqueta, className, ...p }: InputHTMLAttributes<HTMLInputElement> & { etiqueta: ReactNode }) {
+  return <label className={cx('flex items-center gap-2 text-sm', className)}><input type="checkbox" {...p} className="size-4 accent-[var(--accent)]" />{etiqueta}</label>
+}
+
+/** Año a consultar, del más reciente al más antiguo: por defecto del que viene al de hace dos. */
+export function SelectorAnio({ valor, onCambiar, desde, hasta }: { valor: number; onCambiar: (anio: number) => void; desde?: number; hasta?: number }) {
+  const [actual] = useState(() => new Date().getFullYear())
+  const primero = hasta ?? actual + 1, ultimo = desde ?? actual - 2
+  return (
+    <Selector value={valor} onChange={(e) => onCambiar(Number(e.target.value))} aria-label="Año" className="!w-28">
+      {Array.from({ length: primero - ultimo + 1 }, (_, i) => primero - i).map((a) => <option key={a} value={a}>{a}</option>)}
+    </Selector>
   )
 }
 

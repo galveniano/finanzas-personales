@@ -78,7 +78,7 @@ export type TipoDia = 'vacaciones' | 'no_disponible'
 export interface Emisor { nombre: string; nif: string; direccion: string; email: string; telefono: string; iban: string; pie: string }
 export interface ClienteFacturacion { nombre: string; nif: string; direccion: string; idioma: 'es' | 'en'; nota_factura: string }
 export interface Facturacion {
-  emisor: Emisor; clientes: ClienteFacturacion[]; dias_no_disponibles: Record<string, TipoDia>; siguiente_numero: string
+  emisor: Emisor; clientes: ClienteFacturacion[]; dias_no_disponibles: Record<string, TipoDia>
 }
 export interface GastoAutonomo {
   id: number; fecha: string; proveedor: string; concepto: string; categoria: string

@@ -5,7 +5,7 @@ import { api } from '../lib/api'
 import { eur, fecha, pct } from '../lib/format'
 import type { AhorroFiscal, Hacienda } from '../lib/tipos'
 import { num, useAccion, useAvisos } from '../lib/utilidades'
-import { Boton, Campo, Dato, ErrorCarga, Cargando, Fila, Importe, Selector, Tarjeta } from './ui'
+import { Boton, Campo, Casilla, Dato, ErrorCarga, Cargando, Fila, Importe, Selector, Tarjeta } from './ui'
 
 /** Lo que debes a Hacienda y aún no has pagado, y la cuenta donde lo apartas. */
 function Hucha({ h }: { h: Hacienda }) {
@@ -112,10 +112,7 @@ function AhorroFiscalTarjeta({ h }: { h: Hacienda }) {
           <Campo etiqueta="Imputación de otras viviendas (€/año)" name="imputacion" inputMode="decimal"
             defaultValue={sup.imputacion_inmuebles_anio ?? ''} placeholder={eur(h.origen.valor_imputacion)}
             ayuda={`Vacío: ${h.origen.imputacion_inmuebles_anio}. El 1,1 % del valor catastral de tu parte.`} />
-          <label className="flex items-center gap-2 text-sm sm:col-span-2">
-            <input type="checkbox" name="fraccionar" defaultChecked={!!sup.fraccionar_renta} />
-            Fracciono la renta: 60 % en junio y 40 % en noviembre
-          </label>
+          <Casilla etiqueta="Fracciono la renta: 60 % en junio y 40 % en noviembre" name="fraccionar" defaultChecked={!!sup.fraccionar_renta} className="sm:col-span-2" />
           <div className="flex justify-end sm:col-span-2"><Boton type="submit" disabled={guardar.isPending}>Guardar</Boton></div>
         </form>
       </div>

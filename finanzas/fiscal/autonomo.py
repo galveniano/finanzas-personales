@@ -8,6 +8,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Iterable
 
+from finanzas.fechas import MESES
 from finanzas.models import Factura, GastoAutonomo
 
 CERO = Decimal("0")
@@ -25,13 +26,14 @@ def limites_trimestre(anio: int, trimestre: int) -> tuple[date, date]:
     return inicio, fin  # [inicio, fin)
 
 
+def vencimiento(anio: int, trimestre: int) -> date:
+    """Último día para presentar el 303 y el 130 del trimestre: 20 de abril, julio y octubre, y 30 de enero del año siguiente."""
+    return date(anio + 1, 1, 30) if trimestre == 4 else date(anio, 3 * trimestre + 1, 20)
+
+
 def plazo_presentacion(anio: int, trimestre: int) -> str:
-    return {
-        1: f"1-20 abril {anio}",
-        2: f"1-20 julio {anio}",
-        3: f"1-20 octubre {anio}",
-        4: f"1-30 enero {anio + 1}",
-    }[trimestre]
+    v = vencimiento(anio, trimestre)
+    return f"1-{v.day} {MESES[v.month - 1]} {v.year}"
 
 
 @dataclass

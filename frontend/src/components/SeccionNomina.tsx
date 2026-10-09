@@ -9,7 +9,7 @@ import type { Nomina, Nominas as Datos, Prevision } from '../lib/tipos'
 import CalculadoraSueldo from './CalculadoraSueldo'
 import { num, useAccion, useAvisos } from '../lib/utilidades'
 import { useSubida } from '../lib/subida'
-import { BorrarEnDosPasos, Boton, Campo, Cargando, Dato, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Tabla, Tarjeta, Vacio } from './ui'
+import { BorrarEnDosPasos, Boton, Campo, Cargando, Casilla, Dato, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Tabla, Tarjeta, Vacio } from './ui'
 
 const mes = (n: Nomina) => fecha(n.fecha, { month: 'long', year: 'numeric' })
 const Mes = (n: Nomina) => capitalizar(mes(n))
@@ -169,9 +169,7 @@ export default function SeccionNomina() {
               <Campo etiqueta="Seguridad Social (€)" name="seguridad_social" inputMode="decimal" defaultValue={valor(x?.seguridad_social)} required />
               <Campo etiqueta="Otras deducciones (€)" name="otras_deducciones" inputMode="decimal" defaultValue={valor(x?.otras_deducciones)} placeholder="Especie, anticipos…" />
               <Campo etiqueta="Neto (€)" name="neto" inputMode="decimal" defaultValue={valor(x?.neto)} required />
-              <label className="flex items-center gap-2 text-sm sm:col-span-2">
-                <input type="checkbox" name="paga_extra" defaultChecked={x?.paga_extra} /> Es una paga extra suelta
-              </label>
+              <Casilla etiqueta="Es una paga extra suelta" name="paga_extra" defaultChecked={x?.paga_extra} className="sm:col-span-2" />
             </Formulario>
           )
         })()}
