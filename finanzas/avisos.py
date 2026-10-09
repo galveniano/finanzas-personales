@@ -100,5 +100,7 @@ def calcular(s: Session, regularizacion: list[dict] | None = None) -> list[dict]
             avisos.append({"nivel": "aviso" if (cuando - hoy).days <= 15 else "info",
                            "texto": f"El {cuando:%d/%m/%Y} Hacienda te carga {_eur(p['importe'])} de la {p['concepto'][0].lower()}"
                                     f"{p['concepto'][1:]}: ten el dinero en la cuenta domiciliada.", "ir": "/impuestos"})
+    from finanzas import cuentas
+    avisos += cuentas.avisos(s)
     orden = {"error": 0, "aviso": 1, "info": 2}
     return sorted(avisos, key=lambda a: orden[a["nivel"]])

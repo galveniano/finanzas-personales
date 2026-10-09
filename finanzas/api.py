@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from finanzas import auth, config, db, declaraciones, patrimonio, sync
-from finanzas.fechas import iso_utc
+from finanzas.fechas import iso_utc, sumar_meses
 from finanzas.fiscal import alquiler, autonomo, nomina as calc_nomina
 from finanzas.hipoteca import cuota_mensual, intereses_anio, saldo_pendiente
 from finanzas.importers import aeat, sabadell
@@ -106,6 +106,21 @@ def resumen(s: Session = SesionDB):
 
 # --- Cuentas y movimientos --------------------------------------------------
 
+TIPOS_CUENTA = ("corriente", "ahorro", "tarjeta", "inversion")
+# Cuentas cuyo saldo y movimientos se escriben a mano o con extractos; las sincronizadas (banco, Indexa) no se tocan
+ORIGENES_MANUALES = ("manual", "csv")
+
+
+def normalizar_iban(iban: str | None) -> str:
+    """Sin espacios y en mayúsculas: «ES00 0081 …» y «es000081…» son la misma cuenta."""
+    return (iban or "").replace(" ", "").upper()[:34]
+
+
+def es_manual(m: Movimiento) -> bool:
+    """Apuntado a mano en la app (no viene del banco ni de un extracto): se puede editar y borrar."""
+    return (m.huella or "").startswith("manual:")
+
+
 class CuentaIn(BaseModel):
     nombre: str
     entidad: str = ""
@@ -114,11 +129,62 @@ class CuentaIn(BaseModel):
     saldo: Decimal = CERO
 
 
-def _cuenta(c: Cuenta) -> dict:
+SIN_EXTRAS = {"evolucion": [], "mes": {"entran": 0.0, "salen": 0.0}}
+
+
+def _extras_cuentas(s: Session, ids: list[int]) -> dict[int, dict]:
+    """Por cuenta: el último saldo conocido de cada uno de los últimos 12 meses (según el saldo que guarda cada
+    movimiento; los meses sin movimientos repiten el anterior) y lo que ha entrado y salido este mes."""
+    from sqlalchemy import case
+    hoy = date.today()
+    inicio_mes = hoy.replace(day=1)
+    inicio = sumar_meses(inicio_mes, -11)
+    extras = {i: {"evolucion": [], "mes": dict(SIN_EXTRAS["mes"])} for i in ids}
+    if not ids:
+        return extras
+    por_mes: dict[int, dict[str, tuple[date, Decimal]]] = {}
+    filas = s.execute(select(Movimiento.cuenta_id, Movimiento.fecha, Movimiento.saldo)
+                      .where(Movimiento.cuenta_id.in_(ids), Movimiento.saldo.isnot(None), Movimiento.fecha >= inicio)
+                      .order_by(Movimiento.fecha, Movimiento.id))
+    for cid, fecha, saldo in filas:  # el último de cada mes gana
+        por_mes.setdefault(cid, {})[fecha.strftime("%Y-%m")] = (fecha, saldo)
+    for cid, meses in por_mes.items():
+        ultimo = None
+        for k in range(12):
+            mes = sumar_meses(inicio, k)
+            if mes.strftime("%Y-%m") in meses:
+                ultimo = meses[mes.strftime("%Y-%m")]
+            elif ultimo is not None:
+                ultimo = (min(sumar_meses(mes, 1) - timedelta(days=1), hoy), ultimo[1])
+            if ultimo is not None:
+                extras[cid]["evolucion"].append({"fecha": f(ultimo[0]), "saldo": n(ultimo[1])})
+    sumas = s.execute(select(Movimiento.cuenta_id,
+                             func.sum(case((Movimiento.importe > 0, Movimiento.importe), else_=0)),
+                             func.sum(case((Movimiento.importe < 0, Movimiento.importe), else_=0)))
+                      .where(Movimiento.cuenta_id.in_(ids), Movimiento.fecha >= inicio_mes)
+                      .group_by(Movimiento.cuenta_id))
+    for cid, entran, salen in sumas:
+        extras[cid]["mes"] = {"entran": n(entran or 0), "salen": n(-(salen or 0))}
+    return extras
+
+
+def _cuenta(c: Cuenta, extra: dict | None = None) -> dict:
     return {"id": c.id, "nombre": c.nombre, "entidad": c.entidad, "tipo": c.tipo, "iban": c.iban,
             "origen": c.origen, "saldo": n(c.saldo), "saldo_fecha": f(c.saldo_fecha),
             "participacion": n(c.parte * 100), "saldo_tuyo": n((c.saldo * c.parte).quantize(Decimal("0.01"))),
-            "ultima_sincronizacion": iso_utc(c.ultima_sincronizacion)}
+            "ultima_sincronizacion": iso_utc(c.ultima_sincronizacion), "activa": bool(c.activa),
+            **(extra or SIN_EXTRAS)}
+
+
+def _categoria(c: Categoria) -> dict:
+    from finanzas.categorizar import NOMBRES_DE_SERIE
+    return {"id": c.id, "nombre": c.nombre, "tipo": c.tipo, "ambito": c.ambito, "de_serie": c.nombre in NOMBRES_DE_SERIE}
+
+
+def _movimiento(m: Movimiento, traspasos: set[int] = frozenset()) -> dict:
+    return {"id": m.id, "cuenta_id": m.cuenta_id, "cuenta": m.cuenta.nombre, "fecha": f(m.fecha),
+            "fecha_valor": f(m.fecha_valor), "concepto": m.concepto, "importe": n(m.importe), "saldo": n(m.saldo),
+            "categoria_id": m.categoria_id, "nota": m.nota or "", "traspaso": m.id in traspasos, "manual": es_manual(m)}
 
 
 @router.get("/indexa")
@@ -130,13 +196,24 @@ def detalle_indexa(s: Session = SesionDB):
 
 
 @router.get("/cuentas")
-def listar_cuentas(s: Session = SesionDB):
-    return [_cuenta(c) for c in s.scalars(select(Cuenta).where(Cuenta.activa).order_by(Cuenta.tipo, Cuenta.nombre))]
+def listar_cuentas(todas: bool = False, s: Session = SesionDB):
+    """Las cuentas activas; con `todas`, también las ocultas (con `activa: false`) para poder recuperarlas."""
+    consulta = select(Cuenta).order_by(Cuenta.activa.desc(), Cuenta.tipo, Cuenta.nombre)
+    if not todas:
+        consulta = consulta.where(Cuenta.activa)
+    cuentas = s.scalars(consulta).all()
+    extras = _extras_cuentas(s, [c.id for c in cuentas if c.activa])
+    return [_cuenta(c, extras.get(c.id)) for c in cuentas]
 
 
 @router.post("/cuentas")
 def crear_cuenta(datos: CuentaIn, s: Session = SesionDB):
-    c = Cuenta(**datos.model_dump(), saldo_fecha=date.today() if datos.saldo else None)
+    if not datos.nombre.strip():
+        raise HTTPException(400, "Ponle un nombre a la cuenta")
+    if datos.tipo not in TIPOS_CUENTA:
+        raise HTTPException(400, "El tipo de cuenta tiene que ser corriente, ahorro, tarjeta o inversión")
+    c = Cuenta(nombre=datos.nombre.strip()[:120], entidad=datos.entidad.strip()[:80], tipo=datos.tipo,
+               iban=normalizar_iban(datos.iban), saldo=datos.saldo, saldo_fecha=date.today() if datos.saldo else None)
     s.add(c)
     s.commit()
     return _cuenta(c)
@@ -145,6 +222,8 @@ def crear_cuenta(datos: CuentaIn, s: Session = SesionDB):
 @router.post("/cuentas/{cuenta_id}/importar")
 async def importar_extracto(cuenta_id: int, fichero: UploadFile = File(...), s: Session = SesionDB):
     cuenta = _obtener(s, Cuenta, cuenta_id)
+    if cuenta.origen not in ORIGENES_MANUALES:
+        raise HTTPException(400, "Esta cuenta se sincroniza sola: si importaras el extracto, sus movimientos saldrían dos veces.")
     try:
         r = sabadell.importar(s, cuenta, fichero.filename or "extracto.csv", await fichero.read())
     except ValueError as e:
@@ -154,50 +233,110 @@ async def importar_extracto(cuenta_id: int, fichero: UploadFile = File(...), s: 
 
 @router.get("/categorias")
 def listar_categorias(s: Session = SesionDB):
-    return [{"id": c.id, "nombre": c.nombre, "tipo": c.tipo, "ambito": c.ambito}
-            for c in s.scalars(select(Categoria).order_by(Categoria.nombre))]
+    return [_categoria(c) for c in s.scalars(select(Categoria).order_by(Categoria.nombre))]
+
+
+def _filtros_movimientos(cuenta_id: int | None, categoria_id: int | None, q: str, desde: date | None,
+                         hasta: date | None, tipo: str, solo_tuyas: bool) -> list:
+    """Condiciones que comparten la lista de movimientos y su Excel (la consulta tiene que unir Cuenta)."""
+    if tipo not in ("", "ingresos", "gastos"):
+        raise HTTPException(400, "El tipo tiene que ser «ingresos» o «gastos»")
+    filtros = []
+    if cuenta_id:
+        filtros.append(Movimiento.cuenta_id == cuenta_id)
+    elif solo_tuyas:  # sin elegir cuenta, fuera las que no son tuyas
+        filtros.append(PARTE > 0)
+    if categoria_id == 0:
+        filtros.append(Movimiento.categoria_id.is_(None))
+    elif categoria_id:
+        filtros.append(Movimiento.categoria_id == categoria_id)
+    if q:
+        filtros.append(Movimiento.concepto.ilike(f"%{q}%"))
+    if desde:
+        filtros.append(Movimiento.fecha >= desde)
+    if hasta:
+        filtros.append(Movimiento.fecha <= hasta)
+    if tipo == "ingresos":
+        filtros.append(Movimiento.importe > 0)
+    elif tipo == "gastos":
+        filtros.append(Movimiento.importe < 0)
+    return filtros
 
 
 @router.get("/movimientos")
 def listar_movimientos(cuenta_id: int | None = None, categoria_id: int | None = None, q: str = "",
-                       limite: int = 300, solo_tuyas: bool = False, s: Session = SesionDB):
-    consulta = select(Movimiento).order_by(Movimiento.fecha.desc(), Movimiento.id.desc()).limit(limite)
-    if cuenta_id:
-        consulta = consulta.where(Movimiento.cuenta_id == cuenta_id)
-    elif solo_tuyas:  # sin elegir cuenta, fuera las que no son tuyas
-        consulta = consulta.join(Cuenta, Movimiento.cuenta_id == Cuenta.id).where(PARTE > 0)
-    if categoria_id == 0:
-        consulta = consulta.where(Movimiento.categoria_id.is_(None))
-    elif categoria_id:
-        consulta = consulta.where(Movimiento.categoria_id == categoria_id)
-    if q:
-        consulta = consulta.where(Movimiento.concepto.ilike(f"%{q}%"))
-    return [{"id": m.id, "cuenta_id": m.cuenta_id, "cuenta": m.cuenta.nombre, "fecha": f(m.fecha),
-             "concepto": m.concepto, "importe": n(m.importe), "saldo": n(m.saldo),
-             "categoria_id": m.categoria_id} for m in s.scalars(consulta)]
+                       desde: date | None = None, hasta: date | None = None, tipo: str = "",
+                       limite: int = 300, offset: int = 0, solo_tuyas: bool = False, s: Session = SesionDB):
+    """Una página de movimientos (los más recientes primero) de las cuentas activas, con el total que hay con
+    esos filtros y cuánto entra y sale en total. `tipo`: ingresos o gastos; `desde`/`hasta`: AAAA-MM-DD."""
+    from sqlalchemy import case
+    from sqlalchemy.orm import contains_eager, joinedload
+    from finanzas import prevision
+    filtros = [Cuenta.activa, *_filtros_movimientos(cuenta_id, categoria_id, q, desde, hasta, tipo, solo_tuyas)]
+    consulta = (select(Movimiento).join(Cuenta, Movimiento.cuenta_id == Cuenta.id).where(*filtros)
+                .options(contains_eager(Movimiento.cuenta), joinedload(Movimiento.categoria))
+                .order_by(Movimiento.fecha.desc(), Movimiento.id.desc())
+                .limit(max(1, min(limite, 1000))).offset(max(0, offset)))
+    filas = s.scalars(consulta).all()
+    total, entran, salen = s.execute(
+        select(func.count(), func.sum(case((Movimiento.importe > 0, Movimiento.importe), else_=0)),
+               func.sum(case((Movimiento.importe < 0, Movimiento.importe), else_=0)))
+        .select_from(Movimiento).join(Cuenta, Movimiento.cuenta_id == Cuenta.id).where(*filtros)).one()
+    traspasos = prevision.ids_traspaso([
+        prevision.MovTuyo(m.id, m.fecha, m.cuenta_id, float(m.importe), float(m.importe), m.concepto,
+                          m.categoria.nombre if m.categoria else None, m.categoria.tipo if m.categoria else None)
+        for m in filas])
+    return {"movimientos": [_movimiento(m, traspasos) for m in filas], "total": total,
+            "suma_ingresos": n(entran or 0), "suma_gastos": n(-(salen or 0))}
 
 
 class CuentaPatch(BaseModel):
     nombre: str | None = None
+    entidad: str | None = None
+    tipo: str | None = None
+    iban: str | None = None
+    saldo: Decimal | None = None  # solo en cuentas manuales o de extracto
     participacion: Decimal | None = None
+    activa: bool | None = None  # True recupera una cuenta oculta
 
 
 @router.patch("/cuentas/{cuenta_id}")
 def actualizar_cuenta(cuenta_id: int, datos: CuentaPatch, s: Session = SesionDB):
     c = _obtener(s, Cuenta, cuenta_id)
+    mueve_patrimonio = False
     if datos.nombre is not None and datos.nombre.strip():
         c.nombre = datos.nombre.strip()[:120]
+    if datos.entidad is not None:
+        c.entidad = datos.entidad.strip()[:80]
+    if datos.tipo is not None:
+        if datos.tipo not in TIPOS_CUENTA:
+            raise HTTPException(400, "El tipo de cuenta tiene que ser corriente, ahorro, tarjeta o inversión")
+        mueve_patrimonio |= datos.tipo != c.tipo
+        c.tipo = datos.tipo
+    if datos.iban is not None:
+        c.iban = normalizar_iban(datos.iban)
+    if datos.saldo is not None:
+        if c.origen not in ORIGENES_MANUALES:
+            raise HTTPException(400, "El saldo de una cuenta sincronizada lo pone el banco en cada sincronización")
+        c.saldo, c.saldo_fecha = datos.saldo, date.today()
+        mueve_patrimonio = True
     if datos.participacion is not None:
         if not 0 <= datos.participacion <= 100:
             raise HTTPException(400, "La parte tuya tiene que estar entre 0 y 100 %")
         c.participacion = datos.participacion
+        mueve_patrimonio = True
+    if datos.activa is not None:
+        mueve_patrimonio |= datos.activa != bool(c.activa)
+        c.activa = datos.activa
     s.commit()
-    sync.guardar_instantanea(s)  # el patrimonio cambia
-    return _cuenta(c)
+    if mueve_patrimonio:
+        sync.guardar_instantanea(s)
+    return _cuenta(c, _extras_cuentas(s, [c.id])[c.id])
 
 
 class MovimientoPatch(BaseModel):
-    categoria_id: int | None = None
+    categoria_id: int | None = None  # si viene (aunque sea null) cambia la categoría; si no viene, no se toca
+    nota: str | None = None
 
 
 @router.patch("/movimientos/{mov_id}")
@@ -205,9 +344,17 @@ def actualizar_movimiento(mov_id: int, datos: MovimientoPatch, s: Session = Sesi
     """Al cambiar la categoría se aprende la regla para los siguientes y se dice cuántos anteriores parecidos hay."""
     from finanzas import categorizar
     m = _obtener(s, Movimiento, mov_id)
-    m.categoria_id = datos.categoria_id
+    if datos.nota is not None:
+        m.nota = datos.nota.strip()[:500]
+    aprendido = {"patron": None, "parecidos": 0}
+    if "categoria_id" in datos.model_fields_set:
+        if datos.categoria_id is not None:
+            _obtener(s, Categoria, datos.categoria_id)
+        m.categoria_id = datos.categoria_id
+        s.commit()
+        aprendido = categorizar.aprender(s, m)
     s.commit()
-    return {"ok": True, **categorizar.aprender(s, m)}
+    return {"ok": True, **aprendido}
 
 
 @router.post("/movimientos/{mov_id}/aplicar-a-parecidos")
@@ -224,7 +371,7 @@ def aplicar_a_parecidos(mov_id: int, s: Session = SesionDB):
 @router.delete("/cuentas/{cuenta_id}")
 def borrar_cuenta(cuenta_id: int, s: Session = SesionDB):
     """Las cuentas manuales o de extractos se borran con sus movimientos; las que vienen del banco o de
-    Indexa solo se ocultan (volverían en la siguiente sincronización)."""
+    Indexa solo se ocultan (dejan de contar y de sincronizarse) y se recuperan desde «Cuentas ocultas»."""
     c = _obtener(s, Cuenta, cuenta_id)
     if c.origen in ("enable_banking", "indexa"):
         c.activa = False
@@ -522,7 +669,7 @@ def _nominas_banco(s: Session) -> list[Movimiento]:
     return s.scalars(
         select(Movimiento).join(Cuenta, Movimiento.cuenta_id == Cuenta.id)
         .join(Categoria, Movimiento.categoria_id == Categoria.id)
-        .where(Categoria.nombre == "Nómina", Movimiento.importe > 0, PARTE > 0,
+        .where(Categoria.nombre == "Nómina", Movimiento.importe > 0, PARTE > 0, Cuenta.activa,
                Movimiento.fecha >= date.today() - timedelta(days=730))
         .order_by(Movimiento.fecha.desc())).all()
 
@@ -1725,22 +1872,27 @@ def exportar(pdfs: bool = False, s: Session = SesionDB):
 
 
 @router.get("/exportar/movimientos.xlsx")
-def exportar_movimientos(s: Session = SesionDB):
+def exportar_movimientos(cuenta_id: int | None = None, categoria_id: int | None = None, q: str = "",
+                         desde: date | None = None, hasta: date | None = None, tipo: str = "",
+                         solo_tuyas: bool = False, s: Session = SesionDB):
+    """Los movimientos en Excel, con los mismos filtros que la lista (sin filtros, todos, también los de
+    cuentas ocultas: sirve de copia)."""
     import io
     from openpyxl import Workbook
     libro = Workbook()
     hoja = libro.active
     hoja.title = "Movimientos"
-    hoja.append(["Fecha", "Cuenta", "Concepto", "Importe", "Tu parte", "Categoría", "Saldo"])
+    hoja.append(["Fecha", "Cuenta", "Concepto", "Importe", "Tu parte", "Categoría", "Saldo", "Nota"])
     filas = s.execute(select(Movimiento.fecha, Cuenta.nombre, Movimiento.concepto, Movimiento.importe,
-                             Movimiento.importe * PARTE, Categoria.nombre, Movimiento.saldo)
+                             Movimiento.importe * PARTE, Categoria.nombre, Movimiento.saldo, Movimiento.nota)
                       .join(Cuenta, Movimiento.cuenta_id == Cuenta.id)
                       .join(Categoria, Movimiento.categoria_id == Categoria.id, isouter=True)
+                      .where(*_filtros_movimientos(cuenta_id, categoria_id, q, desde, hasta, tipo, solo_tuyas))
                       .order_by(Movimiento.fecha.desc(), Movimiento.id.desc()))
-    for fecha, cuenta, concepto, importe, tuyo, cat, saldo in filas:
+    for fecha, cuenta, concepto, importe, tuyo, cat, saldo, nota in filas:
         hoja.append([fecha, cuenta, concepto, float(importe), round(float(tuyo), 2), cat or "",
-                     float(saldo) if saldo is not None else None])
-    for col, ancho in zip("ABCDEFG", (12, 22, 60, 12, 12, 22, 12)):
+                     float(saldo) if saldo is not None else None, nota or ""])
+    for col, ancho in zip("ABCDEFGH", (12, 22, 60, 12, 12, 22, 12, 30)):
         hoja.column_dimensions[col].width = ancho
     salida = io.BytesIO()
     libro.save(salida)

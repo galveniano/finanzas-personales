@@ -17,7 +17,7 @@ def test_flujo_completo_api():
         assert r.json()["nuevos"] == 1
         assert c.get("/api/cuentas").json()[0]["saldo"] == 1800.5  # el extracto fija el saldo
 
-        mov = c.get("/api/movimientos").json()[0]
+        mov = c.get("/api/movimientos").json()["movimientos"][0]
         assert c.patch(f"/api/movimientos/{mov['id']}", json={"categoria_id": 1}).status_code == 200
 
         c.post("/api/autonomo/facturas", json={"numero": "1", "cliente": "Aciturri", "fecha": "2026-08-01",
