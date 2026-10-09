@@ -11,6 +11,9 @@ CERO = Decimal("0")
 CENT = Decimal("0.01")
 AMORTIZACION_PCT = Decimal("3")
 
+# Tipos de gasto del piso (clave guardada → cómo se llama en la app)
+TIPOS_GASTO = {"ibi": "IBI", "comunidad": "Comunidad", "seguro": "Seguro", "reparacion": "Reparación",
+               "intereses": "Intereses hipoteca", "suministros": "Suministros", "gestion": "Gestión", "otros": "Otros"}
 # Intereses y gastos de reparación/conservación no pueden generar rendimiento negativo
 # (el exceso se arrastra 4 años). El resto sí se deduce sin ese límite.
 TIPOS_LIMITADOS = {"intereses", "reparacion"}

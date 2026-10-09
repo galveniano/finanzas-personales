@@ -107,30 +107,62 @@ export interface Rendimiento {
   anio: number; ingresos: number; gastos_limitados: number; gastos_otros: number; amortizacion: number
   rendimiento_neto: number; reduccion_pct: number; reduccion: number; rendimiento_reducido: number; notas: string[]
 }
+/** Porcentajes y cifras fijas de las estimaciones de Bienes (vienen del backend, no se escriben aquí). */
+export interface Constantes { gastos_venta_pct: number; ajd_pct: number; notaria: number; amortizacion_pct: number }
+/** Si el inquilino ha pagado un mes: el ingreso que cuadra con la renta (o de categoría «Alquiler cobrado»). */
+export interface Cobro { mes: string; renta: number; fecha: string | null; importe: number | null; cuadra: boolean }
+export interface Deuda {
+  id: number; nombre: string; entidad: string; tipo: 'hipoteca' | 'prestamo' | 'otro'; activo_id: number | null
+  capital_inicial: number; tipo_interes_anual: number; plazo_meses: number; fecha_inicio: string | null
+  saldo_pendiente_manual: number | null; saldo_fecha: string | null
+  cuota: number; pendiente: number; intereses_anio: number; futura: boolean
+  fin: string | null; cuotas_restantes: number; intereses_restantes: number
+}
+/** Una deuda de la lista general, con el nombre del bien al que va ligada. */
+export interface Prestamo extends Deuda { activo: string | null }
+export interface Contrato {
+  id: number; inquilino: string; fecha_inicio: string; fecha_fin: string | null; renta_inicial: number
+  renta_actual: number; reduccion_pct: number; cambios: { id: number; desde: string; renta: number }[]; cobros: Cobro[]
+}
+export interface GastoInmueble { id: number; fecha: string; tipo: string; importe: number; concepto: string }
+export interface Valoracion { id: number; fecha: string; valor: number; deuda: number }
 export interface Inmueble {
   id: number; nombre: string; tipo: string; uso: string; fecha_compra: string | null
   precio_compra: number; gastos_compra: number; valor_catastral: number; valor_catastral_construccion: number
-  porcentaje_propiedad: number; valor: number; valor_detalle: string; deuda: number; equity: number
-  valoraciones: { id: number; fecha: string; valor: number }[]
-  hipotecas: { id: number; nombre: string; entidad: string; capital_inicial: number; tipo_interes_anual: number
-    plazo_meses: number; fecha_inicio: string | null; cuota: number; pendiente: number; intereses_anio: number; futura: boolean }[]
-  contratos: { id: number; inquilino: string; fecha_inicio: string; fecha_fin: string | null; renta_inicial: number
-    renta_actual: number; reduccion_pct: number; cambios: { desde: string; renta: number }[] }[]
-  gastos: { id: number; fecha: string; tipo: string; importe: number; concepto: string }[]
+  porcentaje_propiedad: number; coste: number; deuda_compra: number | null; plusvalia_latente: number | null
+  valor: number; valor_detalle: string; deuda: number; equity: number
+  valoraciones: Valoracion[]
+  hipotecas: Deuda[]
+  contratos: Contrato[]
+  gastos: GastoInmueble[]
   pagos: { id: number; concepto: string; fecha: string; importe: number; pagado: boolean }[]
   rendimiento: Rendimiento | null
   rentabilidad: Rentabilidad | null; notas: string
 }
+export interface Inmuebles { anio: number; inmuebles: Inmueble[]; constantes: Constantes }
 export interface VenderOAlquilar {
-  precio_venta: number; valor_detalle: string; gastos_venta: number; amortizacion_acumulada: number
+  precio_venta: number; precio_entero: number; porcentaje_propiedad: number; valor_detalle: string
+  gastos_venta: number; gastos_venta_pct: number; amortizacion_acumulada: number
   valor_adquisicion: number; ganancia: number; irpf_ganancia: number; hipoteca_pendiente: number; en_mano: number
-  alquiler_flujo_anual: number; alquiler_irpf_anual: number; alquiler_flujo_tras_irpf: number
-  rentabilidad_sobre_en_mano: number | null; notas: string[]
+  alquiler_flujo_anual: number; alquiler_tributa: number; tipo_marginal: number; alquiler_irpf_anual: number; alquiler_flujo_tras_irpf: number
+  rentabilidad_sobre_en_mano: number | null; constantes: Constantes; notas: string[]
 }
 export interface Rentabilidad {
   renta_anual: number; gastos_anuales: number; intereses_anuales: number; cuotas_anuales: number
   coste: number; aportado: number; bruta: number | null; neta: number | null; neta_sobre_valor: number | null
   sobre_aportado: number | null; flujo_caja_anual: number
+}
+export interface CuadroHipoteca {
+  anios: { anio: number; cuotas: number; intereses: number; amortizado: number; pendiente_fin: number }[]
+  resumen: { cuotas_restantes: number; cuota: number; pendiente: number; intereses_restantes: number; fin: string; desde_saldo_real: boolean }
+}
+export interface SimulacionAmortizacion {
+  importe: number; modo: 'plazo' | 'cuota'; pendiente_hoy: number; cuota_actual: number; cuotas_restantes: number
+  intereses_restantes: number; intereses_con: number; ahorro_intereses: number; meses_menos: number; nueva_cuota: number
+  fin_actual: string; nuevo_fin: string
+  comparativa: { cuenta: string; rentabilidad_esperada: number; meses: number; rendiria: number; rendiria_neto: number; mejor: 'invertir' | 'amortizar' } | null
+  fiscal: { deducible: boolean; tipo_marginal: number | null; tipo_efectivo: number | null; ahorro_neto: number; nota: string }
+  notas: string[]
 }
 export interface Objetivo {
   id: number; nombre: string; tipo: string; fecha_objetivo: string | null; importe_objetivo: number

@@ -683,7 +683,7 @@ def borrar_nomina(nomina_id: int, s: Session = SesionDB):
 
 class ActivoIn(BaseModel):
     nombre: str
-    tipo: str = "inmueble"
+    tipo: str = "inmueble"  # inmueble | inmueble_en_construccion | vehiculo | otro
     uso: str = "otro"
     fecha_compra: date | None = None
     precio_compra: Decimal = CERO
@@ -691,6 +691,15 @@ class ActivoIn(BaseModel):
     valor_catastral: Decimal = CERO
     valor_catastral_construccion: Decimal = CERO
     porcentaje_propiedad: Decimal = Decimal("100")
+    notas: str = ""
+
+
+def _comprobar_bien(tipo: str | None, uso: str | None) -> None:
+    from finanzas.importers.datos_json import TIPOS_ACTIVO
+    if tipo is not None and tipo not in TIPOS_ACTIVO:
+        raise HTTPException(400, "Tipo de bien desconocido")
+    if uso is not None and uso not in ("vivienda_habitual", "alquiler", "otro"):
+        raise HTTPException(400, "Uso desconocido")
 
 
 class ValoracionIn(BaseModel):
@@ -706,6 +715,7 @@ class HipotecaIn(BaseModel):
     fecha_inicio: date
     plazo_meses: int
     saldo_pendiente_manual: Decimal | None = None
+    saldo_fecha: date | None = None  # a qué día es ese pendiente (vacío: hoy)
 
 
 class ContratoIn(BaseModel):
@@ -733,10 +743,26 @@ def _pct(parte: Decimal, total: Decimal) -> float | None:
     return round(float(parte / total * 100), 2) if total > 0 else None
 
 
+GASTOS_VENTA_PCT = Decimal("3")  # agencia y gastos al vender, aproximado
+AJD_MURCIA_PCT = Decimal("1.5")  # actos jurídicos documentados en la compra de obra nueva (Región de Murcia)
+NOTARIA_REGISTRO = Decimal("1200")  # notaría, registro y gestoría, aproximado
+
+
+def _pct_texto(x) -> str:
+    """«1,5» o «33,33»: un porcentaje para un texto en español, sin ceros de más."""
+    return f"{float(x):g}".replace(".", ",")
+
+
+def _constantes() -> dict:
+    """Los porcentajes y cifras fijas de las estimaciones, para que el frontal los pinte de aquí y no los tenga escritos."""
+    return {"gastos_venta_pct": n(GASTOS_VENTA_PCT), "ajd_pct": n(AJD_MURCIA_PCT), "notaria": n(NOTARIA_REGISTRO),
+            "amortizacion_pct": n(alquiler.AMORTIZACION_PCT)}
+
+
 def _rentabilidad(a: Activo, contratos, gastos, deudas, valor: Decimal, hoy: date) -> dict | None:
     """Rentabilidad del alquiler con la renta de hoy y los gastos de los últimos 12 meses.
     Bruta y neta sobre lo que costó (precio + gastos de compra); también sobre el dinero que pusiste tú."""
-    vigentes = [c for c in contratos if c.fecha_inicio <= hoy and (not c.fecha_fin or c.fecha_fin >= hoy)]
+    vigentes = [c for c in contratos if c.vigente(hoy)]
     if a.tipo != "inmueble" or not vigentes:
         return None
     renta = sum((c.renta_en(hoy) for c in vigentes), CERO) * 12
@@ -755,8 +781,10 @@ def _rentabilidad(a: Activo, contratos, gastos, deudas, valor: Decimal, hoy: dat
 
 @router.get("/inmuebles")
 def listar_inmuebles(anio: int | None = None, s: Session = SesionDB):
+    from finanzas import bienes
     anio = anio or date.today().year
     hoy = date.today()
+    ingresos = None  # entradas del banco de los últimos meses, solo si hay algún contrato vigente
     fichas = []
     for a in s.scalars(select(Activo).order_by(Activo.nombre)):
         deudas = s.scalars(select(Deuda).where(Deuda.activo_id == a.id)).all()
@@ -764,6 +792,8 @@ def listar_inmuebles(anio: int | None = None, s: Session = SesionDB):
         gastos = s.scalars(select(GastoInmueble).where(GastoInmueble.activo_id == a.id)
                            .order_by(GastoInmueble.fecha.desc())).all()
         pagos = s.scalars(select(PagoPrevisto).where(PagoPrevisto.activo_id == a.id).order_by(PagoPrevisto.fecha)).all()
+        if ingresos is None and any(c.vigente(hoy) for c in contratos):
+            ingresos = bienes.ingresos_recientes(s, hoy)
         rend = None
         if contratos:
             r = alquiler.rendimiento_del_anio(a, contratos, gastos, deudas, anio)
@@ -776,25 +806,26 @@ def listar_inmuebles(anio: int | None = None, s: Session = SesionDB):
         else:
             valor, detalle = patrimonio.valor_activo(a, hoy)
         deuda_total = sum((saldo_pendiente(d, hoy) for d in deudas), CERO)
+        coste = (a.precio_compra + a.gastos_compra) * a.porcentaje_propiedad / 100
+        # La hipoteca el día de la compra (si se firmó después, lo que se pidió): el primer punto de la evolución
+        deuda_compra = sum((saldo_pendiente(d, max(a.fecha_compra, d.fecha_inicio or a.fecha_compra)) for d in deudas),
+                           CERO) if a.fecha_compra else None
         fichas.append({
             "rentabilidad": _rentabilidad(a, contratos, gastos, deudas, valor, hoy), "notas": a.notas,
             "id": a.id, "nombre": a.nombre, "tipo": a.tipo, "uso": a.uso, "fecha_compra": f(a.fecha_compra),
             "precio_compra": n(a.precio_compra), "gastos_compra": n(a.gastos_compra),
             "valor_catastral": n(a.valor_catastral), "valor_catastral_construccion": n(a.valor_catastral_construccion),
-            "porcentaje_propiedad": n(a.porcentaje_propiedad),
+            "porcentaje_propiedad": n(a.porcentaje_propiedad), "coste": n(coste), "deuda_compra": n(deuda_compra),
+            "plusvalia_latente": n(valor - coste) if a.tipo == "inmueble" and a.valoraciones else None,
             "valor": n(valor), "valor_detalle": detalle, "deuda": n(deuda_total), "equity": n(valor - deuda_total),
-            "valoraciones": [{"id": v.id, "fecha": f(v.fecha), "valor": n(v.valor)} for v in a.valoraciones],
-            "hipotecas": [{"id": d.id, "nombre": d.nombre, "entidad": d.entidad, "capital_inicial": n(d.capital_inicial),
-                           "tipo_interes_anual": n(d.tipo_interes_anual), "plazo_meses": d.plazo_meses,
-                           "fecha_inicio": f(d.fecha_inicio),
-                           "cuota": n(cuota_mensual(d.capital_inicial, d.tipo_interes_anual, d.plazo_meses)),
-                           "pendiente": n(saldo_pendiente(d, hoy)), "intereses_anio": n(intereses_anio(d, anio)),
-                           "futura": bool(d.fecha_inicio and d.fecha_inicio > hoy)}
-                          for d in deudas],
+            "valoraciones": [{"id": v.id, "fecha": f(v.fecha), "valor": n(v.valor),
+                              "deuda": n(sum((saldo_pendiente(d, v.fecha) for d in deudas), CERO))} for v in a.valoraciones],
+            "hipotecas": [bienes.deuda_dict(d, hoy, anio) for d in deudas],
             "contratos": [{"id": c.id, "inquilino": c.inquilino, "fecha_inicio": f(c.fecha_inicio),
                            "fecha_fin": f(c.fecha_fin), "renta_inicial": n(c.renta_mensual),
                            "renta_actual": n(c.renta_en(hoy)), "reduccion_pct": n(c.reduccion_pct),
-                           "cambios": [{"desde": f(x.desde), "renta": n(x.renta_mensual)} for x in c.cambios_renta]}
+                           "cambios": [{"id": x.id, "desde": f(x.desde), "renta": n(x.renta_mensual)} for x in c.cambios_renta],
+                           "cobros": bienes.cobros_alquiler(c, ingresos, hoy) if c.vigente(hoy) else []}
                           for c in contratos],
             "gastos": [{"id": g.id, "fecha": f(g.fecha), "tipo": g.tipo, "importe": n(g.importe), "concepto": g.concepto}
                        for g in gastos],
@@ -802,14 +833,16 @@ def listar_inmuebles(anio: int | None = None, s: Session = SesionDB):
                        "pagado": p.pagado} for p in pagos],
             "rendimiento": rend,
         })
-    return {"anio": anio, "inmuebles": fichas}
+    return {"anio": anio, "inmuebles": fichas, "constantes": _constantes()}
 
 
 @router.post("/inmuebles")
 def crear_inmueble(datos: ActivoIn, s: Session = SesionDB):
+    _comprobar_bien(datos.tipo, datos.uso)
     a = Activo(**datos.model_dump())
     s.add(a)
     s.commit()
+    sync.guardar_instantanea(s)
     return {"id": a.id}
 
 
@@ -824,9 +857,13 @@ def crear_valoracion(activo_id: int, datos: ValoracionIn, s: Session = SesionDB)
 @router.post("/inmuebles/{activo_id}/hipotecas")
 def crear_hipoteca(activo_id: int, datos: HipotecaIn, s: Session = SesionDB):
     _obtener(s, Activo, activo_id)
-    s.add(Deuda(activo_id=activo_id, tipo="hipoteca", saldo_fecha=date.today() if datos.saldo_pendiente_manual else None,
-                **datos.model_dump()))
+    if datos.plazo_meses <= 0:
+        raise HTTPException(400, "El plazo tiene que ser de al menos un mes")
+    valores = datos.model_dump()
+    valores["saldo_fecha"] = (valores["saldo_fecha"] or date.today()) if valores["saldo_pendiente_manual"] is not None else None
+    s.add(Deuda(activo_id=activo_id, tipo="hipoteca", **valores))
     s.commit()
+    sync.guardar_instantanea(s)
     return {"ok": True}
 
 
@@ -834,6 +871,7 @@ def crear_hipoteca(activo_id: int, datos: HipotecaIn, s: Session = SesionDB):
 def borrar_deuda(deuda_id: int, s: Session = SesionDB):
     s.delete(_obtener(s, Deuda, deuda_id))
     s.commit()
+    sync.guardar_instantanea(s)
     return {"ok": True}
 
 
@@ -859,6 +897,8 @@ def actualizar_renta(contrato_id: int, datos: RentaIn, s: Session = SesionDB):
 @router.post("/inmuebles/{activo_id}/gastos")
 def crear_gasto_inmueble(activo_id: int, datos: GastoInmuebleIn, s: Session = SesionDB):
     _obtener(s, Activo, activo_id)
+    if datos.tipo not in alquiler.TIPOS_GASTO:
+        raise HTTPException(400, "Tipo de gasto desconocido")
     s.add(GastoInmueble(activo_id=activo_id, **datos.model_dump()))
     s.commit()
     return {"ok": True}
@@ -1450,6 +1490,7 @@ def probar_ajustes_ia(s: Session = SesionDB):
 
 class ActivoPatch(BaseModel):
     nombre: str | None = None
+    tipo: str | None = None
     uso: str | None = None
     fecha_compra: date | None = None
     precio_compra: Decimal | None = None
@@ -1463,6 +1504,7 @@ class ActivoPatch(BaseModel):
 @router.patch("/inmuebles/{activo_id}")
 def actualizar_inmueble(activo_id: int, datos: ActivoPatch, s: Session = SesionDB):
     a = _obtener(s, Activo, activo_id)
+    _comprobar_bien(datos.tipo, datos.uso)
     for campo, valor in datos.model_dump(exclude_unset=True).items():
         if valor is not None or campo == "fecha_compra":
             setattr(a, campo, valor)
@@ -1507,6 +1549,7 @@ def borrar_gasto_inmueble(gasto_id: int, s: Session = SesionDB):
 
 class ContratoPatch(BaseModel):
     inquilino: str | None = None
+    fecha_inicio: date | None = None
     fecha_fin: date | None = None
     renta_mensual: Decimal | None = None
     reduccion_pct: Decimal | None = None
@@ -1532,10 +1575,6 @@ def borrar_contrato(contrato_id: int, s: Session = SesionDB):
     return {"ok": True}
 
 
-AJD_MURCIA_PCT = Decimal("1.5")  # actos jurídicos documentados en la compra de obra nueva (Región de Murcia)
-NOTARIA_REGISTRO = Decimal("1200")  # notaría, registro y gestoría, aproximado
-
-
 class EscrituraIn(BaseModel):
     fecha: date
     precio: Decimal | None = None  # sin IVA; vacío: el precio de compra del bien
@@ -1549,25 +1588,29 @@ def gastos_escritura(activo_id: int, datos: EscrituraIn, s: Session = SesionDB):
     if not precio:
         raise HTTPException(400, "Pon el precio de la vivienda (sin IVA)")
     importe = (precio * AJD_MURCIA_PCT / 100 + NOTARIA_REGISTRO).quantize(Decimal("1"))
-    s.add(PagoPrevisto(concepto=f"Escritura {a.nombre}: AJD 1,5 % y notaría (estimado)"[:160], fecha=datos.fecha,
-                       importe=importe, activo_id=a.id))
+    s.add(PagoPrevisto(concepto=f"Escritura {a.nombre}: AJD {_pct_texto(AJD_MURCIA_PCT)} % y notaría (estimado)"[:160],
+                       fecha=datos.fecha, importe=importe, activo_id=a.id))
     s.commit()
-    return {"ok": True, "importe": n(importe)}
+    return {"ok": True, "importe": n(importe), "constantes": _constantes()}
 
 
 @router.get("/inmuebles/{activo_id}/vender")
-def vender_o_alquilar(activo_id: int, precio: float | None = None, gastos_venta_pct: float = 3.0,
+def vender_o_alquilar(activo_id: int, precio: float | None = None, gastos_venta_pct: float | None = None,
                       s: Session = SesionDB):
-    """Compara vender el piso (lo que te quedaría en mano tras impuestos e hipoteca) con seguir alquilándolo."""
+    """Compara vender el piso (lo que te quedaría en mano tras impuestos e hipoteca) con seguir alquilándolo.
+    `precio` es el del piso entero: se escala por tu porcentaje de propiedad; la hipoteca se resta entera."""
     from finanzas import prevision
     a = _obtener(s, Activo, activo_id)
     hoy = date.today()
-    valor, detalle = patrimonio.valor_activo(a, hoy)
-    venta = Decimal(str(precio)) if precio else valor
-    gastos_venta = (venta * Decimal(str(gastos_venta_pct)) / 100).quantize(Decimal("0.01"))
+    parte = a.porcentaje_propiedad / 100
+    pct_venta = Decimal(str(gastos_venta_pct)) if gastos_venta_pct is not None else GASTOS_VENTA_PCT
+    valor, detalle = patrimonio.valor_activo(a, hoy)  # ya es tu parte
+    entero = Decimal(str(precio)) if precio else (valor / parte if parte else valor)
+    venta = (entero * parte).quantize(Decimal("0.01"))
+    gastos_venta = (venta * pct_venta / 100).quantize(Decimal("0.01"))
     contratos = s.scalars(select(ContratoAlquiler).where(ContratoAlquiler.activo_id == a.id)).all()
     amortizado = alquiler.amortizacion_acumulada(a, contratos, hoy)
-    adquisicion = (a.precio_compra + a.gastos_compra) * a.porcentaje_propiedad / 100 - amortizado
+    adquisicion = (a.precio_compra + a.gastos_compra) * parte - amortizado
     ganancia = venta - gastos_venta - adquisicion
     irpf = Decimal(str(round(prevision.escala_ahorro(float(max(ganancia, CERO))), 2)))
     deudas = s.scalars(select(Deuda).where(Deuda.activo_id == a.id)).all()
@@ -1577,21 +1620,31 @@ def vender_o_alquilar(activo_id: int, precio: float | None = None, gastos_venta_
     rent = _rentabilidad(a, contratos, gastos, deudas, valor, hoy)
     prev = prevision.calcular(s)
     renta_actual = next((r for r in prev["anios"] if r["anio"] == hoy.year), None)
-    marginal = (renta_actual or {}).get("tipo_marginal", 45.0) / 100
-    rend = alquiler.calcular_rendimiento(a, contratos, gastos, hoy.year).rendimiento_reducido if contratos else CERO
+    con_supuestos = prevision.tiene_supuestos(prev["supuestos"])
+    marginal = (((renta_actual or {}).get("tipo_marginal") if con_supuestos else None) or 45.0) / 100
+    # Lo que tributa el alquiler este año, con los intereses de la hipoteca como en la ficha
+    rend = alquiler.rendimiento_del_anio(a, contratos, gastos, deudas, hoy.year).rendimiento_reducido if contratos else CERO
     flujo = Decimal(str(rent["flujo_caja_anual"])) if rent else CERO
     flujo_tras_irpf = flujo - rend * Decimal(str(marginal))
+    notas = ["Falta la plusvalía municipal, que depende del valor catastral del suelo y de los años.",
+             "La ganancia tributa en la base del ahorro (19 % a 30 %); si compras tu vivienda habitual "
+             "no hay exención por reinversión porque este piso no es tu vivienda."]
+    if not con_supuestos:
+        notas.append("Sin tu sueldo y tarifas en Ingresos, el IRPF del alquiler se estima al tipo marginal máximo (45 %).")
+    if parte < 1:
+        notas.append(f"El piso es tuyo al {_pct_texto(a.porcentaje_propiedad)} %: el precio, los gastos y la ganancia son tu parte, "
+                     "pero la hipoteca se resta entera, igual que en tu patrimonio.")
     return {
-        "precio_venta": n(venta), "valor_detalle": "el precio que has puesto" if precio else detalle,
-        "gastos_venta": n(gastos_venta), "amortizacion_acumulada": n(amortizado),
+        "precio_venta": n(venta), "precio_entero": n(entero), "porcentaje_propiedad": n(a.porcentaje_propiedad),
+        "valor_detalle": "el precio que has puesto" if precio else detalle,
+        "gastos_venta": n(gastos_venta), "gastos_venta_pct": n(pct_venta), "amortizacion_acumulada": n(amortizado),
         "valor_adquisicion": n(adquisicion), "ganancia": n(ganancia), "irpf_ganancia": n(irpf),
         "hipoteca_pendiente": n(hipoteca), "en_mano": n(en_mano),
-        "alquiler_flujo_anual": n(flujo), "alquiler_irpf_anual": n((rend * Decimal(str(marginal))).quantize(Decimal("0.01"))),
+        "alquiler_flujo_anual": n(flujo), "alquiler_tributa": n(rend), "tipo_marginal": round(marginal * 100, 2),
+        "alquiler_irpf_anual": n((rend * Decimal(str(marginal))).quantize(Decimal("0.01"))),
         "alquiler_flujo_tras_irpf": n(flujo_tras_irpf.quantize(Decimal("0.01"))),
         "rentabilidad_sobre_en_mano": round(float(flujo_tras_irpf / en_mano * 100), 2) if en_mano > 0 else None,
-        "notas": ["Falta la plusvalía municipal, que depende del valor catastral del suelo y de los años.",
-                  "La ganancia tributa en la base del ahorro (19 % a 30 %); si compras tu vivienda habitual "
-                  "no hay exención por reinversión porque este piso no es tu vivienda."],
+        "constantes": _constantes(), "notas": notas,
     }
 
 
