@@ -1,0 +1,10 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Cualquier aviso (deprecaciones de dependencias, código nuestro) hace fallar la prueba, salvo los esperados
+filterwarnings = [
+    "error",
+    # starlette avisa de que su cliente de pruebas usará httpx2; no depende de nosotros
+    "ignore::starlette.exceptions.StarletteDeprecationWarning",
+    # SQLite no tiene tipo decimal nativo; main.py ya lo ignora en la app
+    "ignore:.*Decimal.*:sqlalchemy.exc.SAWarning",
+]

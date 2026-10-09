@@ -16,7 +16,7 @@ export interface Resumen {
   grupos: { grupo: string; importe: number }[]
   lineas_activo: Linea[]; lineas_pasivo: Linea[]
   historico: PuntoHistorico[]
-  proximos_pagos: { id: number; concepto: string; fecha: string; importe: number }[]
+  proximos_pagos: Pago[]  // los 6 pendientes más cercanos, en el mismo formato que Plan
   fiscal: {
     trimestre: number; anio: number
     iva: { resultado: number; presentado: boolean; previsto: boolean; repercutido: number; soportado: number; plazo: string }

@@ -4,6 +4,7 @@ import { Check, Plus } from 'lucide-react'
 import { api } from '../lib/api'
 import { eur, fecha, hoyISO, pct } from '../lib/format'
 import type { InversionPrivada, Inversiones } from '../lib/tipos'
+import { useBorrarPago, useMarcarPago } from '../lib/pagos'
 import { num, useAccion } from '../lib/utilidades'
 import { Area, Barra, BorrarEnDosPasos, Boton, Campo, Casilla, Dato, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Tarjeta, Vacio } from './ui'
 
@@ -88,8 +89,8 @@ function Actualizar({ inv, onCerrar }: { inv: InversionPrivada; onCerrar: () => 
 }
 
 function Fondo({ inv, onEditar }: { inv: InversionPrivada; onEditar: () => void }) {
-  const marcar = useAccion(({ id, pagado }: { id: number; pagado: boolean }) => api.patch(`/pagos/${id}`, { pagado }))
-  const quitar = useAccion((id: number) => api.del(`/pagos/${id}`))
+  const marcar = useMarcarPago()
+  const quitar = useBorrarPago()
   const borrar = useAccion(() => api.del(`/inversiones/${inv.id}`), 'Inversión borrada')
   return (
     <Tarjeta titulo={inv.nombre} accion={

@@ -3,6 +3,7 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { CheckCheck, Plus } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Cuenta, Escenario as ValoresEscenario, Objetivo, Pago, Planificacion, Prevision } from '../lib/tipos'
+import { useBorrarPago, useMarcarPago } from '../lib/pagos'
 import { num, useAccion, useAvisos } from '../lib/utilidades'
 import ListaPagos from '../components/ListaPagos'
 import Escenario from '../components/Plan/Escenario'
@@ -54,8 +55,8 @@ export default function Plan() {
     }
     return (pago ? api.patch(`/pagos/${pago.id}`, datos) : api.post('/pagos', datos)).then(cerrar)
   }, 'Pago previsto guardado')
-  const borrarPago = useAccion((p: Pago) => api.del(`/pagos/${p.id}`), 'Pago borrado')
-  const marcar = useAccion(({ id, pagado }: { id: number; pagado: boolean }) => api.patch(`/pagos/${id}`, { pagado }))
+  const borrarPago = useBorrarPago()
+  const marcar = useMarcarPago()
   const conciliar = useAccion(async () => {
     const r = await api.post<{ marcados: number }>('/pagos/conciliar')
     avisar(r.marcados ? `${r.marcados === 1 ? 'Un pago marcado' : `${r.marcados} pagos marcados`} como pagados` : 'No había nada que marcar')
@@ -88,7 +89,7 @@ export default function Plan() {
       <Tarjeta>
         <ListaPagos pagos={d.pagos} ocupado={ocupado}
           onMarcar={(p, pagado) => marcar.mutate({ id: p.id, pagado })}
-          onBorrar={(p) => borrarPago.mutate(p)}
+          onBorrar={(p) => borrarPago.mutate(p.id)}
           onEditar={(p) => { setPago(p); setDialogo('pago') }}
           acciones={vistos > 0 && (
             <EnDosPasos variante="secundario" className="px-2.5 py-1 text-xs" icono={<CheckCheck size={14} />} disabled={ocupado}

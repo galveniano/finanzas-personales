@@ -181,7 +181,7 @@ asistente no viajan en la copia. Si pasa un mes sin copia, Inicio te lo recuerda
 Backend (FastAPI + SQLAlchemy 2):
 
 ```
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install -r requirements-dev.txt
 .venv/bin/python -m pytest
 .venv/bin/uvicorn finanzas.main:app --reload
 ```

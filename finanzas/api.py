@@ -65,10 +65,7 @@ def resumen(s: Session = SesionDB):
     pendiente = hacienda.pendiente(s, prev_completa)
     p = patrimonio.calcular(s, hoy, pendiente)
     facturas, gastos = s.scalars(select(Factura)).all(), s.scalars(select(GastoAutonomo)).all()
-    # El trimestre que toca pagar: el anterior mientras dura su plazo (hasta el 20, o el 30 de enero), si no el actual
-    anio_t, t = hoy.year, autonomo.trimestre_de(hoy)
-    if hoy.month in (1, 4, 7, 10) and hoy.day <= (30 if hoy.month == 1 else 20):
-        anio_t, t = (hoy.year - 1, 4) if t == 1 else (hoy.year, t - 1)
+    anio_t, t = autonomo.trimestre_a_pagar(hoy)  # el mismo que resalta Impuestos
     m303 = autonomo.calcular_303(anio_t, t, facturas, gastos)
     presentadas = _presentadas(s, anio_t)
     m130 = autonomo.calcular_130(anio_t, t, facturas, gastos, _presentados_130(presentadas))
@@ -78,7 +75,7 @@ def resumen(s: Session = SesionDB):
     p_t = prev_completa["trimestres"].get(f"{anio_t}-{t}") if prevision.tiene_clientes(cfg) else None
     renta = next((a for a in prev_completa["anios"] if a["anio"] == hoy.year), None) if prevision.tiene_supuestos(cfg) else None
     historico = sync.historico(s, hoy)
-    proximos = s.scalars(select(PagoPrevisto).where(~PagoPrevisto.pagado).order_by(PagoPrevisto.fecha).limit(6))
+    proximos = s.scalars(select(PagoPrevisto).where(~PagoPrevisto.pagado).order_by(PagoPrevisto.fecha).limit(6)).all()
     return {
         "fecha": f(hoy),
         "neto": n(p.neto), "activos": n(p.total_activos), "pasivos": n(p.total_pasivos),
@@ -91,8 +88,7 @@ def resumen(s: Session = SesionDB):
                        "inversiones": n(i.inversiones), "inmuebles": n(i.inmuebles), "vehiculos": n(i.vehiculos),
                        "otros": n(i.otros), "deudas": n(i.deudas)}
                       for i in historico],
-        "proximos_pagos": [{"id": pp.id, "concepto": pp.concepto, "fecha": f(pp.fecha), "importe": n(pp.importe)}
-                           for pp in proximos],
+        "proximos_pagos": serializar_pagos(s, proximos),
         "fiscal": {
             "trimestre": t, "anio": anio_t,
             "iva": {"resultado": n(d303.importe) if d303 else p_t["iva"] if p_t else n(m303.resultado),
@@ -111,7 +107,7 @@ def resumen(s: Session = SesionDB):
         "hacienda_pendiente": pendiente,
         "disponible": round(float(p.por_grupo().get("Liquidez", CERO)) - pendiente["total"], 2),
         "gastos": _gasto_del_mes(analisis_gastos(s, 3, hoy), hoy),
-        "avisos": avisos.calcular(s, hacienda.revision_reta(s, prev_completa)),
+        "avisos": avisos.calcular(s, hacienda.revision_reta(s, prev_completa), prev=prev_completa),
     }
 
 
@@ -1319,18 +1315,32 @@ def _llegas_en(falta: Decimal, ahorro_mes: float | None, fecha_objetivo: date | 
     return {"mes": sumar_meses(hoy.replace(day=1), necesarios).strftime("%Y-%m"), "a_tiempo": a_tiempo, "faltara": faltara}
 
 
+
+def serializar_pagos(s: Session, pagos: list[PagoPrevisto]) -> list[dict]:
+    """Pagos previstos como los pinta el frontal (ListaPagos): a qué van (objetivo, bien o inversión) y si el cargo ya
+    se ha visto en el banco. Plan e Inicio comparten el formato."""
+    from finanzas import plan
+    if not pagos:
+        return []
+    objetivos = {o.id: o.nombre for o in s.scalars(select(Objetivo))}
+    activos = {a.id: a.nombre for a in s.scalars(select(Activo))}
+    inversiones = {i.id: i.nombre for i in s.scalars(select(InversionPrivada))}
+    vistos = plan.vistos_en_banco(s)
+    return [{"id": p.id, "concepto": p.concepto, "fecha": f(p.fecha), "importe": n(p.importe),
+             "pagado": p.pagado, "objetivo_id": p.objetivo_id, "activo_id": p.activo_id,
+             "objetivo": objetivos.get(p.objetivo_id), "inmueble": activos.get(p.activo_id),
+             "inversion": inversiones.get(p.inversion_id), "visto_en_banco": vistos.get(p.id)}
+            for p in pagos]
+
 @router.get("/planificacion")
 def ver_planificacion(s: Session = SesionDB):
-    from finanzas import plan, prevision
+    from finanzas import prevision
     hoy = date.today()
     hasta = hoy + timedelta(days=365)
     objetivos = s.scalars(select(Objetivo).order_by(Objetivo.fecha_objetivo)).all()
     pagos = s.scalars(select(PagoPrevisto).order_by(PagoPrevisto.fecha)).all()
     activos = {a.id: a.nombre for a in s.scalars(select(Activo))}
-    inversiones = {i.id: i.nombre for i in s.scalars(select(InversionPrivada))}
     cuentas = {c.id: c for c in s.scalars(select(Cuenta))}
-    nombres_obj = {o.id: o.nombre for o in objetivos}
-    vistos = plan.vistos_en_banco(s)
     pendientes = [p for p in pagos if not p.pagado]
     pendiente_12m = float(sum((p.importe for p in pendientes if p.fecha <= hasta), CERO))
     # Como en la previsión: los objetivos con fecha sin pagos apuntados salen ese mes, y lo que pagará una
@@ -1368,11 +1378,7 @@ def ver_planificacion(s: Session = SesionDB):
         "sintesis": {"ahorro_objetivos_mes": round(sum(o["ahorro_mensual"] or 0 for o in lista_objetivos), 2),
                      "ahorro_prevision_mes": ahorro_mes, "meses": meses_prev},
         "objetivos": lista_objetivos,
-        "pagos": [{"id": p.id, "concepto": p.concepto, "fecha": f(p.fecha), "importe": n(p.importe),
-                   "pagado": p.pagado, "objetivo_id": p.objetivo_id, "activo_id": p.activo_id,
-                   "objetivo": nombres_obj.get(p.objetivo_id), "inmueble": activos.get(p.activo_id),
-                   "inversion": inversiones.get(p.inversion_id), "visto_en_banco": vistos.get(p.id)}
-                  for p in pagos],
+        "pagos": serializar_pagos(s, pagos),
         "inmuebles": [{"id": k, "nombre": v} for k, v in activos.items()],
     }
 

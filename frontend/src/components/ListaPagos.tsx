@@ -12,12 +12,12 @@ type Filtro = typeof FILTROS[number]['valor']
 
 /** Pagos previstos con su vencimiento, si ya se han visto cargados en el banco, marcar pagado, editar y borrar.
  *  Los pendientes van primero; los ya pagados, plegados debajo (o todos en orden con el filtro «Todos»).
- *  `compacto` (para Inicio): solo los pendientes, sin filtro, sin raya, y solo con el botón de marcar.
+ *  `compacto` (para Inicio): solo los pendientes, sin filtro, sin raya, y solo con el botón de marcar (sin `onBorrar`).
  *  `acciones` va arriba a la izquierda (p. ej. «Marcar los vistos en el banco»). */
 export default function ListaPagos({ pagos, onMarcar, onBorrar, onEditar, compacto, ocupado, acciones, vacio }: {
   pagos: Pago[]
   onMarcar: (pago: Pago, pagado: boolean) => void
-  onBorrar: (pago: Pago) => void
+  onBorrar?: (pago: Pago) => void
   onEditar?: (pago: Pago) => void
   compacto?: boolean
   ocupado?: boolean
@@ -59,7 +59,7 @@ export default function ListaPagos({ pagos, onMarcar, onBorrar, onEditar, compac
               <Pencil size={14} />
             </Boton>
           )}
-          {!compacto && <BorrarEnDosPasos etiqueta={`el pago ${p.concepto}`} disabled={ocupado} onBorrar={() => onBorrar(p)} />}
+          {!compacto && onBorrar && <BorrarEnDosPasos etiqueta={`el pago ${p.concepto}`} disabled={ocupado} onBorrar={() => onBorrar(p)} />}
         </>
       ),
     }

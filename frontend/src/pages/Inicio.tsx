@@ -4,10 +4,12 @@ import { Link } from 'react-router-dom'
 import { Area, AreaChart, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Briefcase, Building2, ChevronDown, Landmark } from 'lucide-react'
 import { api } from '../lib/api'
-import { cuandoVence, diasHasta, eur, eurK, fecha } from '../lib/format'
+import { eur, eurK, fecha } from '../lib/format'
 import { eje, estiloTooltip } from '../lib/graficas'
 import type { Aviso, GastosResumenInicio, Linea, PuntoHistorico, Resumen } from '../lib/tipos'
+import { useMarcarPago } from '../lib/pagos'
 import BarraTono from '../components/BarraTono'
+import ListaPagos from '../components/ListaPagos'
 import { Cabecera, Cargando, Dato, ErrorCarga, Etiqueta, Importe, Segmentos, Tabla, Tarjeta } from '../components/ui'
 
 const COLORES: Record<string, string> = {
@@ -291,6 +293,7 @@ function TarjetaEsteMes({ g }: { g: GastosResumenInicio }) {
 
 export default function Inicio() {
   const { data: r, isLoading, error } = useQuery({ queryKey: ['resumen'], queryFn: () => api.get<Resumen>('/resumen') })
+  const marcar = useMarcarPago()
   if (isLoading) return <Cargando />
   if (error) return <ErrorCarga error={error} />
   if (!r) return null
@@ -343,22 +346,8 @@ export default function Inicio() {
         </Tarjeta>
         <TarjetaHacienda r={r} />
         <Tarjeta titulo="Próximos pagos" accion={<Link to="/plan" className="text-xs font-medium text-accent">Plan</Link>}>
-          {r.proximos_pagos.length ? (
-            <ul className="divide-y divide-line">
-              {r.proximos_pagos.slice(0, 3).map((p) => {
-                const dias = diasHasta(p.fecha)
-                return (
-                  <li key={p.id} className="flex items-center justify-between gap-3 py-2 text-sm first:pt-0">
-                    <div className="min-w-0">
-                      <div className="truncate">{p.concepto}</div>
-                      <div className="text-xs text-muted">{cuandoVence(dias)}</div>
-                    </div>
-                    <Importe valor={p.importe} />
-                  </li>
-                )
-              })}
-            </ul>
-          ) : <p className="text-sm text-muted">No hay pagos previstos.</p>}
+          <ListaPagos compacto pagos={r.proximos_pagos.slice(0, 4)} ocupado={marcar.isPending}
+            onMarcar={(p, pagado) => marcar.mutate({ id: p.id, pagado })} vacio="No hay pagos previstos." />
         </Tarjeta>
       </div>
     </>
