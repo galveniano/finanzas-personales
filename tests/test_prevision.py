@@ -10,14 +10,6 @@ SUPUESTOS = {"nomina": {"empresa": "Empresa ejemplo", "bruto_anual": 40000, "var
              "gastos_autonomo_mes": 300, "gasto_habitual_mes": 2000, "meses_sin_facturar": [8]}
 
 
-@pytest.fixture(autouse=True)
-def sin_supuestos_al_acabar():
-    """La base de datos de los tests es compartida: no dejar supuestos que cambien Autónomo en otros tests."""
-    yield
-    with TestClient(app) as c:
-        c.put("/api/prevision/supuestos", json={})
-
-
 def test_prevision_meses_e_impuestos():
     with TestClient(app) as c:
         assert c.put("/api/prevision/supuestos", json=SUPUESTOS).status_code == 200
@@ -184,3 +176,20 @@ def test_regularizacion_de_la_cuota_de_autonomos():
     s.close()
     (clave, linea), = lineas
     assert clave == f"{anio + 1}-11" and linea["tipo"] == "reta" and linea["importe"] > 0
+
+
+def test_guardar_supuestos_parcial_conserva_el_resto():
+    """«Sueldo y tarifas» no manda las claves de la renta: lo que no venga se conserva; un None explícito sí borra."""
+    from finanzas import db, prevision
+    with TestClient(app) as c:
+        assert c.put("/api/hacienda/supuestos", json={"fraccionar_renta": True, "aportacion_pensiones_anio": 1500}).status_code == 200
+        c.put("/api/prevision/supuestos", json={"nomina": {"bruto_anual": 30000, "pagas": 12}})
+        cfg = c.get("/api/prevision").json()["supuestos"]
+        assert cfg["fraccionar_renta"] is True and cfg["aportacion_pensiones_anio"] == 1500 and cfg["nomina"]["bruto_anual"] == 30000
+    s = db.SessionLocal()
+    prevision.guardar(s, {"fraccionar_renta": None})
+    cfg = prevision.leer(s)
+    assert cfg["fraccionar_renta"] is None and cfg["aportacion_pensiones_anio"] == 1500 and cfg["nomina"]["bruto_anual"] == 30000
+    prevision.guardar(s, dict(prevision.VACIO))
+    assert prevision.leer(s) == prevision.VACIO
+    s.close()

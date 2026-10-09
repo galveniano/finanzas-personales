@@ -4,11 +4,11 @@ import threading
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.orm import Session
 
 from finanzas import config, db, patrimonio
-from finanzas.fechas import iso_utc
+from finanzas.fechas import iso_utc, sumar_meses
 from finanzas.integrations import enablebanking, indexa
 from finanzas.models import Activo, Instantanea, RegistroSync
 
@@ -67,15 +67,41 @@ def guardar_instantanea(session: Session, fecha: date | None = None) -> Instanta
 
 
 def rellenar_vehiculos(session: Session) -> None:
-    """Las fotos de antes no guardaban el coche: se calcula su valor a esa fecha (se deprecia solo)."""
-    fotos = session.scalars(select(Instantanea).where(Instantanea.vehiculos.is_(None))).all()
-    if not fotos:
+    """Las fotos de antes no guardaban el coche: se calcula su valor a esa fecha (se deprecia solo).
+    Se llama en cada /resumen, así que primero mira barato si queda alguna por rellenar."""
+    if not session.scalar(select(exists().where(Instantanea.vehiculos.is_(None)))):
         return
+    fotos = session.scalars(select(Instantanea).where(Instantanea.vehiculos.is_(None))).all()
     coches = session.scalars(select(Activo).where(Activo.tipo == "vehiculo")).all()
     for foto in fotos:
         foto.vehiculos = sum((patrimonio.valor_activo(a, foto.fecha)[0] for a in coches
                               if not a.fecha_compra or a.fecha_compra <= foto.fecha), Decimal(0))
     session.commit()
+
+
+def muestrear(fotos: list, hoy: date | None = None) -> list:
+    """Aligera una lista de fotos ordenadas por fecha (cualquier cosa con `.fecha`): un punto por día en los
+    últimos 3 meses, uno por semana hasta un año y uno por mes más atrás, quedándose con el último de cada
+    tramo (así el cierre de cada año sigue estando). Con años de fotos diarias el frontal recibiría miles."""
+    hoy = hoy or date.today()
+    hace_3_meses, hace_1_anio = sumar_meses(hoy, -3), sumar_meses(hoy, -12)
+    elegidas: dict[tuple, object] = {}
+    for foto in fotos:
+        f = foto.fecha
+        if f >= hace_3_meses:
+            clave = ("dia", f)
+        elif f >= hace_1_anio:  # con el mes en la clave, una semana a caballo de dos meses no se traga el cierre
+            clave = ("semana", f.year, f.month, f.isocalendar()[1])
+        else:
+            clave = ("mes", f.year, f.month)
+        elegidas[clave] = foto  # los tramos van seguidos en el tiempo: el orden del dict es el cronológico
+    return list(elegidas.values())
+
+
+def historico(session: Session, hoy: date | None = None) -> list[Instantanea]:
+    """Fotos del patrimonio para la gráfica de Inicio, ya aligeradas y con el coche rellenado en las antiguas."""
+    rellenar_vehiculos(session)
+    return muestrear(session.scalars(select(Instantanea).order_by(Instantanea.fecha)).all(), hoy)
 
 
 def sincronizar_todo(session: Session) -> list[dict]:

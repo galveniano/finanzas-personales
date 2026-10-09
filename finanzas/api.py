@@ -1,18 +1,18 @@
 """API JSON que consume el frontal (carpeta frontend/)."""
 import json
-from collections import defaultdict
+import math
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from finanzas import auth, config, db, patrimonio, sync
-from finanzas.fechas import iso_utc
+from finanzas import auth, config, db, declaraciones, patrimonio, sync
+from finanzas.fechas import iso_utc, sumar_meses
 from finanzas.fiscal import alquiler, autonomo, nomina as calc_nomina
 from finanzas.hipoteca import cuota_mensual, intereses_anio, saldo_pendiente
 from finanzas.importers import aeat, sabadell
@@ -46,58 +46,36 @@ def _obtener(s: Session, modelo, id_: int):
 
 # --- Resumen (panel) --------------------------------------------------------
 
-def _gasto_por_mes(s: Session, meses: int = 6) -> list[dict]:
-    from finanzas import prevision
-    desde = (date.today().replace(day=1) - timedelta(days=31 * (meses - 1))).replace(day=1)
-    movs = prevision.movimientos_tuyos(s, desde)
-    traspasos = prevision.ids_traspaso(movs)
-    por_mes: dict[str, dict] = defaultdict(lambda: {"ingresos": 0.0, "gastos": 0.0})
-    for m in movs:
-        if m.tipo == "transferencia" or m.id in traspasos:
-            continue
-        clave = m.fecha.strftime("%Y-%m")
-        if m.tuyo >= 0:
-            por_mes[clave]["ingresos"] += m.tuyo
-        else:
-            por_mes[clave]["gastos"] += -m.tuyo
-    return [{"mes": k, "ingresos": round(v["ingresos"], 2), "gastos": round(v["gastos"], 2)}
-            for k, v in sorted(por_mes.items())]
-
-
-def _gasto_por_categoria(s: Session, dias: int = 30) -> list[dict]:
-    from finanzas import prevision
-    movs = prevision.movimientos_tuyos(s, date.today() - timedelta(days=dias))
-    traspasos = prevision.ids_traspaso(movs)
-    por_cat: dict[str, float] = defaultdict(float)
-    for m in movs:
-        if m.importe < 0 and m.tipo != "transferencia" and m.id not in traspasos:
-            por_cat[m.categoria or "Sin categoría"] += -m.tuyo
-    return sorted(({"categoria": c, "importe": round(t, 2)} for c, t in por_cat.items()), key=lambda x: -x["importe"])
+def _gasto_del_mes(g: dict, hoy: date) -> dict:
+    """Tarjeta «Este mes» de Inicio: lo que llevas gastado y a cuánto acabarás a este ritmo (estimación ponderada:
+    lo que falta de mes se supone que irá como la media de los últimos 3 meses; nunca por debajo de lo ya gastado)."""
+    from calendar import monthrange
+    dias_mes = monthrange(hoy.year, hoy.month)[1]
+    este, media = g["este_mes"]["gastos"], g["gastos_mes"]
+    proyeccion = max(este, este + (media - este) * (dias_mes - hoy.day) / dias_mes)
+    return {"este_mes": este, "dia": hoy.day, "media_mes": media, "proyeccion": round(proyeccion, 2)}
 
 
 @router.get("/resumen")
 def resumen(s: Session = SesionDB):
     from finanzas import avisos, hacienda, prevision
+    from finanzas.gastos import analisis as analisis_gastos
     hoy = date.today()
     prev_completa = prevision.calcular(s)
     pendiente = hacienda.pendiente(s, prev_completa)
     p = patrimonio.calcular(s, hoy, pendiente)
     facturas, gastos = s.scalars(select(Factura)).all(), s.scalars(select(GastoAutonomo)).all()
-    # El trimestre que toca pagar: el anterior mientras dura su plazo (hasta el 20, o el 30 de enero), si no el actual
-    anio_t, t = hoy.year, autonomo.trimestre_de(hoy)
-    if hoy.month in (1, 4, 7, 10) and hoy.day <= (30 if hoy.month == 1 else 20):
-        anio_t, t = (hoy.year - 1, 4) if t == 1 else (hoy.year, t - 1)
+    anio_t, t = autonomo.trimestre_a_pagar(hoy)  # el mismo que resalta Impuestos
     m303 = autonomo.calcular_303(anio_t, t, facturas, gastos)
     presentadas = _presentadas(s, anio_t)
     m130 = autonomo.calcular_130(anio_t, t, facturas, gastos, _presentados_130(presentadas))
     d303, d130 = presentadas.get(("303", t)), presentadas.get(("130", t))
     # Si hay previsión, lo no presentado sale de ella, igual que en Autónomo y Previsión
-    prev = prev_completa if prevision.leer(s).get("clientes") or prevision.leer(s).get("nomina") else None
-    p_t = (prev or {}).get("trimestres", {}).get(f"{anio_t}-{t}")
-    renta = next((a for a in (prev or {}).get("anios", []) if a["anio"] == hoy.year), None)
-    sync.rellenar_vehiculos(s)
-    historico = s.scalars(select(Instantanea).order_by(Instantanea.fecha)).all()
-    proximos = s.scalars(select(PagoPrevisto).where(~PagoPrevisto.pagado).order_by(PagoPrevisto.fecha).limit(6))
+    cfg = prevision.leer(s)
+    p_t = prev_completa["trimestres"].get(f"{anio_t}-{t}") if prevision.tiene_clientes(cfg) else None
+    renta = next((a for a in prev_completa["anios"] if a["anio"] == hoy.year), None) if prevision.tiene_supuestos(cfg) else None
+    historico = sync.historico(s, hoy)
+    proximos = s.scalars(select(PagoPrevisto).where(~PagoPrevisto.pagado).order_by(PagoPrevisto.fecha).limit(6)).all()
     return {
         "fecha": f(hoy),
         "neto": n(p.neto), "activos": n(p.total_activos), "pasivos": n(p.total_pasivos),
@@ -108,12 +86,9 @@ def resumen(s: Session = SesionDB):
                           for l in p.pasivos],
         "historico": [{"fecha": f(i.fecha), "neto": n(i.neto), "liquidez": n(i.liquidez),
                        "inversiones": n(i.inversiones), "inmuebles": n(i.inmuebles), "vehiculos": n(i.vehiculos),
-                       "deudas": n(i.deudas)}
+                       "otros": n(i.otros), "deudas": n(i.deudas)}
                       for i in historico],
-        "flujo_mensual": _gasto_por_mes(s),
-        "gasto_categorias": _gasto_por_categoria(s),
-        "proximos_pagos": [{"id": pp.id, "concepto": pp.concepto, "fecha": f(pp.fecha), "importe": n(pp.importe)}
-                           for pp in proximos],
+        "proximos_pagos": serializar_pagos(s, proximos),
         "fiscal": {
             "trimestre": t, "anio": anio_t,
             "iva": {"resultado": n(d303.importe) if d303 else p_t["iva"] if p_t else n(m303.resultado),
@@ -128,15 +103,30 @@ def resumen(s: Session = SesionDB):
                       "neto_mes": renta["ingresos"]["total"]["neto_mes"],
                       "bruto_mes": renta["ingresos"]["total"]["bruto_mes"]} if renta else None,
         },
-        "sync": sync.estado(s),
         "liquidez": n(p.por_grupo().get("Liquidez", CERO)),
         "hacienda_pendiente": pendiente,
         "disponible": round(float(p.por_grupo().get("Liquidez", CERO)) - pendiente["total"], 2),
-        "avisos": avisos.calcular(s, hacienda.revision_reta(s, prev_completa)),
+        "gastos": _gasto_del_mes(analisis_gastos(s, 3, hoy), hoy),
+        "avisos": avisos.calcular(s, hacienda.revision_reta(s, prev_completa), prev=prev_completa),
     }
 
 
 # --- Cuentas y movimientos --------------------------------------------------
+
+TIPOS_CUENTA = ("corriente", "ahorro", "tarjeta", "inversion")
+# Cuentas cuyo saldo y movimientos se escriben a mano o con extractos; las sincronizadas (banco, Indexa) no se tocan
+ORIGENES_MANUALES = ("manual", "csv")
+
+
+def normalizar_iban(iban: str | None) -> str:
+    """Sin espacios y en mayúsculas: «ES00 0081 …» y «es000081…» son la misma cuenta."""
+    return (iban or "").replace(" ", "").upper()[:34]
+
+
+def es_manual(m: Movimiento) -> bool:
+    """Apuntado a mano en la app (no viene del banco ni de un extracto): se puede editar y borrar."""
+    return (m.huella or "").startswith("manual:")
+
 
 class CuentaIn(BaseModel):
     nombre: str
@@ -146,30 +136,94 @@ class CuentaIn(BaseModel):
     saldo: Decimal = CERO
 
 
-def _cuenta(c: Cuenta) -> dict:
+SIN_EXTRAS = {"evolucion": [], "mes": {"entran": 0.0, "salen": 0.0}}
+
+
+def _extras_cuentas(s: Session, ids: list[int]) -> dict[int, dict]:
+    """Por cuenta: el último saldo conocido de cada uno de los últimos 12 meses (según el saldo que guarda cada
+    movimiento; los meses sin movimientos repiten el anterior) y lo que ha entrado y salido este mes."""
+    from sqlalchemy import case
+    hoy = date.today()
+    inicio_mes = hoy.replace(day=1)
+    inicio = sumar_meses(inicio_mes, -11)
+    extras = {i: {"evolucion": [], "mes": dict(SIN_EXTRAS["mes"])} for i in ids}
+    if not ids:
+        return extras
+    por_mes: dict[int, dict[str, tuple[date, Decimal]]] = {}
+    filas = s.execute(select(Movimiento.cuenta_id, Movimiento.fecha, Movimiento.saldo)
+                      .where(Movimiento.cuenta_id.in_(ids), Movimiento.saldo.isnot(None), Movimiento.fecha >= inicio)
+                      .order_by(Movimiento.fecha, Movimiento.id))
+    for cid, fecha, saldo in filas:  # el último de cada mes gana
+        por_mes.setdefault(cid, {})[fecha.strftime("%Y-%m")] = (fecha, saldo)
+    for cid, meses in por_mes.items():
+        ultimo = None
+        for k in range(12):
+            mes = sumar_meses(inicio, k)
+            if mes.strftime("%Y-%m") in meses:
+                ultimo = meses[mes.strftime("%Y-%m")]
+            elif ultimo is not None:
+                ultimo = (min(sumar_meses(mes, 1) - timedelta(days=1), hoy), ultimo[1])
+            if ultimo is not None:
+                extras[cid]["evolucion"].append({"fecha": f(ultimo[0]), "saldo": n(ultimo[1])})
+    sumas = s.execute(select(Movimiento.cuenta_id,
+                             func.sum(case((Movimiento.importe > 0, Movimiento.importe), else_=0)),
+                             func.sum(case((Movimiento.importe < 0, Movimiento.importe), else_=0)))
+                      .where(Movimiento.cuenta_id.in_(ids), Movimiento.fecha >= inicio_mes)
+                      .group_by(Movimiento.cuenta_id))
+    for cid, entran, salen in sumas:
+        extras[cid]["mes"] = {"entran": n(entran or 0), "salen": n(-(salen or 0))}
+    return extras
+
+
+def _cuenta(c: Cuenta, extra: dict | None = None) -> dict:
     return {"id": c.id, "nombre": c.nombre, "entidad": c.entidad, "tipo": c.tipo, "iban": c.iban,
             "origen": c.origen, "saldo": n(c.saldo), "saldo_fecha": f(c.saldo_fecha),
             "participacion": n(c.parte * 100), "saldo_tuyo": n((c.saldo * c.parte).quantize(Decimal("0.01"))),
-            "ultima_sincronizacion": iso_utc(c.ultima_sincronizacion)}
+            "ultima_sincronizacion": iso_utc(c.ultima_sincronizacion), "activa": bool(c.activa),
+            **(extra or SIN_EXTRAS)}
+
+
+def _categoria(c: Categoria) -> dict:
+    from finanzas.categorizar import NOMBRES_DE_SERIE
+    return {"id": c.id, "nombre": c.nombre, "tipo": c.tipo, "ambito": c.ambito, "de_serie": c.nombre in NOMBRES_DE_SERIE}
+
+
+def _movimiento(m: Movimiento, traspasos: set[int] = frozenset()) -> dict:
+    return {"id": m.id, "cuenta_id": m.cuenta_id, "cuenta": m.cuenta.nombre, "fecha": f(m.fecha),
+            "fecha_valor": f(m.fecha_valor), "concepto": m.concepto, "importe": n(m.importe), "saldo": n(m.saldo),
+            "categoria_id": m.categoria_id, "nota": m.nota or "", "traspaso": m.id in traspasos, "manual": es_manual(m)}
 
 
 @router.get("/indexa")
 def detalle_indexa(s: Session = SesionDB):
-    """Posiciones y rentabilidad de cada cuenta de Indexa (de la última sincronización)."""
-    import json
-    cuentas = s.scalars(select(Cuenta).where(Cuenta.origen == "indexa", Cuenta.activa).order_by(Cuenta.nombre))
+    """Posiciones y rentabilidad de cada cuenta de Indexa (de la última sincronización) y lo aportado desde el banco."""
+    from finanzas.integrations import indexa
+    cuentas = s.scalars(select(Cuenta).where(Cuenta.origen == "indexa", Cuenta.activa).order_by(Cuenta.nombre)).all()
+    aportado = indexa.aportaciones_banco(s, cuentas)
     return [{"cuenta_id": c.id, "nombre": c.nombre, "numero": c.id_externo, "fecha": f(c.saldo_fecha),
+             "ultima_sincronizacion": iso_utc(c.ultima_sincronizacion), "aportado_banco": aportado.get(c.id),
              **json.loads(c.detalle or "{}")} for c in cuentas]
 
 
 @router.get("/cuentas")
-def listar_cuentas(s: Session = SesionDB):
-    return [_cuenta(c) for c in s.scalars(select(Cuenta).where(Cuenta.activa).order_by(Cuenta.tipo, Cuenta.nombre))]
+def listar_cuentas(todas: bool = False, s: Session = SesionDB):
+    """Las cuentas activas; con `todas`, también las ocultas (con `activa: false`) para poder recuperarlas."""
+    consulta = select(Cuenta).order_by(Cuenta.activa.desc(), Cuenta.tipo, Cuenta.nombre)
+    if not todas:
+        consulta = consulta.where(Cuenta.activa)
+    cuentas = s.scalars(consulta).all()
+    extras = _extras_cuentas(s, [c.id for c in cuentas if c.activa])
+    return [_cuenta(c, extras.get(c.id)) for c in cuentas]
 
 
 @router.post("/cuentas")
 def crear_cuenta(datos: CuentaIn, s: Session = SesionDB):
-    c = Cuenta(**datos.model_dump(), saldo_fecha=date.today() if datos.saldo else None)
+    if not datos.nombre.strip():
+        raise HTTPException(400, "Ponle un nombre a la cuenta")
+    if datos.tipo not in TIPOS_CUENTA:
+        raise HTTPException(400, "El tipo de cuenta tiene que ser corriente, ahorro, tarjeta o inversión")
+    c = Cuenta(nombre=datos.nombre.strip()[:120], entidad=datos.entidad.strip()[:80], tipo=datos.tipo,
+               iban=normalizar_iban(datos.iban), saldo=datos.saldo, saldo_fecha=date.today() if datos.saldo else None)
     s.add(c)
     s.commit()
     return _cuenta(c)
@@ -178,6 +232,8 @@ def crear_cuenta(datos: CuentaIn, s: Session = SesionDB):
 @router.post("/cuentas/{cuenta_id}/importar")
 async def importar_extracto(cuenta_id: int, fichero: UploadFile = File(...), s: Session = SesionDB):
     cuenta = _obtener(s, Cuenta, cuenta_id)
+    if cuenta.origen not in ORIGENES_MANUALES:
+        raise HTTPException(400, "Esta cuenta se sincroniza sola: si importaras el extracto, sus movimientos saldrían dos veces.")
     try:
         r = sabadell.importar(s, cuenta, fichero.filename or "extracto.csv", await fichero.read())
     except ValueError as e:
@@ -187,51 +243,110 @@ async def importar_extracto(cuenta_id: int, fichero: UploadFile = File(...), s: 
 
 @router.get("/categorias")
 def listar_categorias(s: Session = SesionDB):
-    return [{"id": c.id, "nombre": c.nombre, "tipo": c.tipo, "ambito": c.ambito}
-            for c in s.scalars(select(Categoria).order_by(Categoria.nombre))]
+    return [_categoria(c) for c in s.scalars(select(Categoria).order_by(Categoria.nombre))]
+
+
+def _filtros_movimientos(cuenta_id: int | None, categoria_id: int | None, q: str, desde: date | None,
+                         hasta: date | None, tipo: str, solo_tuyas: bool) -> list:
+    """Condiciones que comparten la lista de movimientos y su Excel (la consulta tiene que unir Cuenta)."""
+    if tipo not in ("", "ingresos", "gastos"):
+        raise HTTPException(400, "El tipo tiene que ser «ingresos» o «gastos»")
+    filtros = []
+    if cuenta_id:
+        filtros.append(Movimiento.cuenta_id == cuenta_id)
+    elif solo_tuyas:  # sin elegir cuenta, fuera las que no son tuyas
+        filtros.append(PARTE > 0)
+    if categoria_id == 0:
+        filtros.append(Movimiento.categoria_id.is_(None))
+    elif categoria_id:
+        filtros.append(Movimiento.categoria_id == categoria_id)
+    if q:
+        filtros.append(Movimiento.concepto.ilike(f"%{q}%"))
+    if desde:
+        filtros.append(Movimiento.fecha >= desde)
+    if hasta:
+        filtros.append(Movimiento.fecha <= hasta)
+    if tipo == "ingresos":
+        filtros.append(Movimiento.importe > 0)
+    elif tipo == "gastos":
+        filtros.append(Movimiento.importe < 0)
+    return filtros
 
 
 @router.get("/movimientos")
 def listar_movimientos(cuenta_id: int | None = None, categoria_id: int | None = None, q: str = "",
-                       limite: int = 300, solo_tuyas: bool = False, s: Session = SesionDB):
-    consulta = select(Movimiento).order_by(Movimiento.fecha.desc(), Movimiento.id.desc()).limit(limite)
-    if cuenta_id:
-        consulta = consulta.where(Movimiento.cuenta_id == cuenta_id)
-    elif solo_tuyas:  # sin elegir cuenta, fuera las que no son tuyas
-        consulta = consulta.join(Cuenta, Movimiento.cuenta_id == Cuenta.id).where(PARTE > 0)
-    if categoria_id == 0:
-        consulta = consulta.where(Movimiento.categoria_id.is_(None))
-    elif categoria_id:
-        consulta = consulta.where(Movimiento.categoria_id == categoria_id)
-    if q:
-        consulta = consulta.where(Movimiento.concepto.ilike(f"%{q}%"))
-    return [{"id": m.id, "cuenta_id": m.cuenta_id, "cuenta": m.cuenta.nombre, "fecha": f(m.fecha),
-             "concepto": m.concepto, "importe": n(m.importe), "saldo": n(m.saldo),
-             "categoria_id": m.categoria_id} for m in s.scalars(consulta)]
+                       desde: date | None = None, hasta: date | None = None, tipo: str = "",
+                       limite: int = 300, offset: int = 0, solo_tuyas: bool = False, s: Session = SesionDB):
+    """Una página de movimientos (los más recientes primero) de las cuentas activas, con el total que hay con
+    esos filtros y cuánto entra y sale en total. `tipo`: ingresos o gastos; `desde`/`hasta`: AAAA-MM-DD."""
+    from sqlalchemy import case
+    from sqlalchemy.orm import contains_eager, joinedload
+    from finanzas import prevision
+    filtros = [Cuenta.activa, *_filtros_movimientos(cuenta_id, categoria_id, q, desde, hasta, tipo, solo_tuyas)]
+    consulta = (select(Movimiento).join(Cuenta, Movimiento.cuenta_id == Cuenta.id).where(*filtros)
+                .options(contains_eager(Movimiento.cuenta), joinedload(Movimiento.categoria))
+                .order_by(Movimiento.fecha.desc(), Movimiento.id.desc())
+                .limit(max(1, min(limite, 1000))).offset(max(0, offset)))
+    filas = s.scalars(consulta).all()
+    total, entran, salen = s.execute(
+        select(func.count(), func.sum(case((Movimiento.importe > 0, Movimiento.importe), else_=0)),
+               func.sum(case((Movimiento.importe < 0, Movimiento.importe), else_=0)))
+        .select_from(Movimiento).join(Cuenta, Movimiento.cuenta_id == Cuenta.id).where(*filtros)).one()
+    traspasos = prevision.ids_traspaso([
+        prevision.MovTuyo(m.id, m.fecha, m.cuenta_id, float(m.importe), float(m.importe), m.concepto,
+                          m.categoria.nombre if m.categoria else None, m.categoria.tipo if m.categoria else None)
+        for m in filas])
+    return {"movimientos": [_movimiento(m, traspasos) for m in filas], "total": total,
+            "suma_ingresos": n(entran or 0), "suma_gastos": n(-(salen or 0))}
 
 
 class CuentaPatch(BaseModel):
     nombre: str | None = None
+    entidad: str | None = None
+    tipo: str | None = None
+    iban: str | None = None
+    saldo: Decimal | None = None  # solo en cuentas manuales o de extracto
     participacion: Decimal | None = None
+    activa: bool | None = None  # True recupera una cuenta oculta
 
 
 @router.patch("/cuentas/{cuenta_id}")
 def actualizar_cuenta(cuenta_id: int, datos: CuentaPatch, s: Session = SesionDB):
     c = _obtener(s, Cuenta, cuenta_id)
+    mueve_patrimonio = False
     if datos.nombre is not None and datos.nombre.strip():
         c.nombre = datos.nombre.strip()[:120]
+    if datos.entidad is not None:
+        c.entidad = datos.entidad.strip()[:80]
+    if datos.tipo is not None:
+        if datos.tipo not in TIPOS_CUENTA:
+            raise HTTPException(400, "El tipo de cuenta tiene que ser corriente, ahorro, tarjeta o inversión")
+        mueve_patrimonio |= datos.tipo != c.tipo
+        c.tipo = datos.tipo
+    if datos.iban is not None:
+        c.iban = normalizar_iban(datos.iban)
+    if datos.saldo is not None:
+        if c.origen not in ORIGENES_MANUALES:
+            raise HTTPException(400, "El saldo de una cuenta sincronizada lo pone el banco en cada sincronización")
+        c.saldo, c.saldo_fecha = datos.saldo, date.today()
+        mueve_patrimonio = True
     if datos.participacion is not None:
         if not 0 <= datos.participacion <= 100:
             raise HTTPException(400, "La parte tuya tiene que estar entre 0 y 100 %")
         c.participacion = datos.participacion
+        mueve_patrimonio = True
+    if datos.activa is not None:
+        mueve_patrimonio |= datos.activa != bool(c.activa)
+        c.activa = datos.activa
     s.commit()
-    from finanzas import sync
-    sync.guardar_instantanea(s)  # el patrimonio cambia
-    return _cuenta(c)
+    if mueve_patrimonio:
+        sync.guardar_instantanea(s)
+    return _cuenta(c, _extras_cuentas(s, [c.id])[c.id])
 
 
 class MovimientoPatch(BaseModel):
-    categoria_id: int | None = None
+    categoria_id: int | None = None  # si viene (aunque sea null) cambia la categoría; si no viene, no se toca
+    nota: str | None = None
 
 
 @router.patch("/movimientos/{mov_id}")
@@ -239,9 +354,17 @@ def actualizar_movimiento(mov_id: int, datos: MovimientoPatch, s: Session = Sesi
     """Al cambiar la categoría se aprende la regla para los siguientes y se dice cuántos anteriores parecidos hay."""
     from finanzas import categorizar
     m = _obtener(s, Movimiento, mov_id)
-    m.categoria_id = datos.categoria_id
+    if datos.nota is not None:
+        m.nota = datos.nota.strip()[:500]
+    aprendido = {"patron": None, "parecidos": 0}
+    if "categoria_id" in datos.model_fields_set:
+        if datos.categoria_id is not None:
+            _obtener(s, Categoria, datos.categoria_id)
+        m.categoria_id = datos.categoria_id
+        s.commit()
+        aprendido = categorizar.aprender(s, m)
     s.commit()
-    return {"ok": True, **categorizar.aprender(s, m)}
+    return {"ok": True, **aprendido}
 
 
 @router.post("/movimientos/{mov_id}/aplicar-a-parecidos")
@@ -258,7 +381,7 @@ def aplicar_a_parecidos(mov_id: int, s: Session = SesionDB):
 @router.delete("/cuentas/{cuenta_id}")
 def borrar_cuenta(cuenta_id: int, s: Session = SesionDB):
     """Las cuentas manuales o de extractos se borran con sus movimientos; las que vienen del banco o de
-    Indexa solo se ocultan (volverían en la siguiente sincronización)."""
+    Indexa solo se ocultan (dejan de contar y de sincronizarse) y se recuperan desde «Cuentas ocultas»."""
     c = _obtener(s, Cuenta, cuenta_id)
     if c.origen in ("enable_banking", "indexa"):
         c.activa = False
@@ -277,7 +400,12 @@ def borrar_cuenta(cuenta_id: int, s: Session = SesionDB):
 
 @router.get("/sync")
 def estado_sync(s: Session = SesionDB):
-    return sync.estado(s)
+    estado = sync.estado(s)
+    # Desde qué fecha hay movimientos del banco: la carga inicial va por tramos hacia atrás
+    con = enablebanking.conexion_activa(s)
+    desde = s.scalar(select(func.min(Cuenta.historico_desde)).where(Cuenta.conexion_id == con.id)) if con else None
+    estado["sabadell"]["historico_desde"] = f(desde)
+    return estado
 
 
 @router.post("/sync")
@@ -335,6 +463,14 @@ def completar_sabadell(datos: CodigoIn, request: Request, s: Session = SesionDB)
 
 # --- Autónomo ---------------------------------------------------------------
 
+def recorte(**limites: int):
+    """Validador que recorta un texto a lo que cabe en su columna (`campo=largo`); así un nombre demasiado largo
+    no acaba en un error 500 de Postgres."""
+    def validar(cls, v, info):
+        return v.strip()[:limites[info.field_name]] if isinstance(v, str) else v
+    return field_validator(*limites)(classmethod(validar))
+
+
 class DetalleFactura(BaseModel):
     horas: float
     precio_hora: float
@@ -351,6 +487,7 @@ class FacturaIn(BaseModel):
     tipo_retencion: Decimal = Decimal("15")
     fecha_cobro: date | None = None
     detalle: DetalleFactura | None = None  # vacío al editar: se conserva el que tuviera
+    recortar = recorte(numero=40, cliente=120)
 
     def valores(self) -> dict:
         v = self.model_dump(exclude={"cliente", "detalle"})
@@ -374,6 +511,7 @@ class GastoAutonomoIn(BaseModel):
     base: Decimal
     tipo_iva: Decimal = Decimal("21")
     deducible_pct: Decimal = Decimal("100")
+    recortar = recorte(proveedor=120, categoria=30)
 
 
 @dataclass
@@ -397,16 +535,9 @@ def _presentadas(s: Session, anio: int) -> dict[tuple[str, int], Presentada]:
     return res
 
 
-def _casillas(d: Declaracion | Presentada | None) -> dict:
-    try:
-        return json.loads(d.casillas) if d and d.casillas else {}
-    except ValueError:
-        return {}
-
-
 def _presentados_130(presentadas: dict[tuple[str, int], Declaracion]) -> dict[int, tuple]:
     """Los 130 presentados por trimestre, con su importe y casillas, para que la estimación parta de ellos."""
-    return {t: (d.importe, _casillas(d)) for (mod, t), d in presentadas.items() if mod == "130"}
+    return {t: (d.importe, declaraciones.casillas(d)) for (mod, t), d in presentadas.items() if mod == "130"}
 
 
 def _autonomo_por_anio(s: Session, facturas, gastos, previsto: dict) -> list[dict]:
@@ -414,8 +545,8 @@ def _autonomo_por_anio(s: Session, facturas, gastos, previsto: dict) -> list[dic
     El año en curso, si hay previsión, se completa con lo previsto."""
     from finanzas import prevision
     cfg = prevision.resolver_clientes(s, prevision.leer(s))
-    rentas = {d.ejercicio: _casillas(d) for d in s.scalars(select(Declaracion).where(Declaracion.modelo == "100")
-                                                           .order_by(Declaracion.id))}
+    rentas = {d.ejercicio: declaraciones.casillas(d) for d in s.scalars(select(Declaracion).where(Declaracion.modelo == "100")
+                                                                        .order_by(Declaracion.id))}
     anios = sorted({x.fecha.year for x in facturas} | {int(k[:4]) for k in previsto}
                    | {a for a, c in rentas.items() if c.get("ingresos_actividad")})
     filas = []
@@ -450,15 +581,16 @@ def ver_autonomo(anio: int | None = None, s: Session = SesionDB):
     hay_facturas = any(x.fecha.year == anio for x in facturas)
     presentadas = _presentadas(s, anio)
     # Lo no presentado se estima con la previsión (sueldo, tarifas y días del último mes) si está configurada
-    from finanzas import prevision
-    previsto = prevision.calcular(s)["trimestres"] if prevision.leer(s).get("clientes") else {}
+    from finanzas import actividad, prevision
+    hoy = date.today()
+    previsto = prevision.calcular(s)["trimestres"] if prevision.tiene_clientes(prevision.leer(s)) else {}
     trimestres, ingresos_declarados, ultimo_130 = [], None, None
     for t in range(1, 5):
         m303 = autonomo.calcular_303(anio, t, facturas, gastos)
         m130 = autonomo.calcular_130(anio, t, facturas, gastos, _presentados_130(presentadas))
         d303, d130 = presentadas.get(("303", t)), presentadas.get(("130", t))
         p = previsto.get(f"{anio}-{t}")
-        c130 = _casillas(d130)
+        c130 = declaraciones.casillas(d130)
         if "ingresos" in c130:
             ingresos_declarados, ultimo_130 = c130["ingresos"], t
         trimestres.append({
@@ -493,13 +625,17 @@ def ver_autonomo(anio: int | None = None, s: Session = SesionDB):
                       "concepto": x.concepto, "base": n(x.base), "tipo_iva": n(x.tipo_iva),
                       "tipo_retencion": n(x.tipo_retencion), "cuota_iva": n(x.cuota_iva),
                       "retencion": n(x.retencion), "total": n(x.total_a_cobrar), "fecha_cobro": f(x.fecha_cobro),
-                      "con_detalle": bool(x.detalle)}
+                      "con_detalle": bool(x.detalle), "cobrada": x.fecha_cobro is not None,
+                      "dias_pendiente": actividad.dias_pendiente(x, hoy)}
                      for x in del_anio],
         "gastos": [{"id": g.id, "fecha": f(g.fecha), "proveedor": g.proveedor, "concepto": g.concepto,
                     "categoria": g.categoria, "base": n(g.base), "tipo_iva": n(g.tipo_iva),
                     "cuota_iva": n(g.cuota_iva), "deducible_pct": n(g.deducible_pct)}
                    for g in gastos if g.fecha.year == anio],
         "clientes": [c.nombre for c in s.scalars(select(Cliente).order_by(Cliente.nombre))],
+        # Lo que te deben (de cualquier año), los ingresos del banco que parecen cobros y los saltos de numeración
+        **actividad.estado_cobros(s, facturas, hoy),
+        "avisos_numeracion": actividad.avisos_numeracion(del_anio),
     }
 
 
@@ -538,16 +674,18 @@ def borrar_autonomo(tipo: str, item_id: int, s: Session = SesionDB):
 # --- Nóminas ----------------------------------------------------------------
 
 class NominaIn(BaseModel):
-    empresa: str = "Indra"
+    empresa: str = "Empresa"
     fecha: date
     bruto: Decimal
     retencion_irpf: Decimal
     seguridad_social: Decimal
     neto: Decimal
     tipo_irpf: Decimal | None = None
+    base_irpf: Decimal | None = None
     especie: Decimal | None = None
     otras_deducciones: Decimal | None = None
     paga_extra: bool | None = None
+    recortar = recorte(empresa=80)
 
 
 def _fila_nomina(x: Nomina) -> dict:
@@ -563,9 +701,58 @@ def _nominas_banco(s: Session) -> list[Movimiento]:
     return s.scalars(
         select(Movimiento).join(Cuenta, Movimiento.cuenta_id == Cuenta.id)
         .join(Categoria, Movimiento.categoria_id == Categoria.id)
-        .where(Categoria.nombre == "Nómina", Movimiento.importe > 0, PARTE > 0,
+        .where(Categoria.nombre == "Nómina", Movimiento.importe > 0, PARTE > 0, Cuenta.activa,
                Movimiento.fecha >= date.today() - timedelta(days=730))
         .order_by(Movimiento.fecha.desc())).all()
+
+
+DIAS_COBRO_MES_ANTERIOR = 7  # un cobro de nómina en los primeros días del mes es el del mes que acaba de terminar
+
+
+def _meses_nomina(del_anio: list[Nomina], banco: list[Movimiento], anio: int) -> list[dict]:
+    """Mes a mes del año hasta hoy: el neto de las nóminas registradas frente a lo que entró en el banco como
+    nómina. Cuadra si hay las dos cosas y se llevan menos de 1 €."""
+    hoy = date.today()
+    if anio > hoy.year:
+        return []
+    ultimo = 12 if anio < hoy.year else hoy.month
+    neto: dict[int, Decimal] = {}
+    for x in del_anio:
+        neto[x.fecha.month] = neto.get(x.fecha.month, CERO) + x.neto
+    cobros: dict[int, list[Movimiento]] = {}
+    for m in banco:
+        mes = (m.fecha - timedelta(days=m.fecha.day)) if m.fecha.day <= DIAS_COBRO_MES_ANTERIOR else m.fecha
+        if mes.year == anio:
+            cobros.setdefault(mes.month, []).append(m)
+    filas = []
+    for mes in range(1, ultimo + 1):
+        importe = sum((m.importe for m in cobros.get(mes, [])), CERO) if mes in cobros else None
+        filas.append({"mes": f"{anio}-{mes:02d}", "nomina_neto": n(neto.get(mes)), "banco_importe": n(importe),
+                      "banco_fecha": f(min(m.fecha for m in cobros[mes])) if mes in cobros else None,
+                      "cuadra": mes in neto and importe is not None and abs(neto[mes] - importe) <= 1})
+    return filas
+
+
+def _retencion_recomendada(s: Session, nominas: list[Nomina], anio: int) -> dict | None:
+    """Tipo de retención que, pedido a la empresa desde el mes que viene, dejaría la renta del año en cero: lo que la
+    previsión dice que saldrá a pagar, repartido entre el bruto que queda por cobrar este año. Solo si sube más de un
+    punto y no pasa del 47 % (el máximo de la escala)."""
+    from finanzas import prevision
+    hoy = date.today()
+    cfg = prevision.leer(s)
+    tipo_actual = prevision.tipo_irpf_actual(nominas)
+    if anio != hoy.year or tipo_actual is None or not cfg.get("nomina") or hoy.month == 12:
+        return None
+    renta = next((a for a in prevision.calcular(s)["anios"] if a["anio"] == anio), None)
+    brutos = prevision._nomina_anual(cfg["nomina"])["brutos"]
+    restante = sum(v for m, v in brutos.items() if m > hoy.month)
+    if renta is None or restante <= 0:
+        return None
+    recomendado = round(tipo_actual + renta["resultado"] / restante * 100, 1)
+    if recomendado <= tipo_actual + 1 or recomendado > 47:
+        return None
+    return {"tipo_actual": tipo_actual, "tipo_recomendado": recomendado, "resultado_previsto": renta["resultado"],
+            "meses_restantes": 12 - hoy.month}
 
 
 @router.get("/nominas")
@@ -608,19 +795,24 @@ def listar_nominas(anio: int | None = None, s: Session = SesionDB):
             "banco": [{"id": m.id, "fecha": f(m.fecha), "concepto": m.concepto, "importe": n(m.importe),
                        "cuenta": m.cuenta.nombre} for m in banco],
             "tipo_irpf_actual": prevision.tipo_irpf_actual(nominas),
-            "nominas": [_fila_nomina(x) for x in nominas]}
+            "nominas": [_fila_nomina(x) for x in del_anio],
+            "meses": _meses_nomina(del_anio, banco, anio),
+            "retencion_recomendada": _retencion_recomendada(s, nominas, anio)}
 
 
 @router.get("/nominas/calculo")
 def calcular_nomina(bruto_anual: float | None = None, neto_mes: float | None = None, pagas: int = 14,
-                    hijos: int = 0, temporal: bool = False):
-    """De bruto anual a neto de cada mes, o el bruto que hace falta para un neto mensual."""
+                    hijos: int = 0, temporal: bool = False, tipo_irpf: float | None = None):
+    """De bruto anual a neto de cada mes, o el bruto que hace falta para un neto mensual. Con `tipo_irpf` se usa
+    esa retención en vez de la calculada (para ver qué neto queda si le pides a la empresa un tipo más alto)."""
+    if tipo_irpf is not None and not 0 <= tipo_irpf <= 47:
+        raise HTTPException(400, "La retención tiene que estar entre 0 y 47 %")
     try:
         if neto_mes is not None:
             return calc_nomina.bruto_para_neto(neto_mes, pagas, hijos, temporal).a_dict()
         if bruto_anual is None:
             raise HTTPException(400, "Indica el bruto anual o el neto mensual")
-        return calc_nomina.calcular(bruto_anual, pagas, hijos, temporal).a_dict()
+        return calc_nomina.calcular(bruto_anual, pagas, hijos, temporal, tipo_irpf).a_dict()
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -671,10 +863,11 @@ def _leer_nomina(s: Session, contenido: bytes, nombre: str):
 def _guardar_nomina(s: Session, contenido: bytes, nombre: str) -> dict:
     from finanzas.importers import nomina_pdf
     lectura = _leer_nomina(s, contenido, nombre)
-    # La misma nómina subida otra vez (o corregida por la empresa) sustituye a la anterior
+    # La misma nómina subida otra vez (o corregida por la empresa, o apuntada antes a mano) sustituye a la
+    # anterior: se empareja por mes y tipo de paga, sin mirar la empresa (a mano suele quedar «Empresa»)
     mismo_mes = [x for x in s.scalars(select(Nomina)).all()
                  if (x.fecha.year, x.fecha.month) == (lectura.fecha.year, lectura.fecha.month)
-                 and bool(x.paga_extra) == lectura.paga_extra and x.empresa.lower() == lectura.empresa.lower()]
+                 and bool(x.paga_extra) == lectura.paga_extra]
     x = mismo_mes[0] if mismo_mes else Nomina()
     for k in ("empresa", "fecha", "bruto", "seguridad_social", "retencion_irpf", "neto", "tipo_irpf", "base_irpf",
               "especie", "otras_deducciones", "paga_extra"):
@@ -724,7 +917,7 @@ def borrar_nomina(nomina_id: int, s: Session = SesionDB):
 
 class ActivoIn(BaseModel):
     nombre: str
-    tipo: str = "inmueble"
+    tipo: str = "inmueble"  # inmueble | inmueble_en_construccion | vehiculo | otro
     uso: str = "otro"
     fecha_compra: date | None = None
     precio_compra: Decimal = CERO
@@ -732,6 +925,15 @@ class ActivoIn(BaseModel):
     valor_catastral: Decimal = CERO
     valor_catastral_construccion: Decimal = CERO
     porcentaje_propiedad: Decimal = Decimal("100")
+    notas: str = ""
+
+
+def _comprobar_bien(tipo: str | None, uso: str | None) -> None:
+    from finanzas.importers.datos_json import TIPOS_ACTIVO
+    if tipo is not None and tipo not in TIPOS_ACTIVO:
+        raise HTTPException(400, "Tipo de bien desconocido")
+    if uso is not None and uso not in ("vivienda_habitual", "alquiler", "otro"):
+        raise HTTPException(400, "Uso desconocido")
 
 
 class ValoracionIn(BaseModel):
@@ -747,6 +949,7 @@ class HipotecaIn(BaseModel):
     fecha_inicio: date
     plazo_meses: int
     saldo_pendiente_manual: Decimal | None = None
+    saldo_fecha: date | None = None  # a qué día es ese pendiente (vacío: hoy)
 
 
 class ContratoIn(BaseModel):
@@ -774,10 +977,26 @@ def _pct(parte: Decimal, total: Decimal) -> float | None:
     return round(float(parte / total * 100), 2) if total > 0 else None
 
 
+GASTOS_VENTA_PCT = Decimal("3")  # agencia y gastos al vender, aproximado
+AJD_MURCIA_PCT = Decimal("1.5")  # actos jurídicos documentados en la compra de obra nueva (Región de Murcia)
+NOTARIA_REGISTRO = Decimal("1200")  # notaría, registro y gestoría, aproximado
+
+
+def _pct_texto(x) -> str:
+    """«1,5» o «33,33»: un porcentaje para un texto en español, sin ceros de más."""
+    return f"{float(x):g}".replace(".", ",")
+
+
+def _constantes() -> dict:
+    """Los porcentajes y cifras fijas de las estimaciones, para que el frontal los pinte de aquí y no los tenga escritos."""
+    return {"gastos_venta_pct": n(GASTOS_VENTA_PCT), "ajd_pct": n(AJD_MURCIA_PCT), "notaria": n(NOTARIA_REGISTRO),
+            "amortizacion_pct": n(alquiler.AMORTIZACION_PCT)}
+
+
 def _rentabilidad(a: Activo, contratos, gastos, deudas, valor: Decimal, hoy: date) -> dict | None:
     """Rentabilidad del alquiler con la renta de hoy y los gastos de los últimos 12 meses.
     Bruta y neta sobre lo que costó (precio + gastos de compra); también sobre el dinero que pusiste tú."""
-    vigentes = [c for c in contratos if c.fecha_inicio <= hoy and (not c.fecha_fin or c.fecha_fin >= hoy)]
+    vigentes = [c for c in contratos if c.vigente(hoy)]
     if a.tipo != "inmueble" or not vigentes:
         return None
     renta = sum((c.renta_en(hoy) for c in vigentes), CERO) * 12
@@ -796,8 +1015,10 @@ def _rentabilidad(a: Activo, contratos, gastos, deudas, valor: Decimal, hoy: dat
 
 @router.get("/inmuebles")
 def listar_inmuebles(anio: int | None = None, s: Session = SesionDB):
+    from finanzas import bienes
     anio = anio or date.today().year
     hoy = date.today()
+    ingresos = None  # entradas del banco de los últimos meses, solo si hay algún contrato vigente
     fichas = []
     for a in s.scalars(select(Activo).order_by(Activo.nombre)):
         deudas = s.scalars(select(Deuda).where(Deuda.activo_id == a.id)).all()
@@ -805,14 +1026,11 @@ def listar_inmuebles(anio: int | None = None, s: Session = SesionDB):
         gastos = s.scalars(select(GastoInmueble).where(GastoInmueble.activo_id == a.id)
                            .order_by(GastoInmueble.fecha.desc())).all()
         pagos = s.scalars(select(PagoPrevisto).where(PagoPrevisto.activo_id == a.id).order_by(PagoPrevisto.fecha)).all()
+        if ingresos is None and any(c.vigente(hoy) for c in contratos):
+            ingresos = bienes.ingresos_recientes(s, hoy)
         rend = None
         if contratos:
-            gastos_calc = list(gastos)
-            if not any(g.tipo == "intereses" and g.fecha.year == anio for g in gastos):
-                for d in deudas:
-                    gastos_calc.append(GastoInmueble(activo_id=a.id, fecha=date(anio, 12, 31),
-                                                     tipo="intereses", importe=intereses_anio(d, anio)))
-            r = alquiler.calcular_rendimiento(a, contratos, gastos_calc, anio)
+            r = alquiler.rendimiento_del_anio(a, contratos, gastos, deudas, anio)
             rend = {"anio": anio, "ingresos": n(r.ingresos), "gastos_limitados": n(r.gastos_limitados_aplicables),
                     "gastos_otros": n(r.gastos_otros), "amortizacion": n(r.amortizacion),
                     "rendimiento_neto": n(r.rendimiento_neto), "reduccion_pct": n(r.reduccion_pct),
@@ -822,25 +1040,26 @@ def listar_inmuebles(anio: int | None = None, s: Session = SesionDB):
         else:
             valor, detalle = patrimonio.valor_activo(a, hoy)
         deuda_total = sum((saldo_pendiente(d, hoy) for d in deudas), CERO)
+        coste = (a.precio_compra + a.gastos_compra) * a.porcentaje_propiedad / 100
+        # La hipoteca el día de la compra (si se firmó después, lo que se pidió): el primer punto de la evolución
+        deuda_compra = sum((saldo_pendiente(d, max(a.fecha_compra, d.fecha_inicio or a.fecha_compra)) for d in deudas),
+                           CERO) if a.fecha_compra else None
         fichas.append({
             "rentabilidad": _rentabilidad(a, contratos, gastos, deudas, valor, hoy), "notas": a.notas,
             "id": a.id, "nombre": a.nombre, "tipo": a.tipo, "uso": a.uso, "fecha_compra": f(a.fecha_compra),
             "precio_compra": n(a.precio_compra), "gastos_compra": n(a.gastos_compra),
             "valor_catastral": n(a.valor_catastral), "valor_catastral_construccion": n(a.valor_catastral_construccion),
-            "porcentaje_propiedad": n(a.porcentaje_propiedad),
+            "porcentaje_propiedad": n(a.porcentaje_propiedad), "coste": n(coste), "deuda_compra": n(deuda_compra),
+            "plusvalia_latente": n(valor - coste) if a.tipo == "inmueble" and a.valoraciones else None,
             "valor": n(valor), "valor_detalle": detalle, "deuda": n(deuda_total), "equity": n(valor - deuda_total),
-            "valoraciones": [{"id": v.id, "fecha": f(v.fecha), "valor": n(v.valor)} for v in a.valoraciones],
-            "hipotecas": [{"id": d.id, "nombre": d.nombre, "entidad": d.entidad, "capital_inicial": n(d.capital_inicial),
-                           "tipo_interes_anual": n(d.tipo_interes_anual), "plazo_meses": d.plazo_meses,
-                           "fecha_inicio": f(d.fecha_inicio),
-                           "cuota": n(cuota_mensual(d.capital_inicial, d.tipo_interes_anual, d.plazo_meses)),
-                           "pendiente": n(saldo_pendiente(d, hoy)), "intereses_anio": n(intereses_anio(d, anio)),
-                           "futura": bool(d.fecha_inicio and d.fecha_inicio > hoy)}
-                          for d in deudas],
+            "valoraciones": [{"id": v.id, "fecha": f(v.fecha), "valor": n(v.valor),
+                              "deuda": n(sum((saldo_pendiente(d, v.fecha) for d in deudas), CERO))} for v in a.valoraciones],
+            "hipotecas": [bienes.deuda_dict(d, hoy, anio) for d in deudas],
             "contratos": [{"id": c.id, "inquilino": c.inquilino, "fecha_inicio": f(c.fecha_inicio),
                            "fecha_fin": f(c.fecha_fin), "renta_inicial": n(c.renta_mensual),
                            "renta_actual": n(c.renta_en(hoy)), "reduccion_pct": n(c.reduccion_pct),
-                           "cambios": [{"desde": f(x.desde), "renta": n(x.renta_mensual)} for x in c.cambios_renta]}
+                           "cambios": [{"id": x.id, "desde": f(x.desde), "renta": n(x.renta_mensual)} for x in c.cambios_renta],
+                           "cobros": bienes.cobros_alquiler(c, ingresos, hoy) if c.vigente(hoy) else []}
                           for c in contratos],
             "gastos": [{"id": g.id, "fecha": f(g.fecha), "tipo": g.tipo, "importe": n(g.importe), "concepto": g.concepto}
                        for g in gastos],
@@ -848,14 +1067,16 @@ def listar_inmuebles(anio: int | None = None, s: Session = SesionDB):
                        "pagado": p.pagado} for p in pagos],
             "rendimiento": rend,
         })
-    return {"anio": anio, "inmuebles": fichas}
+    return {"anio": anio, "inmuebles": fichas, "constantes": _constantes()}
 
 
 @router.post("/inmuebles")
 def crear_inmueble(datos: ActivoIn, s: Session = SesionDB):
+    _comprobar_bien(datos.tipo, datos.uso)
     a = Activo(**datos.model_dump())
     s.add(a)
     s.commit()
+    sync.guardar_instantanea(s)
     return {"id": a.id}
 
 
@@ -870,9 +1091,13 @@ def crear_valoracion(activo_id: int, datos: ValoracionIn, s: Session = SesionDB)
 @router.post("/inmuebles/{activo_id}/hipotecas")
 def crear_hipoteca(activo_id: int, datos: HipotecaIn, s: Session = SesionDB):
     _obtener(s, Activo, activo_id)
-    s.add(Deuda(activo_id=activo_id, tipo="hipoteca", saldo_fecha=date.today() if datos.saldo_pendiente_manual else None,
-                **datos.model_dump()))
+    if datos.plazo_meses <= 0:
+        raise HTTPException(400, "El plazo tiene que ser de al menos un mes")
+    valores = datos.model_dump()
+    valores["saldo_fecha"] = (valores["saldo_fecha"] or date.today()) if valores["saldo_pendiente_manual"] is not None else None
+    s.add(Deuda(activo_id=activo_id, tipo="hipoteca", **valores))
     s.commit()
+    sync.guardar_instantanea(s)
     return {"ok": True}
 
 
@@ -880,6 +1105,7 @@ def crear_hipoteca(activo_id: int, datos: HipotecaIn, s: Session = SesionDB):
 def borrar_deuda(deuda_id: int, s: Session = SesionDB):
     s.delete(_obtener(s, Deuda, deuda_id))
     s.commit()
+    sync.guardar_instantanea(s)
     return {"ok": True}
 
 
@@ -905,15 +1131,31 @@ def actualizar_renta(contrato_id: int, datos: RentaIn, s: Session = SesionDB):
 @router.post("/inmuebles/{activo_id}/gastos")
 def crear_gasto_inmueble(activo_id: int, datos: GastoInmuebleIn, s: Session = SesionDB):
     _obtener(s, Activo, activo_id)
+    if datos.tipo not in alquiler.TIPOS_GASTO:
+        raise HTTPException(400, "Tipo de gasto desconocido")
     s.add(GastoInmueble(activo_id=activo_id, **datos.model_dump()))
     s.commit()
     return {"ok": True}
 
 
+MENSAJES_ESCENARIO = {"tarifa_pct": "La tarifa solo puede cambiar entre −50 % y 100 %",
+                      "dias_mes": "Los días al mes tienen que estar entre 0 y 31",
+                      "gasto_habitual": "El gasto habitual no puede ser negativo",
+                      "ahorro_extra_mes": "El ahorro extra no puede ser negativo"}
+
+
 @router.get("/prevision")
-def ver_prevision(meses: int = 12, s: Session = SesionDB):
+def ver_prevision(meses: int = 12, tarifa_pct: float | None = None, dias_mes: float | None = None,
+                  gasto_habitual: float | None = None, ahorro_extra_mes: float | None = None, s: Session = SesionDB):
+    """Hasta 24 meses. Los demás parámetros son el escenario «¿y si…?»: se simulan sin guardar nada."""
     from finanzas import prevision
-    return prevision.calcular(s, max(1, min(meses, 24)))
+    escenario = {k: v for k, v in (("tarifa_pct", tarifa_pct), ("dias_mes", dias_mes), ("gasto_habitual", gasto_habitual),
+                                   ("ahorro_extra_mes", ahorro_extra_mes)) if v is not None}
+    for clave, valor in escenario.items():
+        minimo, maximo = prevision.LIMITES_ESCENARIO[clave]
+        if valor < minimo or (maximo is not None and valor > maximo):
+            raise HTTPException(400, MENSAJES_ESCENARIO[clave])
+    return prevision.calcular(s, max(1, min(meses, 24)), escenario or None)
 
 
 class ClientePrevision(BaseModel):
@@ -956,8 +1198,10 @@ def guardar_supuestos(datos: SupuestosPrevision, s: Session = SesionDB):
         raise HTTPException(400, "Las pagas tienen que ser 12 o 14")
     nuevos = datos.model_dump()
     if nuevos["dias_planificados"] is None:  # el formulario de supuestos no los manda: se conservan
-        nuevos["dias_planificados"] = prevision.leer(s).get("dias_planificados") or {}
-    prevision.guardar(s, nuevos)
+        del nuevos["dias_planificados"]
+    # Solo cambian los campos de este formulario (nomina: null sí quita la nómina, que el formulario la manda
+    # explícita); lo de «Pagar menos en la renta» (pensiones, fraccionar, rentas del ahorro...) se conserva
+    prevision.guardar(s, {**prevision.leer(s), **nuevos})
     return {"ok": True}
 
 
@@ -981,11 +1225,14 @@ def planificar_dias(datos: DiasPlanificados, s: Session = SesionDB):
 
 
 @router.post("/importar/datos")
-async def importar_datos(fichero: UploadFile = File(...), s: Session = SesionDB):
-    """Fichero JSON con inmuebles, coches e inversiones privadas (ver importers/datos_json.py)."""
+async def importar_datos(previa: bool = False, fichero: UploadFile = File(...), s: Session = SesionDB):
+    """Fichero JSON con inmuebles, coches e inversiones privadas (ver importers/datos_json.py), o una copia de
+    seguridad completa de /exportar, que sustituye todos los datos. Con `previa` solo dice qué haría."""
     from finanzas.importers import datos_json
     try:
         datos = json.loads(await fichero.read())
+        if previa:
+            return datos_json.vista_previa(datos)
         return {"mensajes": datos_json.importar(s, datos)}
     except (ValueError, KeyError, TypeError, AttributeError) as e:
         raise HTTPException(400, f"No se ha podido importar: {e}")
@@ -999,14 +1246,19 @@ class ObjetivoIn(BaseModel):
     fecha_objetivo: date | None = None
     importe_objetivo: Decimal = CERO
     ahorrado: Decimal = CERO
+    notas: str = ""
+    cuenta_id: int | None = None  # con cuenta, lo ahorrado es su saldo (tu parte) y no el campo manual
 
 
 class ObjetivoPatch(BaseModel):
+    """Vacío = no tocar; fecha_objetivo y cuenta_id en null los quitan."""
     nombre: str | None = None
     tipo: str | None = None
     fecha_objetivo: date | None = None
     importe_objetivo: Decimal | None = None
     ahorrado: Decimal | None = None
+    notas: str | None = None
+    cuenta_id: int | None = None
 
 
 class PagoIn(BaseModel):
@@ -1020,7 +1272,13 @@ class PagoIn(BaseModel):
 
 
 class PagoPatch(BaseModel):
-    pagado: bool
+    """Vacío = no tocar; objetivo_id y activo_id en null quitan el enlace."""
+    concepto: str | None = None
+    fecha: date | None = None
+    importe: Decimal | None = None
+    objetivo_id: int | None = None
+    activo_id: int | None = None
+    pagado: bool | None = None
 
 
 def _meses_hasta(d: date) -> int:
@@ -1028,39 +1286,107 @@ def _meses_hasta(d: date) -> int:
     return max(1, (d.year - hoy.year) * 12 + d.month - hoy.month)
 
 
+def _comprobar_pago(s: Session, datos: dict) -> None:
+    """Importe positivo y enlaces a cosas que existen."""
+    if datos.get("importe") is not None and datos["importe"] <= 0:
+        raise HTTPException(400, "El importe tiene que ser mayor que cero")
+    for campo, modelo in (("objetivo_id", Objetivo), ("activo_id", Activo), ("inversion_id", InversionPrivada)):
+        if datos.get(campo) is not None:
+            _obtener(s, modelo, datos[campo])
+
+
+def _ahorrado(o: Objetivo, cuentas: dict[int, Cuenta]) -> Decimal:
+    """Con cuenta ligada, el saldo de la cuenta (tu parte); si no, lo apuntado a mano."""
+    c = cuentas.get(o.cuenta_id) if o.cuenta_id else None
+    return (c.saldo * c.parte).quantize(Decimal("0.01")) if c else o.ahorrado
+
+
+def _llegas_en(falta: Decimal, ahorro_mes: float | None, fecha_objetivo: date | None, hoy: date) -> dict | None:
+    """Si todo el ahorro medio de la previsión fuera a este objetivo: en qué mes tendrías lo que falta, si es antes
+    de la fecha (`a_tiempo`, vacío sin fecha) y, si no, lo que faltaría ese día. Vacío sin previsión o ya conseguido."""
+    if ahorro_mes is None or falta <= 0:
+        return None
+    disponibles = _meses_hasta(fecha_objetivo) if fecha_objetivo else None
+    if ahorro_mes <= 0:
+        return {"mes": None, "a_tiempo": False if fecha_objetivo else None, "faltara": n(falta)}
+    necesarios = max(1, math.ceil(float(falta) / ahorro_mes))
+    a_tiempo = None if disponibles is None else necesarios <= disponibles
+    faltara = 0.0 if a_tiempo is not False else round(max(float(falta) - ahorro_mes * disponibles, 0.0), 2)
+    return {"mes": sumar_meses(hoy.replace(day=1), necesarios).strftime("%Y-%m"), "a_tiempo": a_tiempo, "faltara": faltara}
+
+
+
+def serializar_pagos(s: Session, pagos: list[PagoPrevisto]) -> list[dict]:
+    """Pagos previstos como los pinta el frontal (ListaPagos): a qué van (objetivo, bien o inversión) y si el cargo ya
+    se ha visto en el banco. Plan e Inicio comparten el formato."""
+    from finanzas import plan
+    if not pagos:
+        return []
+    objetivos = {o.id: o.nombre for o in s.scalars(select(Objetivo))}
+    activos = {a.id: a.nombre for a in s.scalars(select(Activo))}
+    inversiones = {i.id: i.nombre for i in s.scalars(select(InversionPrivada))}
+    vistos = plan.vistos_en_banco(s)
+    return [{"id": p.id, "concepto": p.concepto, "fecha": f(p.fecha), "importe": n(p.importe),
+             "pagado": p.pagado, "objetivo_id": p.objetivo_id, "activo_id": p.activo_id,
+             "objetivo": objetivos.get(p.objetivo_id), "inmueble": activos.get(p.activo_id),
+             "inversion": inversiones.get(p.inversion_id), "visto_en_banco": vistos.get(p.id)}
+            for p in pagos]
+
 @router.get("/planificacion")
 def ver_planificacion(s: Session = SesionDB):
+    from finanzas import prevision
     hoy = date.today()
+    hasta = hoy + timedelta(days=365)
     objetivos = s.scalars(select(Objetivo).order_by(Objetivo.fecha_objetivo)).all()
     pagos = s.scalars(select(PagoPrevisto).order_by(PagoPrevisto.fecha)).all()
     activos = {a.id: a.nombre for a in s.scalars(select(Activo))}
-    inversiones = {i.id: i.nombre for i in s.scalars(select(InversionPrivada))}
-    nombres_obj = {o.id: o.nombre for o in objetivos}
-    pendiente_12m = sum((p.importe for p in pagos if not p.pagado and p.fecha <= hoy + timedelta(days=365)), CERO)
-    # Lo que pagará una hipoteca prevista no sale de tu bolsillo
-    financiado = sum((d.capital_inicial for d in s.scalars(select(Deuda).where(
-        Deuda.fecha_inicio > hoy, Deuda.fecha_inicio <= hoy + timedelta(days=365)))), CERO)
-    pendiente_12m = max(pendiente_12m - financiado, CERO)
-    liquidez = sum((c.saldo * c.parte for c in s.scalars(select(Cuenta).where(Cuenta.activa, Cuenta.tipo.in_(
-        ["corriente", "ahorro"])))), CERO)
-    return {
-        "liquidez": n(liquidez), "pendiente_12_meses": n(pendiente_12m), "financiado_hipoteca": n(financiado),
-        "objetivos": [{
+    cuentas = {c.id: c for c in s.scalars(select(Cuenta))}
+    pendientes = [p for p in pagos if not p.pagado]
+    pendiente_12m = float(sum((p.importe for p in pendientes if p.fecha <= hasta), CERO))
+    # Como en la previsión: los objetivos con fecha sin pagos apuntados salen ese mes, y lo que pagará una
+    # hipoteca prevista de los pagos de su bien no sale de tu bolsillo
+    por_mes, _ = prevision.objetivos_por_mes(s, hoy.replace(day=1))
+    objetivos_12m = round(sum(o["importe"] for k, lista in por_mes.items() if k <= hasta.strftime("%Y-%m") for o in lista), 2)
+    _, financiado = prevision.financiacion_prevista(s, pendientes, hoy)
+    financiado_12m = round(sum(v for k, v in financiado.items() if k <= hasta.strftime("%Y-%m")), 2)
+    pendiente_12m = max(pendiente_12m + objetivos_12m - financiado_12m, 0.0)
+    # Ahorro medio al mes según la previsión, para saber si llegas a los objetivos: lo que queda cada mes sin contar
+    # lo que gastarías en los propios objetivos con fecha (la previsión ya los resta el mes que tocan)
+    ahorro_mes, meses_prev = None, 0
+    if prevision.tiene_supuestos(prevision.leer(s)):
+        filas = prevision.calcular(s)["meses"]
+        if filas:
+            ahorro_mes = round(sum(m["neto"] + m["total_objetivos"] for m in filas) / len(filas), 2)
+        meses_prev = len(filas)
+    lista_objetivos = []
+    for o in objetivos:
+        ahorrado = _ahorrado(o, cuentas)
+        futuro = bool(o.fecha_objetivo and o.fecha_objetivo > hoy)
+        cuenta = cuentas.get(o.cuenta_id) if o.cuenta_id else None
+        lista_objetivos.append({
             "id": o.id, "nombre": o.nombre, "tipo": o.tipo, "fecha_objetivo": f(o.fecha_objetivo),
-            "importe_objetivo": n(o.importe_objetivo), "ahorrado": n(o.ahorrado),
-            "ahorro_mensual": n(max(CERO, (o.importe_objetivo - o.ahorrado) / _meses_hasta(o.fecha_objetivo)).quantize(
-                Decimal("0.01"))) if o.fecha_objetivo and o.fecha_objetivo > hoy else None,
-        } for o in objetivos],
-        "pagos": [{"id": p.id, "concepto": p.concepto, "fecha": f(p.fecha), "importe": n(p.importe),
-                   "pagado": p.pagado, "objetivo": nombres_obj.get(p.objetivo_id), "inmueble": activos.get(p.activo_id),
-                   "inversion": inversiones.get(p.inversion_id)}
-                  for p in pagos],
+            "importe_objetivo": n(o.importe_objetivo), "ahorrado": n(ahorrado), "notas": o.notas or "",
+            "cuenta_id": cuenta.id if cuenta else None, "cuenta": cuenta.nombre if cuenta else None,
+            "ahorrado_automatico": cuenta is not None,
+            "ahorro_mensual": n(max(CERO, (o.importe_objetivo - ahorrado) / _meses_hasta(o.fecha_objetivo)).quantize(
+                Decimal("0.01"))) if futuro else None,
+            "llegas_en": _llegas_en(o.importe_objetivo - ahorrado, ahorro_mes, o.fecha_objetivo, hoy),
+        })
+    return {
+        "liquidez": n(patrimonio.liquidez(s)), "pendiente_12_meses": round(pendiente_12m, 2),
+        "financiado_hipoteca": financiado_12m, "objetivos_12_meses": objetivos_12m,
+        "sintesis": {"ahorro_objetivos_mes": round(sum(o["ahorro_mensual"] or 0 for o in lista_objetivos), 2),
+                     "ahorro_prevision_mes": ahorro_mes, "meses": meses_prev},
+        "objetivos": lista_objetivos,
+        "pagos": serializar_pagos(s, pagos),
         "inmuebles": [{"id": k, "nombre": v} for k, v in activos.items()],
     }
 
 
 @router.post("/objetivos")
 def crear_objetivo(datos: ObjetivoIn, s: Session = SesionDB):
+    if datos.cuenta_id is not None:
+        _obtener(s, Cuenta, datos.cuenta_id)
     s.add(Objetivo(**datos.model_dump()))
     s.commit()
     return {"ok": True}
@@ -1069,8 +1395,11 @@ def crear_objetivo(datos: ObjetivoIn, s: Session = SesionDB):
 @router.patch("/objetivos/{objetivo_id}")
 def actualizar_objetivo(objetivo_id: int, datos: ObjetivoPatch, s: Session = SesionDB):
     o = _obtener(s, Objetivo, objetivo_id)
-    for campo, valor in datos.model_dump(exclude_unset=True).items():
-        if valor is not None or campo == "fecha_objetivo":
+    cambios = datos.model_dump(exclude_unset=True)
+    if cambios.get("cuenta_id") is not None:
+        _obtener(s, Cuenta, cambios["cuenta_id"])
+    for campo, valor in cambios.items():
+        if valor is not None or campo in ("fecha_objetivo", "cuenta_id"):
             setattr(o, campo, valor)
     s.commit()
     return {"ok": True}
@@ -1088,22 +1417,38 @@ def borrar_objetivo(objetivo_id: int, s: Session = SesionDB):
 
 @router.post("/pagos")
 def crear_pago(datos: PagoIn, s: Session = SesionDB):
-    s.add(PagoPrevisto(**datos.model_dump()))
+    _comprobar_pago(s, datos.model_dump())
+    p = PagoPrevisto(**datos.model_dump())
+    s.add(p)
     s.commit()
-    return {"ok": True}
+    if p.pagado:
+        sync.guardar_instantanea(s)  # lo pagado de la obra nueva cuenta en el patrimonio
+    return {"ok": True, "id": p.id}
 
 
 @router.patch("/pagos/{pago_id}")
 def actualizar_pago(pago_id: int, datos: PagoPatch, s: Session = SesionDB):
-    _obtener(s, PagoPrevisto, pago_id).pagado = datos.pagado
+    p = _obtener(s, PagoPrevisto, pago_id)
+    cambios = datos.model_dump(exclude_unset=True)
+    _comprobar_pago(s, cambios)
+    estaba_pagado = p.pagado
+    for campo, valor in cambios.items():
+        if valor is not None or campo in ("objetivo_id", "activo_id"):
+            setattr(p, campo, valor)
     s.commit()
+    if estaba_pagado or p.pagado:
+        sync.guardar_instantanea(s)
     return {"ok": True}
 
 
 @router.delete("/pagos/{pago_id}")
 def borrar_pago(pago_id: int, s: Session = SesionDB):
-    s.delete(_obtener(s, PagoPrevisto, pago_id))
+    p = _obtener(s, PagoPrevisto, pago_id)
+    estaba_pagado = p.pagado
+    s.delete(p)
     s.commit()
+    if estaba_pagado:
+        sync.guardar_instantanea(s)
     return {"ok": True}
 
 
@@ -1176,6 +1521,7 @@ class InversionPatch(BaseModel):
     nombre: str | None = None
     gestora: str | None = None
     compromiso: Decimal | None = None
+    fecha_compromiso: date | None = None
     nav: Decimal | None = None
     nav_fecha: date | None = None
     distribuido: Decimal | None = None
@@ -1213,12 +1559,6 @@ def borrar_inversion(inversion_id: int, s: Session = SesionDB):
     return {"ok": True}
 
 
-@router.get("/config")
-def ver_config():
-    return {"ccaa": config.CCAA, "banco": config.BANCO,
-            "redirect_url": config.ENABLE_BANKING_REDIRECT_URL}
-
-
 # --- Hacienda: modelos presentados ------------------------------------------
 
 NOMBRE_MODELO = {"303": "IVA trimestral", "130": "IRPF pago fraccionado", "100": "Renta",
@@ -1254,13 +1594,18 @@ def ver_declaraciones(s: Session = SesionDB):
                                                   Declaracion.modelo)).all()
     cache: dict = {}
     lista = [_declaracion(d, _estimado(s, d, cache)) for d in decl]
+    # Por ejercicio: lo pagado, lo devuelto y el neto de cada modelo (303, 130, 100...; negativo si te devolvieron)
     por_anio: dict[int, dict] = {}
     for d in decl:
-        a = por_anio.setdefault(d.ejercicio, {"ejercicio": d.ejercicio, "pagado": 0.0, "devuelto": 0.0})
-        if d.importe > 0:
-            a["pagado"] += float(d.importe)
-        elif d.resultado == "devolver":
-            a["devuelto"] -= float(d.importe)
+        a = por_anio.setdefault(d.ejercicio, {"ejercicio": d.ejercicio, "pagado": 0.0, "devuelto": 0.0, "por_modelo": {}})
+        pagado = float(d.importe) if d.importe > 0 else 0.0
+        devuelto = -float(d.importe) if d.importe < 0 and d.resultado == "devolver" else 0.0
+        a["pagado"] += pagado
+        a["devuelto"] += devuelto
+        a["por_modelo"][d.modelo] = round(a["por_modelo"].get(d.modelo, 0.0) + pagado - devuelto, 2)
+    for a in por_anio.values():
+        a["pagado"], a["devuelto"] = round(a["pagado"], 2), round(a["devuelto"], 2)
+        a["neto"] = round(a["pagado"] - a["devuelto"], 2)
     return {"declaraciones": lista, "por_anio": sorted(por_anio.values(), key=lambda x: -x["ejercicio"])}
 
 
@@ -1332,19 +1677,26 @@ class DeclaracionIn(BaseModel):
     importe: Decimal
     fecha_presentacion: date | None = None
     notas: str = ""
+    # Ya tienes ese modelo y periodo y esta lo completa: se suma a lo pagado en vez de rechazarse
+    complementaria: bool = False
 
 
 @router.post("/declaraciones")
 def crear_declaracion(datos: DeclaracionIn, s: Session = SesionDB):
-    v = datos.model_dump()
+    v = datos.model_dump(exclude={"complementaria"})
+    v["modelo"], v["notas"] = v["modelo"].strip(), v["notas"].strip()
     if v["resultado"] in ("devolver", "compensar"):
         v["importe"] = -abs(v["importe"])
+    if declaraciones.presentada(s, v["modelo"], v["ejercicio"], v["periodo"]):
+        if not datos.complementaria:
+            raise HTTPException(409, f"Ya tienes el modelo {v['modelo']} de ese periodo; si es una complementaria, márcalo")
+        v["notas"] = v["notas"] or "Complementaria"
     s.add(Declaracion(**v))
     try:
         s.commit()
     except IntegrityError:
         s.rollback()
-        raise HTTPException(409, "Ya tienes esa declaración apuntada")
+        raise HTTPException(409, "Ya tienes una declaración a mano de ese periodo: edita su importe en vez de añadir otra")
     return {"ok": True}
 
 
@@ -1382,14 +1734,29 @@ def importar_drive(datos: ImportarDriveIn, s: Session = SesionDB):
 
 @router.get("/drive/documentos")
 def listar_documentos_drive(s: Session = SesionDB):
-    import json
     orden = {"pendiente": 0, "error": 1, "importado": 2, "ignorado": 3}
     docs = sorted(s.scalars(select(DocumentoDrive)), key=lambda d: (orden.get(d.estado, 9), d.nombre))
     from finanzas import ia
-    return {"ia": ia.disponible(s), "google_client_id": config.GOOGLE_CLIENT_ID or None,
+    return {"ia": ia.disponible(s),
             "documentos": [{"id": d.id, "nombre": d.nombre, "enlace": d.enlace, "tipo": d.tipo, "estado": d.estado,
                             "mensaje": d.mensaje, "datos": json.loads(d.datos or "{}"),
                             "revisado": iso_utc(d.revisado)} for d in docs]}
+
+
+class ReleerDriveIn(BaseModel):
+    access_token: str
+
+
+@router.post("/drive/documentos/{doc_id}/releer")
+def releer_documento_drive(doc_id: int, datos: ReleerDriveIn, s: Session = SesionDB):
+    """Vuelve a descargar y leer un documento (uno con error, o cuando ya tienes la clave de IA)."""
+    from finanzas.integrations import drive
+    doc = _obtener(s, DocumentoDrive, doc_id)
+    try:
+        drive.releer(s, doc, datos.access_token)
+    except drive.ErrorDrive as e:
+        raise HTTPException(400, str(e))
+    return {"id": doc.id, "estado": doc.estado, "mensaje": doc.mensaje, "datos": json.loads(doc.datos or "{}")}
 
 
 class GastoDriveIn(BaseModel):
@@ -1403,6 +1770,8 @@ def gasto_desde_drive(doc_id: int, datos: GastoDriveIn, s: Session = SesionDB):
     doc = _obtener(s, DocumentoDrive, doc_id)
     if doc.gasto_id:
         raise HTTPException(409, "Ya está apuntado como gasto")
+    if doc.datos in ("", "{}"):
+        raise HTTPException(400, "Este documento aún no se ha leído: pon la clave de IA en Ajustes y pulsa «Volver a leer»")
     drive.crear_gasto(s, doc, datos.deducible_pct, datos.categoria)
     return {"ok": True}
 
@@ -1498,6 +1867,7 @@ def probar_ajustes_ia(s: Session = SesionDB):
 
 class ActivoPatch(BaseModel):
     nombre: str | None = None
+    tipo: str | None = None
     uso: str | None = None
     fecha_compra: date | None = None
     precio_compra: Decimal | None = None
@@ -1511,6 +1881,7 @@ class ActivoPatch(BaseModel):
 @router.patch("/inmuebles/{activo_id}")
 def actualizar_inmueble(activo_id: int, datos: ActivoPatch, s: Session = SesionDB):
     a = _obtener(s, Activo, activo_id)
+    _comprobar_bien(datos.tipo, datos.uso)
     for campo, valor in datos.model_dump(exclude_unset=True).items():
         if valor is not None or campo == "fecha_compra":
             setattr(a, campo, valor)
@@ -1555,6 +1926,7 @@ def borrar_gasto_inmueble(gasto_id: int, s: Session = SesionDB):
 
 class ContratoPatch(BaseModel):
     inquilino: str | None = None
+    fecha_inicio: date | None = None
     fecha_fin: date | None = None
     renta_mensual: Decimal | None = None
     reduccion_pct: Decimal | None = None
@@ -1580,10 +1952,6 @@ def borrar_contrato(contrato_id: int, s: Session = SesionDB):
     return {"ok": True}
 
 
-AJD_MURCIA_PCT = Decimal("1.5")  # actos jurídicos documentados en la compra de obra nueva (Región de Murcia)
-NOTARIA_REGISTRO = Decimal("1200")  # notaría, registro y gestoría, aproximado
-
-
 class EscrituraIn(BaseModel):
     fecha: date
     precio: Decimal | None = None  # sin IVA; vacío: el precio de compra del bien
@@ -1597,25 +1965,29 @@ def gastos_escritura(activo_id: int, datos: EscrituraIn, s: Session = SesionDB):
     if not precio:
         raise HTTPException(400, "Pon el precio de la vivienda (sin IVA)")
     importe = (precio * AJD_MURCIA_PCT / 100 + NOTARIA_REGISTRO).quantize(Decimal("1"))
-    s.add(PagoPrevisto(concepto=f"Escritura {a.nombre}: AJD 1,5 % y notaría (estimado)"[:160], fecha=datos.fecha,
-                       importe=importe, activo_id=a.id))
+    s.add(PagoPrevisto(concepto=f"Escritura {a.nombre}: AJD {_pct_texto(AJD_MURCIA_PCT)} % y notaría (estimado)"[:160],
+                       fecha=datos.fecha, importe=importe, activo_id=a.id))
     s.commit()
-    return {"ok": True, "importe": n(importe)}
+    return {"ok": True, "importe": n(importe), "constantes": _constantes()}
 
 
 @router.get("/inmuebles/{activo_id}/vender")
-def vender_o_alquilar(activo_id: int, precio: float | None = None, gastos_venta_pct: float = 3.0,
+def vender_o_alquilar(activo_id: int, precio: float | None = None, gastos_venta_pct: float | None = None,
                       s: Session = SesionDB):
-    """Compara vender el piso (lo que te quedaría en mano tras impuestos e hipoteca) con seguir alquilándolo."""
+    """Compara vender el piso (lo que te quedaría en mano tras impuestos e hipoteca) con seguir alquilándolo.
+    `precio` es el del piso entero: se escala por tu porcentaje de propiedad; la hipoteca se resta entera."""
     from finanzas import prevision
     a = _obtener(s, Activo, activo_id)
     hoy = date.today()
-    valor, detalle = patrimonio.valor_activo(a, hoy)
-    venta = Decimal(str(precio)) if precio else valor
-    gastos_venta = (venta * Decimal(str(gastos_venta_pct)) / 100).quantize(Decimal("0.01"))
+    parte = a.porcentaje_propiedad / 100
+    pct_venta = Decimal(str(gastos_venta_pct)) if gastos_venta_pct is not None else GASTOS_VENTA_PCT
+    valor, detalle = patrimonio.valor_activo(a, hoy)  # ya es tu parte
+    entero = Decimal(str(precio)) if precio else (valor / parte if parte else valor)
+    venta = (entero * parte).quantize(Decimal("0.01"))
+    gastos_venta = (venta * pct_venta / 100).quantize(Decimal("0.01"))
     contratos = s.scalars(select(ContratoAlquiler).where(ContratoAlquiler.activo_id == a.id)).all()
     amortizado = alquiler.amortizacion_acumulada(a, contratos, hoy)
-    adquisicion = (a.precio_compra + a.gastos_compra) * a.porcentaje_propiedad / 100 - amortizado
+    adquisicion = (a.precio_compra + a.gastos_compra) * parte - amortizado
     ganancia = venta - gastos_venta - adquisicion
     irpf = Decimal(str(round(prevision.escala_ahorro(float(max(ganancia, CERO))), 2)))
     deudas = s.scalars(select(Deuda).where(Deuda.activo_id == a.id)).all()
@@ -1625,21 +1997,31 @@ def vender_o_alquilar(activo_id: int, precio: float | None = None, gastos_venta_
     rent = _rentabilidad(a, contratos, gastos, deudas, valor, hoy)
     prev = prevision.calcular(s)
     renta_actual = next((r for r in prev["anios"] if r["anio"] == hoy.year), None)
-    marginal = (renta_actual or {}).get("tipo_marginal", 45.0) / 100
-    rend = alquiler.calcular_rendimiento(a, contratos, gastos, hoy.year).rendimiento_reducido if contratos else CERO
+    con_supuestos = prevision.tiene_supuestos(prev["supuestos"])
+    marginal = (((renta_actual or {}).get("tipo_marginal") if con_supuestos else None) or 45.0) / 100
+    # Lo que tributa el alquiler este año, con los intereses de la hipoteca como en la ficha
+    rend = alquiler.rendimiento_del_anio(a, contratos, gastos, deudas, hoy.year).rendimiento_reducido if contratos else CERO
     flujo = Decimal(str(rent["flujo_caja_anual"])) if rent else CERO
     flujo_tras_irpf = flujo - rend * Decimal(str(marginal))
+    notas = ["Falta la plusvalía municipal, que depende del valor catastral del suelo y de los años.",
+             "La ganancia tributa en la base del ahorro (19 % a 30 %); si compras tu vivienda habitual "
+             "no hay exención por reinversión porque este piso no es tu vivienda."]
+    if not con_supuestos:
+        notas.append("Sin tu sueldo y tarifas en Ingresos, el IRPF del alquiler se estima al tipo marginal máximo (45 %).")
+    if parte < 1:
+        notas.append(f"El piso es tuyo al {_pct_texto(a.porcentaje_propiedad)} %: el precio, los gastos y la ganancia son tu parte, "
+                     "pero la hipoteca se resta entera, igual que en tu patrimonio.")
     return {
-        "precio_venta": n(venta), "valor_detalle": "el precio que has puesto" if precio else detalle,
-        "gastos_venta": n(gastos_venta), "amortizacion_acumulada": n(amortizado),
+        "precio_venta": n(venta), "precio_entero": n(entero), "porcentaje_propiedad": n(a.porcentaje_propiedad),
+        "valor_detalle": "el precio que has puesto" if precio else detalle,
+        "gastos_venta": n(gastos_venta), "gastos_venta_pct": n(pct_venta), "amortizacion_acumulada": n(amortizado),
         "valor_adquisicion": n(adquisicion), "ganancia": n(ganancia), "irpf_ganancia": n(irpf),
         "hipoteca_pendiente": n(hipoteca), "en_mano": n(en_mano),
-        "alquiler_flujo_anual": n(flujo), "alquiler_irpf_anual": n((rend * Decimal(str(marginal))).quantize(Decimal("0.01"))),
+        "alquiler_flujo_anual": n(flujo), "alquiler_tributa": n(rend), "tipo_marginal": round(marginal * 100, 2),
+        "alquiler_irpf_anual": n((rend * Decimal(str(marginal))).quantize(Decimal("0.01"))),
         "alquiler_flujo_tras_irpf": n(flujo_tras_irpf.quantize(Decimal("0.01"))),
         "rentabilidad_sobre_en_mano": round(float(flujo_tras_irpf / en_mano * 100), 2) if en_mano > 0 else None,
-        "notas": ["Falta la plusvalía municipal, que depende del valor catastral del suelo y de los años.",
-                  "La ganancia tributa en la base del ahorro (19 % a 30 %); si compras tu vivienda habitual "
-                  "no hay exención por reinversión porque este piso no es tu vivienda."],
+        "constantes": _constantes(), "notas": notas,
     }
 
 
@@ -1683,8 +2065,10 @@ def ver_hacienda(s: Session = SesionDB):
                    "imputacion_inmuebles_anio": prev["origen_imputacion_inmuebles_anio"],
                    "valor_rentas_ahorro": prev["rentas_ahorro_anio"],
                    "valor_imputacion": prev["imputacion_inmuebles_anio"]},
-        "plazos": [{"fecha": f(p["fecha"]), "titulo": p["titulo"], "detalle": p["detalle"]}
-                   for p in avisos.plazos(hoy, hoy + timedelta(days=365))],
+        # Todos los plazos del año y los del año que viene: con lo ya presentado (contando la exención del 130)
+        "plazos": [{"fecha": f(p["fecha"]), "titulo": p["titulo"], "detalle": p["detalle"], "ver": p["ver"],
+                    "presentado": p["presentado"], "vencido": p["vencido"]}
+                   for p in avisos.plazos_con_estado(s, date(hoy.year, 1, 1), hoy + timedelta(days=365), prev, hoy)],
         "cuentas": [{"id": c.id, "nombre": c.nombre} for c in s.scalars(
             select(Cuenta).where(Cuenta.activa, Cuenta.tipo.in_(["corriente", "ahorro"])).order_by(Cuenta.nombre))],
     }
@@ -1730,13 +2114,13 @@ def simular_ahorro(pensiones: float = 0, ppes: float = 0, gastos: float = 0, s: 
         raise HTTPException(400, "Falta la previsión de este año")
     cfg = prevision.resolver_clientes(s, prevision.leer(s))
     e = r["entradas"]
-    base = {"pensiones": 0, "ppes": 0, "gastos_actividad": 0}
+    # La base es la renta tal y como se enseña: con las aportaciones ya guardadas en los supuestos (sin `extra`)
     con = {"pensiones": max(pensiones, 0), "ppes": max(ppes, 0), "gastos_actividad": max(gastos, 0)}
     args = (cfg, e["nomina"], e["facturado"], e["retenciones"], e["pagos_130"], e["alquiler"], e["imputacion_app"])
-    sin, simulada = prevision._renta(*args, extra=base), prevision._renta(*args, extra=con)
+    sin, simulada = prevision._renta(*args), prevision._renta(*args, extra=con)
     return {"anio": hoy.year, "cuota_sin": sin["cuota"], "cuota_con": simulada["cuota"],
             "ahorro": round(sin["cuota"] - simulada["cuota"], 2), "tipo_marginal": sin["tipo_marginal"],
-            "reduccion_aplicada": simulada["reduccion_pensiones"],
+            "reduccion_aplicada": simulada["reduccion_pensiones"], "reduccion_guardada": sin["reduccion_pensiones"],
             "limites": {"pensiones": prevision.LIMITE_PENSIONES, "ppes": prevision.LIMITE_PPES,
                         "pct_rendimientos": prevision.LIMITE_PENSIONES_PCT * 100}}
 
@@ -1744,8 +2128,9 @@ def simular_ahorro(pensiones: float = 0, ppes: float = 0, gastos: float = 0, s: 
 # --- Copia de seguridad y calendario ---------------------------------------------
 
 @router.get("/exportar")
-def exportar(pdfs: bool = False, s: Session = SesionDB):
-    """Todos tus datos en JSON. Las claves de API guardadas no salen; los PDF de Hacienda, solo si los pides."""
+def exportar(pdfs: bool = False, destino: str = "", s: Session = SesionDB):
+    """Todos tus datos en JSON. Las claves de API guardadas no salen; los PDF de Hacienda, solo si los pides.
+    Queda registrada como última copia (con `destino=drive` si el frontal la va a subir a tu Google Drive)."""
     import base64
     from finanzas import ajustes as aj, avisos
     from finanzas.models import Ajuste
@@ -1766,29 +2151,34 @@ def exportar(pdfs: bool = False, s: Session = SesionDB):
                 continue  # secretos cifrados
             filas.append(d)
         tablas[tabla.name] = filas
-    aj.guardar(s, avisos.CLAVE_ULTIMA_COPIA, date.today().isoformat())
+    aj.guardar(s, avisos.CLAVE_ULTIMA_COPIA, f"{date.today().isoformat()} {destino.strip()[:20]}".strip())
     nombre = f"finanzas-{date.today().isoformat()}.json"
     return Response(json.dumps({"version": 1, "fecha": date.today().isoformat(), "tablas": tablas}, ensure_ascii=False),
                     media_type="application/json", headers={"Content-Disposition": f'attachment; filename="{nombre}"'})
 
 
 @router.get("/exportar/movimientos.xlsx")
-def exportar_movimientos(s: Session = SesionDB):
+def exportar_movimientos(cuenta_id: int | None = None, categoria_id: int | None = None, q: str = "",
+                         desde: date | None = None, hasta: date | None = None, tipo: str = "",
+                         solo_tuyas: bool = False, s: Session = SesionDB):
+    """Los movimientos en Excel, con los mismos filtros que la lista (sin filtros, todos, también los de
+    cuentas ocultas: sirve de copia)."""
     import io
     from openpyxl import Workbook
     libro = Workbook()
     hoja = libro.active
     hoja.title = "Movimientos"
-    hoja.append(["Fecha", "Cuenta", "Concepto", "Importe", "Tu parte", "Categoría", "Saldo"])
+    hoja.append(["Fecha", "Cuenta", "Concepto", "Importe", "Tu parte", "Categoría", "Saldo", "Nota"])
     filas = s.execute(select(Movimiento.fecha, Cuenta.nombre, Movimiento.concepto, Movimiento.importe,
-                             Movimiento.importe * PARTE, Categoria.nombre, Movimiento.saldo)
+                             Movimiento.importe * PARTE, Categoria.nombre, Movimiento.saldo, Movimiento.nota)
                       .join(Cuenta, Movimiento.cuenta_id == Cuenta.id)
                       .join(Categoria, Movimiento.categoria_id == Categoria.id, isouter=True)
+                      .where(*_filtros_movimientos(cuenta_id, categoria_id, q, desde, hasta, tipo, solo_tuyas))
                       .order_by(Movimiento.fecha.desc(), Movimiento.id.desc()))
-    for fecha, cuenta, concepto, importe, tuyo, cat, saldo in filas:
+    for fecha, cuenta, concepto, importe, tuyo, cat, saldo, nota in filas:
         hoja.append([fecha, cuenta, concepto, float(importe), round(float(tuyo), 2), cat or "",
-                     float(saldo) if saldo is not None else None])
-    for col, ancho in zip("ABCDEFG", (12, 22, 60, 12, 12, 22, 12)):
+                     float(saldo) if saldo is not None else None, nota or ""])
+    for col, ancho in zip("ABCDEFGH", (12, 22, 60, 12, 12, 22, 12, 30)):
         hoja.column_dimensions[col].width = ancho
     salida = io.BytesIO()
     libro.save(salida)
@@ -1796,16 +2186,9 @@ def exportar_movimientos(s: Session = SesionDB):
                     headers={"Content-Disposition": f'attachment; filename="movimientos-{date.today().isoformat()}.xlsx"'})
 
 
-@router.post("/exportar/hecha")
-def copia_hecha(s: Session = SesionDB):
-    """El frontal avisa de que ha guardado la copia en tu Google Drive."""
-    from finanzas import ajustes as aj, avisos
-    aj.guardar(s, avisos.CLAVE_ULTIMA_COPIA, date.today().isoformat())
-    return {"ok": True}
-
-
 @router.get("/calendario/enlace")
 def enlace_calendario():
-    """Dirección secreta para suscribirte desde Google Calendar a los plazos de Hacienda."""
+    """Dirección secreta para suscribirte desde Google Calendar a los plazos de Hacienda, tus pagos previstos,
+    las llamadas de capital, los objetivos con fecha y la caducidad del permiso del banco."""
     from finanzas import calendario
     return {"ruta": f"/calendario/{calendario.token()}.ics"}

@@ -6,6 +6,7 @@ por nombre de columna (fecha operativa, concepto, fecha valor, importe, saldo).
 import csv
 import hashlib
 import io
+import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
@@ -24,6 +25,9 @@ COLUMNAS = {
     "importe": ("importe", "importe (€)", "importe eur"),
     "saldo": ("saldo", "saldo (€)"),
 }
+
+
+MILES_CON_PUNTO = re.compile(r"^-?\d{1,3}(\.\d{3})+$")
 
 
 @dataclass
@@ -50,6 +54,8 @@ def parse_importe(valor) -> Decimal | None:
     s = str(valor).strip().replace("€", "").replace("EUR", "").replace(" ", "").replace("\xa0", "")
     if "," in s:
         s = s.replace(".", "").replace(",", ".")
+    elif MILES_CON_PUNTO.match(s):  # «1.000» o «-1.500» son miles; «1234.56» o «1.5» siguen siendo decimales
+        s = s.replace(".", "")
     try:
         return Decimal(s).quantize(Decimal("0.01"))
     except InvalidOperation:
@@ -186,5 +192,7 @@ def importar(session: Session, cuenta: Cuenta, nombre: str, contenido: bytes) ->
         ultimo = del_dia[0] if descendente else del_dia[-1]
         if cuenta.saldo_fecha is None or ultimo.fecha >= cuenta.saldo_fecha:
             cuenta.saldo, cuenta.saldo_fecha = ultimo.saldo, ultimo.fecha
+    if cuenta.origen == "manual":
+        cuenta.origen = "csv"
     session.commit()
     return res

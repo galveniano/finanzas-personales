@@ -20,7 +20,7 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 import jwt
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from finanzas import config
@@ -140,7 +140,7 @@ class EnableBankingClient:
 
 def _iban(cuenta_api: dict) -> str:
     ident = cuenta_api.get("account_id") or {}
-    return (ident.get("iban") or ident.get("other", {}).get("identification") or "").replace(" ", "")
+    return (ident.get("iban") or ident.get("other", {}).get("identification") or "").replace(" ", "").upper()
 
 
 def _importe(tx: dict) -> Decimal:
@@ -233,8 +233,8 @@ def completar_autorizacion(session: Session, code: str,
     for cta in datos.get("accounts", []):
         iban = _iban(cta)
         cuenta = None
-        if iban:
-            cuenta = session.scalar(select(Cuenta).where(Cuenta.iban == iban))
+        if iban:  # una cuenta creada a mano con el mismo IBAN (aunque lo escribieras con espacios) es esta
+            cuenta = session.scalar(select(Cuenta).where(func.upper(func.replace(Cuenta.iban, " ", "")) == iban))
         if cuenta is None:
             cuenta = session.scalar(select(Cuenta).where(
                 Cuenta.origen == "enable_banking", Cuenta.id_externo == _id_cuenta(cta)
@@ -242,8 +242,11 @@ def completar_autorizacion(session: Session, code: str,
         if cuenta is None:
             nombre = cta.get("name") or cta.get("product") or "Cuenta"
             cuenta = Cuenta(nombre=f"{config.BANCO.replace('Banco ', '')} {iban[-4:] or nombre}"[:120],
-                            entidad=config.BANCO, iban=iban)
+                            entidad=config.BANCO)
             session.add(cuenta)
+        if iban:
+            cuenta.iban = iban
+        cuenta.activa = True  # si estaba oculta, al autorizarla otra vez en el banco vuelve a verse
         cuenta.origen = "enable_banking"
         cuenta.id_externo = _id_cuenta(cta) or cuenta.id_externo
         cuenta.uid_externo = cta["uid"]
@@ -293,7 +296,7 @@ def sincronizar(session: Session, cliente: EnableBankingClient | None = None,
     cliente = cliente or EnableBankingClient()
     limite = time.monotonic() + segundos
     hoy = date.today()
-    cuentas = session.scalars(select(Cuenta).where(Cuenta.conexion_id == con.id)).all()
+    cuentas = session.scalars(select(Cuenta).where(Cuenta.conexion_id == con.id, Cuenta.activa)).all()
     for cuenta in cuentas:
         saldo = _saldo_principal(cliente.saldos(cuenta.uid_externo))
         if saldo is not None:

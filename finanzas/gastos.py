@@ -4,15 +4,17 @@ Cada servicio sale una sola vez aunque se cobre en varias cuentas o con concepto
 («NETFLIX.COM», «COMPRA TARJ NETFLIX»…). Los traspasos entre tus cuentas no son gasto, las cuentas
 que no son tuyas no cuentan y de las compartidas solo cuenta tu parte."""
 import re
+import statistics
 import unicodedata
 from collections import defaultdict
 from datetime import date, timedelta
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from finanzas import auth, db
+from finanzas import auth, db, presupuestos
+from finanzas.fechas import sumar_meses
 from finanzas.models import Cuenta
 from finanzas.prevision import MovTuyo, ids_pagos_previstos, ids_traspaso, movimientos_tuyos
 
@@ -110,6 +112,9 @@ GRUPOS_SUSCRIPCION = {"Streaming", "Música y libros", "Apps y nube", "Juegos", 
 # Categorías que no son gasto del día a día: van aparte
 APARTE = {"Impuestos"}
 PERIODOS = {1: "mensual", 3: "trimestral", 6: "semestral", 12: "anual"}
+# Con qué se compara el periodo analizado: el anterior de la misma duración o el mismo del año pasado
+COMPARAR = ("anterior", "anio_pasado")
+SIN_CATEGORIA = "Sin categoría"
 
 
 def _plano(texto: str) -> str:
@@ -157,13 +162,6 @@ def _inicio_mes(d: date, atras: int = 0) -> date:
     return d
 
 
-def _mediana(valores: list[float]) -> float:
-    v = sorted(valores)
-    if not v:
-        return 0.0
-    return v[len(v) // 2] if len(v) % 2 else (v[len(v) // 2 - 1] + v[len(v) // 2]) / 2
-
-
 def _gastos(s: Session, desde: date, hasta: date) -> tuple[list[MovTuyo], list[MovTuyo], list[MovTuyo]]:
     """(ingresos, gastos del día a día, gastos aparte) de tus cuentas, sin traspasos entre ellas.
     Aparte van los impuestos y los pagos previstos (plazos de la casa, llamadas de capital…)."""
@@ -183,13 +181,16 @@ def _gastos(s: Session, desde: date, hasta: date) -> tuple[list[MovTuyo], list[M
     return ingresos, gastos, aparte
 
 
-def suscripciones(s: Session, hoy: date | None = None) -> list[dict]:
+def suscripciones(s: Session, hoy: date | None = None, con_ocultas: bool = False) -> list[dict]:
     """Suscripciones y recibos que se repiten, una vez cada uno aunque se cobren en varias cuentas.
 
     Un servicio conocido (Netflix, Movistar, Mapfre…) basta con que se cobre; cualquier otro cargo
-    cuenta si se repite en al menos 2 meses distintos, como mucho una vez al mes y por un importe parecido."""
+    cuenta si se repite en al menos 2 meses distintos, como mucho una vez al mes y por un importe parecido.
+    Las que has ocultado (un cargo que no es un fijo de verdad) no salen; con `con_ocultas` salen marcadas
+    con `ignorada` para poder recuperarlas."""
     hoy = hoy or date.today()
     desde = _inicio_mes(hoy, 13)
+    ocultas = presupuestos.claves_ignoradas(s)
     movs = movimientos_tuyos(s, desde, hoy + timedelta(days=1))
     fuera = ids_traspaso(movs) | ids_pagos_previstos(s, movs)
     cuentas = {c.id: c.nombre for c in s.scalars(select(Cuenta))}
@@ -218,7 +219,7 @@ def suscripciones(s: Session, hoy: date | None = None) -> list[dict]:
             cuentas_mes[k].add(m.cuenta_id)
         meses = sorted(por_mes)
         importes = [por_mes[k] for k in meses]
-        mediana = _mediana(importes)
+        mediana = statistics.median(importes)
         if not sv:
             # Un cargo cualquiera: varios meses, como mucho una vez al mes y siempre por lo mismo (±20 %)
             if (len(meses) < 2 or len(cargos) > len(meses) + 1 or mediana <= 0
@@ -228,7 +229,7 @@ def suscripciones(s: Session, hoy: date | None = None) -> list[dict]:
         primeros = [min(m.fecha for m in cargos if m.fecha.strftime("%Y-%m") == k) for k in meses]
         saltos = [(b - a).days for a, b in zip(primeros, primeros[1:])]
         if saltos:
-            salto = _mediana(saltos)
+            salto = statistics.median(saltos)
             cada = 1 if salto < 45 else 3 if salto < 135 else 6 if salto < 270 else 12
         else:
             # Un solo cargo de un servicio conocido, de hace más de mes y medio: si es caro (≥ 30 €) será un
@@ -238,7 +239,7 @@ def suscripciones(s: Session, hoy: date | None = None) -> list[dict]:
         ultimo_importe = por_mes[meses[-1]]
         activa = (hoy - ultimo.fecha).days <= cada * 31 + 20
         # Lo de ahora: la mediana de los 3 últimos meses (si te suben el precio, cuenta el nuevo)
-        al_mes = _mediana(importes[-3:]) if cada == 1 else ultimo_importe / cada
+        al_mes = statistics.median(importes[-3:]) if cada == 1 else ultimo_importe / cada
         subida = None
         doble = {k for k, v in cuentas_mes.items() if len(v) > 1}
         if cada == 1 and sv and sv[2] in GRUPOS_SUSCRIPCION:  # la luz o el teléfono cambian cada mes
@@ -264,9 +265,10 @@ def suscripciones(s: Session, hoy: date | None = None) -> list[dict]:
             "ultimo_cargo": ultimo.fecha.isoformat(), "concepto": ultimo.concepto, "veces": len(cargos),
             "proximo": _proximo(ultimo.fecha, cada).isoformat() if activa else None,
             "activa": activa, "cuentas": varias, "cobro_doble": bool(doble & set(meses[-3:])), "subida": subida,
+            "ignorada": clave in ocultas,
         })
     lista.sort(key=lambda x: (not x["activa"], -x["mes"]))
-    return lista
+    return lista if con_ocultas else [x for x in lista if not x["ignorada"]]
 
 
 def _proximo(ultimo: date, cada: int) -> date:
@@ -280,91 +282,139 @@ def _proximo(ultimo: date, cada: int) -> date:
     return date(anio, mes, 28)
 
 
-def analisis(s: Session, meses: int = 6, hoy: date | None = None) -> dict:
-    """Todo el gasto de los últimos meses completos, comparado con el periodo anterior de la misma duración."""
+def _por_categoria(lista: list[MovTuyo]) -> dict[str, float]:
+    r: dict[str, float] = defaultdict(float)
+    for m in lista:
+        r[m.categoria or SIN_CATEGORIA] -= m.tuyo
+    return r
+
+
+def gasto_mes_en_curso(s: Session, hoy: date | None = None) -> tuple[float, dict[str, float]]:
+    """Gasto del día a día de lo que va de mes y su reparto por categoría (de mayor a menor)."""
     hoy = hoy or date.today()
-    fin = _inicio_mes(hoy)
-    inicio = _inicio_mes(hoy, meses)
-    antes = _inicio_mes(inicio, meses)
-    ingresos, gastos, aparte = _gastos(s, inicio, fin)
-    _, gastos_antes, _ = _gastos(s, antes, inicio)
-    hay_antes = bool(gastos_antes)
-    _, gastos_mes_actual, _ = _gastos(s, fin, hoy + timedelta(days=1))
+    _, gastos, _ = _gastos(s, _inicio_mes(hoy), hoy + timedelta(days=1))
+    por_categoria = sorted(_por_categoria(gastos).items(), key=lambda x: -x[1])
+    return round(-sum(m.tuyo for m in gastos), 2), {k: round(v, 2) for k, v in por_categoria}
+
+
+def analisis(s: Session, meses: int = 6, hoy: date | None = None, mes: date | None = None,
+             comparar: str = "anterior") -> dict:
+    """Todo el gasto de los últimos meses completos (o de un solo `mes`), comparado con el periodo anterior de
+    la misma duración o con el mismo periodo del año pasado (`comparar`). «Mes a mes» (`por_mes`) pinta siempre
+    los últimos `meses` completos, para poder elegir uno de ellos aunque ya haya uno elegido."""
+    hoy = hoy or date.today()
+    fin_ventana = _inicio_mes(hoy)
+    if mes:
+        fin, n = sumar_meses(mes.replace(day=1), 1), 1
+    else:
+        fin, n = fin_ventana, meses
+    inicio = _inicio_mes(fin, n)
+    ventana = _inicio_mes(fin_ventana, meses)
+    if comparar == "anio_pasado":
+        antes, antes_fin = sumar_meses(inicio, -12), sumar_meses(fin, -12)
+    else:
+        antes, antes_fin = _inicio_mes(inicio, n), inicio
+    ingresos_v, gastos_v, aparte_v = _gastos(s, min(ventana, inicio), max(fin_ventana, fin))
+    ingresos = [m for m in ingresos_v if inicio <= m.fecha < fin]
+    gastos = [m for m in gastos_v if inicio <= m.fecha < fin]
+    aparte = [m for m in aparte_v if inicio <= m.fecha < fin]
+    _, gastos_antes, _ = _gastos(s, antes, antes_fin)
+    # Si el histórico no cubre el periodo anterior entero, la media se hace con los meses que sí tienen datos
+    meses_antes = len({m.fecha.strftime("%Y-%m") for m in gastos_antes})
+    hay_antes = meses_antes > 0
+    gasto_este_mes, este_mes_categorias = gasto_mes_en_curso(s, hoy)
 
     total_in = sum(m.tuyo for m in ingresos)
     total_g = -sum(m.tuyo for m in gastos)
+    total_g_antes = -sum(m.tuyo for m in gastos_antes)
 
-    # Mes a mes
-    por_mes = {_inicio_mes(fin, i).strftime("%Y-%m"): {"ingresos": 0.0, "gastos": 0.0, "aparte": 0.0}
+    # Mes a mes, sobre la ventana completa
+    por_mes = {_inicio_mes(fin_ventana, i).strftime("%Y-%m"): {"ingresos": 0.0, "gastos": 0.0, "aparte": 0.0}
                for i in range(meses, 0, -1)}
-    for lista, campo, signo in ((ingresos, "ingresos", 1), (gastos, "gastos", -1), (aparte, "aparte", -1)):
+    for lista, campo, signo in ((ingresos_v, "ingresos", 1), (gastos_v, "gastos", -1), (aparte_v, "aparte", -1)):
         for m in lista:
             k = m.fecha.strftime("%Y-%m")
             if k in por_mes:
                 por_mes[k][campo] += signo * m.tuyo
 
     # Por categoría, con los sitios donde más se gasta en cada una
-    def por_categoria(lista: list[MovTuyo]) -> dict[str, float]:
-        r: dict[str, float] = defaultdict(float)
-        for m in lista:
-            r[m.categoria or "Sin categoría"] -= m.tuyo
-        return r
-    cat, cat_antes = por_categoria(gastos), por_categoria(gastos_antes)
+    cat, cat_antes = _por_categoria(gastos), _por_categoria(gastos_antes)
+    veces_cat: dict[str, int] = defaultdict(int)
     sitios_cat: dict[str, dict[str, list]] = defaultdict(dict)
     sitios: dict[str, list] = {}
+    claves = {m.id: comercio(m) for m in gastos}
     for m in gastos:
-        clave, nombre = comercio(m)
-        for destino in (sitios_cat[m.categoria or "Sin categoría"], sitios):
+        clave, nombre = claves[m.id]
+        veces_cat[m.categoria or SIN_CATEGORIA] += 1
+        for destino in (sitios_cat[m.categoria or SIN_CATEGORIA], sitios):
             fila = destino.setdefault(clave, [nombre, 0.0, 0, servicio(m.concepto), m.categoria])
             fila[1] -= m.tuyo
             fila[2] += 1
     categorias = []
     for nombre, total in sorted(cat.items(), key=lambda x: -x[1]):
-        previo = cat_antes.get(nombre, 0.0)
+        media = total / n
+        media_antes = cat_antes.get(nombre, 0.0) / meses_antes if hay_antes else None
         top = sorted(sitios_cat[nombre].values(), key=lambda x: -x[1])[:5]
         categorias.append({
-            "categoria": nombre, "total": round(total, 2), "mes": round(total / meses, 2),
+            "categoria": nombre, "total": round(total, 2), "mes": round(media, 2), "veces": veces_cat[nombre],
             "peso": round(total / total_g * 100, 1) if total_g else 0,
-            "mes_antes": round(previo / meses, 2) if hay_antes else None,
-            "cambio": round((total - previo) / previo * 100, 1) if hay_antes and previo else None,
+            "mes_antes": round(media_antes, 2) if media_antes is not None else None,
+            "cambio": round((media - media_antes) / media_antes * 100, 1) if media_antes else None,
             "sitios": [{"nombre": n_, "total": round(t, 2), "veces": v} for n_, t, v, _, _ in top],
         })
 
     def fila_sitio(x: list) -> dict:
         n_, t, v, sv, categoria = x
-        return {"nombre": n_, "total": round(t, 2), "veces": v, "mes": round(t / meses, 2), "categoria": categoria,
+        return {"nombre": n_, "total": round(t, 2), "veces": v, "mes": round(t / n, 2), "categoria": categoria,
                 "icono": sv[0] if sv else None, "color": sv[4] if sv else None}
 
-    subs = suscripciones(s, hoy)
+    todas = suscripciones(s, hoy, con_ocultas=True)
+    subs = [x for x in todas if not x["ignorada"]]
     fijos = {x["clave"] for x in subs}
     activas = [x for x in subs if x["activa"]]
-    fijo = sum(x["mes"] for x in activas)
-    gasto_mes = total_g / meses
+    # El fijo real del periodo: lo cobrado en él por las suscripciones y recibos reconocidos
+    fijo = -sum(m.tuyo for m in gastos if claves[m.id][0] in fijos) / n
+    gasto_mes = total_g / n
     ultimo_mes = list(por_mes.values())[-1]["gastos"] if por_mes else 0.0
     return {
-        "desde": inicio.isoformat(), "hasta": (fin - timedelta(days=1)).isoformat(), "meses": meses,
-        "ingresos_mes": round(total_in / meses, 2), "gastos_mes": round(gasto_mes, 2),
-        "ahorro_mes": round((total_in - total_g) / meses, 2),
+        "desde": inicio.isoformat(), "hasta": (fin - timedelta(days=1)).isoformat(), "meses": n,
+        "mes": mes.strftime("%Y-%m") if mes else None, "comparar": comparar,
+        "antes": {"desde": antes.isoformat(), "hasta": (antes_fin - timedelta(days=1)).isoformat(),
+                  "meses": meses_antes} if hay_antes else None,
+        "ingresos_mes": round(total_in / n, 2), "gastos_mes": round(gasto_mes, 2),
+        "ahorro_mes": round((total_in - total_g) / n, 2),
         "tasa_ahorro": round((total_in - total_g) / total_in * 100, 1) if total_in else None,
-        "gastos_mes_antes": round(-sum(m.tuyo for m in gastos_antes) / meses, 2) if hay_antes else None,
+        "gastos_mes_antes": round(total_g_antes / meses_antes, 2) if hay_antes else None,
         "ultimo_mes": {"mes": list(por_mes)[-1] if por_mes else None, "gastos": round(ultimo_mes, 2)},
-        "este_mes": {"gastos": round(-sum(m.tuyo for m in gastos_mes_actual), 2), "dia": hoy.day},
+        "este_mes": {"gastos": gasto_este_mes, "dia": hoy.day, "por_categoria": este_mes_categorias},
         "fijo_mes": round(fijo, 2), "variable_mes": round(max(gasto_mes - fijo, 0), 2),
         "por_mes": [{"mes": k, **{c: round(v, 2) for c, v in d.items()}} for k, d in por_mes.items()],
         "categorias": categorias,
         "sitios": [fila_sitio(x) for x in sorted(sitios.values(), key=lambda x: -x[1])[:10]],
-        "mayores": [{"fecha": m.fecha.isoformat(), "concepto": m.concepto, "nombre": comercio(m)[1],
+        "mayores": [{"fecha": m.fecha.isoformat(), "concepto": m.concepto, "nombre": claves[m.id][1],
                      "categoria": m.categoria, "importe": round(-m.tuyo, 2)}
-                    for m in sorted((m for m in gastos if comercio(m)[0] not in fijos), key=lambda m: m.tuyo)[:8]],
+                    for m in sorted((m for m in gastos if claves[m.id][0] not in fijos), key=lambda m: m.tuyo)[:8]],
         "aparte": {"total": round(-sum(m.tuyo for m in aparte), 2),
                    "impuestos": round(-sum(m.tuyo for m in aparte if m.categoria in APARTE), 2)},
         "suscripciones": [x for x in subs if x["tipo"] == "suscripcion"],
         "recibos": [x for x in subs if x["tipo"] == "recibo"],
+        "ignoradas": [x for x in todas if x["ignorada"]],
         "suscripciones_mes": round(sum(x["mes"] for x in activas if x["tipo"] == "suscripcion"), 2),
         "recibos_mes": round(sum(x["mes"] for x in activas if x["tipo"] == "recibo"), 2),
     }
 
 
 @router.get("/gastos")
-def ver_gastos(meses: int = 6, s: Session = Depends(db.get_session)):
-    return analisis(s, max(1, min(meses, 12)))
+def ver_gastos(meses: int = 6, mes: str | None = None, comparar: str = "anterior", s: Session = Depends(db.get_session)):
+    """`mes=AAAA-MM` analiza solo ese mes (ya terminado); `comparar`: anterior | anio_pasado."""
+    if comparar not in COMPARAR:
+        raise HTTPException(400, "«comparar» debe ser «anterior» o «anio_pasado»")
+    mes_fecha = None
+    if mes:
+        try:
+            mes_fecha = date.fromisoformat(f"{mes}-01")
+        except ValueError:
+            raise HTTPException(400, "El mes debe tener la forma AAAA-MM") from None
+        if mes_fecha >= date.today().replace(day=1):
+            raise HTTPException(400, "Ese mes aún no ha terminado: elige uno anterior")
+    return analisis(s, max(1, min(meses, 12)), mes=mes_fecha, comparar=comparar)

@@ -64,8 +64,8 @@ def test_flujo_enable_banking(monkeypatch):
     db.init_db()
     s = db.SessionLocal()
     sembrar_categorias(s)
-    # Cuenta creada antes a mano con el mismo IBAN: se reutiliza en vez de duplicarse
-    s.add(Cuenta(nombre="Mi Sabadell", iban="ES0000810000000000000001"))
+    # Cuenta creada antes a mano con el mismo IBAN (escrito con espacios y minúsculas): se reutiliza en vez de duplicarse
+    s.add(Cuenta(nombre="Mi Sabadell", iban="es00 0081 0000 0000 0000 0001"))
     s.commit()
     peticiones: list = []
     cliente = eb.EnableBankingClient(app_id="app-123", clave_privada=PEM, base_url="https://eb",
@@ -76,6 +76,7 @@ def test_flujo_enable_banking(monkeypatch):
     assert code == "abc123"
     con = eb.completar_autorizacion(s, code, cliente)
     assert con.valida_hasta.date() == date(2027, 4, 1)
+    assert s.query(Cuenta).filter_by(iban="ES0000810000000000000001").count() == 1  # y queda con el IBAN normalizado
 
     # Sin tiempo (Vercel corta a los 60 s): los saldos se guardan igual y los movimientos quedan para después
     r = eb.sincronizar(s, cliente, segundos=0)
@@ -94,6 +95,12 @@ def test_flujo_enable_banking(monkeypatch):
 
     sync.sincronizar_sabadell(s, cliente)  # repetir no duplica
     assert s.query(Movimiento).filter_by(cuenta_id=cuenta.id).count() == 2
+    cuenta.activa = False  # oculta en Cuentas: deja de sincronizarse…
+    s.commit()
+    assert eb.sincronizar(s, cliente)["cuentas"] == 0
+    eb.completar_autorizacion(s, code, cliente)  # …hasta que la vuelves a autorizar en el banco
+    assert cuenta.activa and s.query(Cuenta).filter_by(iban="ES0000810000000000000001").count() == 1
+    assert eb.sincronizar(s, cliente)["cuentas"] == 1
     s.close()
 
 

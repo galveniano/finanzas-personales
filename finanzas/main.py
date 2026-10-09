@@ -8,12 +8,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlencode
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import exc as sa_exc
 
-from finanzas import auth, calendario, config, db, facturacion, gastos, sync
+from finanzas import actividad, auth, bienes, buscar, calendario, config, cuentas, db, facturacion, gastos, impuestos, plan, presupuestos, sync
 from finanzas.api import COOKIE_ESTADO_BANCO, router
 from finanzas.categorizar import sembrar_categorias
 from finanzas.integrations import enablebanking
@@ -42,7 +42,14 @@ app = FastAPI(title="Finanzas personales", lifespan=lifespan)
 app.include_router(auth.router)
 app.include_router(calendario.router)
 app.include_router(gastos.router)
+app.include_router(presupuestos.router)
 app.include_router(facturacion.router)
+app.include_router(impuestos.router)
+app.include_router(actividad.router)
+app.include_router(plan.router)
+app.include_router(bienes.router)
+app.include_router(buscar.router)
+app.include_router(cuentas.router)  # antes que api.router: /movimientos/categoria no debe caer en /movimientos/{mov_id}
 app.include_router(router)
 
 
@@ -69,15 +76,26 @@ def cron_sync(request: Request):
         return {"resultados": sync.sincronizar_todo(s)}
 
 
-@app.get("/sabadell/vuelta", dependencies=[Depends(auth.requiere_sesion)])
+def _a_ajustes_con_error(motivo: str) -> RedirectResponse:
+    return RedirectResponse("/#/ajustes?" + urlencode({"sabadell_error": motivo[:300]}))
+
+
+@app.get("/sabadell/vuelta")
 def vuelta_sabadell(request: Request, code: str = "", state: str = ""):
-    """Vuelta desde el banco cuando la app se sirve por https (Vercel). En local se pega la URL en Ajustes."""
+    """Vuelta desde el banco cuando la app se sirve por https (Vercel). En local se pega la URL en Ajustes.
+    Es una página que abre el navegador, no una llamada de la app: sin sesión se vuelve a Ajustes con el motivo
+    en vez de enseñar un error en JSON."""
+    try:
+        auth.requiere_sesion(request)
+    except HTTPException as e:
+        return _a_ajustes_con_error(f"No se pudo terminar la conexión con el banco: {e.detail}. "
+                                    "Entra en la app y vuelve a pulsar Conectar.")
     if not code:
         return RedirectResponse("/#/ajustes")
     esperado = request.cookies.get(COOKIE_ESTADO_BANCO, "")
     if not esperado or not hmac.compare_digest(state, esperado):
-        motivo = "La vuelta del banco no corresponde a una conexión que hayas empezado aquí. Vuelve a pulsar Conectar."
-        return RedirectResponse("/#/ajustes?" + urlencode({"sabadell_error": motivo}))
+        return _a_ajustes_con_error("La vuelta del banco no corresponde a una conexión que hayas empezado aquí. "
+                                    "Vuelve a pulsar Conectar.")
     db.asegurar_tablas()
     with db.SessionLocal() as s:
         try:
@@ -85,8 +103,7 @@ def vuelta_sabadell(request: Request, code: str = "", state: str = ""):
         except Exception as e:  # el code del banco es de un solo uso: hay que enseñar el motivo
             s.rollback()
             log.exception("Fallo al completar la autorización de Sabadell")
-            motivo = str(e) if isinstance(e, enablebanking.EnableBankingError) else f"{type(e).__name__}: {e}"
-            return RedirectResponse("/#/ajustes?" + urlencode({"sabadell_error": motivo[:300]}))
+            return _a_ajustes_con_error(str(e) if isinstance(e, enablebanking.EnableBankingError) else f"{type(e).__name__}: {e}")
         # La conexión ya está guardada; si la primera carga falla, queda registrada en Ajustes
         sync.sincronizar_sabadell(s)
         try:

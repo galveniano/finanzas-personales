@@ -1,0 +1,3 @@
+# Para desarrollar y ejecutar las pruebas (la app solo necesita requirements.txt)
+-r requirements.txt
+pytest>=8

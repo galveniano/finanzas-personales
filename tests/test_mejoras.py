@@ -84,9 +84,10 @@ def test_patron_y_reglas_aprendidas():
 
 
 def test_calendario_de_plazos():
-    texto = calendario.ics(date(2026, 10, 4))
-    assert "BEGIN:VCALENDAR" in texto and "DTSTART;VALUE=DATE:20261020" in texto and "303 y 130 del 3T 2026" in texto
     with TestClient(app) as c:
+        with db.SessionLocal() as s:
+            texto = calendario.ics(s, date(2026, 10, 4))
+        assert "BEGIN:VCALENDAR" in texto and "DTSTART;VALUE=DATE:20261020" in texto and "303 y 130 del 3T 2026" in texto
         ruta = c.get("/api/calendario/enlace").json()["ruta"]
         assert c.get(ruta).status_code == 200 and c.get("/calendario/otro.ics").status_code == 404
 

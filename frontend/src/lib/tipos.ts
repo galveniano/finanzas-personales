@@ -1,9 +1,11 @@
 export interface Linea { nombre: string; grupo: string; importe: number; detalle: string }
 export interface UltimaSync { fecha: string; ok: boolean; mensaje: string }
+export interface ResultadoSync { fuente: string; ok: boolean; mensaje: string }
+export interface RespuestaSync { resultados: ResultadoSync[]; estado: EstadoSync }
 export interface EstadoSync {
   sabadell: {
     configurado: boolean; conectado: boolean; valida_hasta: string | null; ultima: UltimaSync | null
-    url_vuelta?: string; vuelta_automatica?: boolean
+    url_vuelta?: string; vuelta_automatica?: boolean; historico_desde?: string | null
   }
   indexa: { configurado: boolean; ultima: UltimaSync | null }
   cada_horas: number
@@ -13,21 +15,26 @@ export interface Resumen {
   fecha: string; neto: number; activos: number; pasivos: number
   grupos: { grupo: string; importe: number }[]
   lineas_activo: Linea[]; lineas_pasivo: Linea[]
-  historico: { fecha: string; neto: number; liquidez: number; inversiones: number; inmuebles: number; vehiculos: number | null; deudas: number }[]
-  flujo_mensual: { mes: string; ingresos: number; gastos: number }[]
-  gasto_categorias: { categoria: string; importe: number }[]
-  proximos_pagos: { id: number; concepto: string; fecha: string; importe: number }[]
+  historico: PuntoHistorico[]
+  proximos_pagos: Pago[]  // los 6 pendientes más cercanos, en el mismo formato que Plan
   fiscal: {
     trimestre: number; anio: number
     iva: { resultado: number; presentado: boolean; previsto: boolean; repercutido: number; soportado: number; plazo: string }
     irpf: { resultado: number; presentado: boolean; previsto: boolean; exento: boolean; notas: string[]; plazo: string }
     renta: { anio: number; resultado: number; cuota: number; neto_mes: number; bruto_mes: number } | null
   }
-  sync: EstadoSync
   liquidez: number; disponible: number
   hacienda_pendiente: Pendiente
+  gastos: GastosResumenInicio
   avisos: Aviso[]
 }
+/** Foto del patrimonio: un punto por día en los últimos 3 meses, por semana hasta un año y por mes más atrás. */
+export interface PuntoHistorico {
+  fecha: string; neto: number; liquidez: number; inversiones: number; inmuebles: number; vehiculos: number | null
+  otros: number; deudas: number
+}
+/** Tarjeta «Este mes» de Inicio: lo gastado, la media de los 3 últimos meses y a cuánto se acabará a este ritmo. */
+export interface GastosResumenInicio { este_mes: number; dia: number; media_mes: number; proyeccion: number }
 export interface Aviso { nivel: 'error' | 'aviso' | 'info'; texto: string; ir: string }
 export interface LineaPendiente { concepto: string; importe: number; tipo: 'iva' | '130' | 'renta'; en_curso: boolean }
 export interface Pendiente { lineas: LineaPendiente[]; total: number }
@@ -35,10 +42,15 @@ export interface CuotaAutonomos {
   anio: number; rendimiento_neto: number; cuota_pagada: number; rendimiento_computable_mes: number; tramo: number
   base_minima: number; base_maxima: number; cuota_minima_anual: number; cuota_maxima_anual: number
   a_pagar: number; a_devolver: number; devolucion_pluriactividad: number; fuente: string; previsto: boolean
+  tipo: number; base_cotizada_mes: number; meses_hasta_regularizacion: number
+}
+export interface PlazoHacienda {
+  fecha: string; titulo: string; detalle: string; ver: 'trimestres' | 'renta'
+  presentado: boolean | null; vencido: boolean  // presentado: null si el plazo no exige ningún modelo
 }
 export interface Hacienda {
   pendiente: Pendiente
-  hucha: { cuenta_id: number | null; cuenta: string | null; apartado: number | null; debes_hoy: number
+  hucha: { cuenta_id: number | null; cuenta: string | null; apartado: number | null
     renta_prevista: number; falta: number; al_mes: number; meses_hasta_junio: number }
   cuota_autonomos: CuotaAutonomos[]
   renta: { anio: number; base: number; base_liquidable: number; base_ahorro: number; imputacion_inmuebles: number
@@ -46,23 +58,31 @@ export interface Hacienda {
   supuestos: { aportacion_pensiones_anio: number | null; aportacion_ppes_anio: number | null; fraccionar_renta: boolean | null
     rentas_ahorro_anio: number | null; imputacion_inmuebles_anio: number | null }
   origen: { rentas_ahorro_anio: string; imputacion_inmuebles_anio: string; valor_rentas_ahorro: number; valor_imputacion: number }
-  plazos: { fecha: string; titulo: string; detalle: string }[]
+  plazos: PlazoHacienda[]
   cuentas: { id: number; nombre: string }[]
 }
 export interface AhorroFiscal {
-  anio: number; cuota_sin: number; cuota_con: number; ahorro: number; tipo_marginal: number; reduccion_aplicada: number
+  anio: number; cuota_sin: number; cuota_con: number; ahorro: number; tipo_marginal: number
+  reduccion_aplicada: number; reduccion_guardada: number
   limites: { pensiones: number; ppes: number; pct_rendimientos: number }
 }
 export interface Cuenta {
   id: number; nombre: string; entidad: string; tipo: string; iban: string; origen: string
   saldo: number; saldo_fecha: string | null; ultima_sincronizacion: string | null
-  participacion: number; saldo_tuyo: number
+  participacion: number; saldo_tuyo: number; activa: boolean
+  evolucion: { fecha: string; saldo: number }[]  // último saldo de cada uno de los últimos 12 meses (vacío si no guarda saldos)
+  mes: { entran: number; salen: number }  // sumas del mes en curso, las dos en positivo
 }
-export interface Categoria { id: number; nombre: string; tipo: string; ambito: string }
+export interface Categoria { id: number; nombre: string; tipo: string; ambito: string; de_serie: boolean }
+export interface ReglaCategoria { id: number; patron: string; categoria_id: number; categoria: string; aprendida: boolean }
 export interface Movimiento {
-  id: number; cuenta_id: number; cuenta: string; fecha: string; concepto: string
-  importe: number; saldo: number | null; categoria_id: number | null
+  id: number; cuenta_id: number; cuenta: string; fecha: string; fecha_valor: string | null; concepto: string
+  importe: number; saldo: number | null; categoria_id: number | null; nota: string
+  traspaso: boolean  // salida y entrada del mismo importe entre dos cuentas tuyas con pocos días de diferencia
+  manual: boolean  // apuntado a mano en la app: se puede editar y borrar
 }
+/** Una página de movimientos, el total que hay con esos filtros y lo que entra y sale en total (las dos en positivo). */
+export interface Movimientos { movimientos: Movimiento[]; total: number; suma_ingresos: number; suma_gastos: number }
 export interface Trimestre {
   trimestre: number; plazo: string; base: number; iva_repercutido: number; iva_soportado: number
   iva_resultado: number; rendimiento_acumulado: number; retenciones_acumuladas: number
@@ -75,12 +95,17 @@ export interface Factura {
   id: number; numero: string; cliente: string; fecha: string; concepto: string; base: number
   tipo_iva: number; tipo_retencion: number; cuota_iva: number; retencion: number; total: number
   fecha_cobro: string | null; con_detalle: boolean
+  cobrada: boolean; dias_pendiente: number | null  // días desde la factura si aún no está cobrada
 }
+/** Facturas sin cobrar, de cualquier año. */
+export interface PorCobrar { total: number; facturas: number; mas_antigua_dias: number | null }
+/** Ingreso del banco que cuadra con una factura pendiente (mismo total ±1 €). */
+export interface SugerenciaCobro { factura_id: number; movimiento_id: number; fecha: string; importe: number }
 export type TipoDia = 'vacaciones' | 'no_disponible'
 export interface Emisor { nombre: string; nif: string; direccion: string; email: string; telefono: string; iban: string; pie: string }
-export interface ClienteFacturacion { nombre: string; nif: string; direccion: string; idioma: 'es' | 'en'; nota_factura: string }
+export interface ClienteFacturacion { nombre: string; nif: string; direccion: string; idioma: 'es' | 'en'; nota_factura: string; facturas: number }
 export interface Facturacion {
-  emisor: Emisor; clientes: ClienteFacturacion[]; dias_no_disponibles: Record<string, TipoDia>; siguiente_numero: string
+  emisor: Emisor; clientes: ClienteFacturacion[]; dias_no_disponibles: Record<string, TipoDia>
 }
 export interface GastoAutonomo {
   id: number; fecha: string; proveedor: string; concepto: string; categoria: string
@@ -92,59 +117,122 @@ export interface Autonomo {
   ingresos_declarados: number | null; ultimo_130: number | null; pagado_iva: number; pagado_irpf: number
   por_cliente: { cliente: string; base: number }[]
   facturas: Factura[]; gastos: GastoAutonomo[]; clientes: string[]
+  por_cobrar: PorCobrar; sugerencias_cobro: SugerenciaCobro[]; avisos_numeracion: string[]
 }
+/** Lo del año que hace falta para el 390 y para saber si toca el 347. */
+export interface ResumenAnual {
+  anio: number; facturas: number; gastos: number
+  repercutido: { tipo: number; base: number; cuota: number }[]
+  base_total: number; iva_repercutido: number; base_soportada: number; iva_soportado: number; retenciones: number
+  trimestres: { trimestre: number; calculado: number; presentado: number | null }[]
+  presentado_303: number | null; calculado_303: number; umbral_347: number
+  terceros_347: { nombre: string; nif: string; tipo: 'cliente' | 'proveedor'; importe: number; operaciones: number; con_retencion: boolean }[]
+}
+/** Cargo de la cuota de autónomos en el banco que aún no está apuntado como gasto. */
+export interface CargoTgss { fecha: string; importe: number }
+export interface CargosTgss { cargos: CargoTgss[]; n: number; total: number }
 export interface Nomina {
   id: number; empresa: string; fecha: string; bruto: number; retencion_irpf: number
   seguridad_social: number; neto: number; tipo_irpf: number | null; base_irpf: number | null
   especie: number | null; otras_deducciones: number | null; paga_extra: boolean; tiene_pdf: boolean
 }
+/** Un mes del año: el neto de las nóminas registradas frente a lo que entró en el banco como nómina. */
+export interface MesNomina { mes: string; nomina_neto: number | null; banco_importe: number | null; banco_fecha: string | null; cuadra: boolean }
+/** Tipo de retención que, pedido a la empresa desde el mes que viene, dejaría la renta del año en cero. */
+export interface RetencionRecomendada { tipo_actual: number; tipo_recomendado: number; resultado_previsto: number; meses_restantes: number }
 export interface Nominas {
   anio: number; nominas: Nomina[]; bruto_12_meses: number | null; tipo_irpf_actual: number | null
   totales: { bruto: number; retencion_irpf: number; seguridad_social: number; neto: number }
   fuente: 'nominas' | 'banco' | 'ninguna'
   estimado_banco: { neto_medio_mes: number; meses: number; bruto_anual: number; irpf_anual: number; ss_anual: number; tipo_irpf: number } | null
   banco: { id: number; fecha: string; concepto: string; importe: number; cuenta: string }[]
+  meses: MesNomina[]; retencion_recomendada: RetencionRecomendada | null
 }
 export interface Rendimiento {
   anio: number; ingresos: number; gastos_limitados: number; gastos_otros: number; amortizacion: number
   rendimiento_neto: number; reduccion_pct: number; reduccion: number; rendimiento_reducido: number; notas: string[]
 }
+/** Porcentajes y cifras fijas de las estimaciones de Bienes (vienen del backend, no se escriben aquí). */
+export interface Constantes { gastos_venta_pct: number; ajd_pct: number; notaria: number; amortizacion_pct: number }
+/** Si el inquilino ha pagado un mes: el ingreso que cuadra con la renta (o de categoría «Alquiler cobrado»). */
+export interface Cobro { mes: string; renta: number; fecha: string | null; importe: number | null; cuadra: boolean }
+export interface Deuda {
+  id: number; nombre: string; entidad: string; tipo: 'hipoteca' | 'prestamo' | 'otro'; activo_id: number | null
+  capital_inicial: number; tipo_interes_anual: number; plazo_meses: number; fecha_inicio: string | null
+  saldo_pendiente_manual: number | null; saldo_fecha: string | null
+  cuota: number; pendiente: number; intereses_anio: number; futura: boolean
+  fin: string | null; cuotas_restantes: number; intereses_restantes: number
+}
+/** Una deuda de la lista general, con el nombre del bien al que va ligada. */
+export interface Prestamo extends Deuda { activo: string | null }
+export interface Contrato {
+  id: number; inquilino: string; fecha_inicio: string; fecha_fin: string | null; renta_inicial: number
+  renta_actual: number; reduccion_pct: number; cambios: { id: number; desde: string; renta: number }[]; cobros: Cobro[]
+}
+export interface GastoInmueble { id: number; fecha: string; tipo: string; importe: number; concepto: string }
+export interface Valoracion { id: number; fecha: string; valor: number; deuda: number }
 export interface Inmueble {
   id: number; nombre: string; tipo: string; uso: string; fecha_compra: string | null
   precio_compra: number; gastos_compra: number; valor_catastral: number; valor_catastral_construccion: number
-  porcentaje_propiedad: number; valor: number; valor_detalle: string; deuda: number; equity: number
-  valoraciones: { id: number; fecha: string; valor: number }[]
-  hipotecas: { id: number; nombre: string; entidad: string; capital_inicial: number; tipo_interes_anual: number
-    plazo_meses: number; fecha_inicio: string | null; cuota: number; pendiente: number; intereses_anio: number; futura: boolean }[]
-  contratos: { id: number; inquilino: string; fecha_inicio: string; fecha_fin: string | null; renta_inicial: number
-    renta_actual: number; reduccion_pct: number; cambios: { desde: string; renta: number }[] }[]
-  gastos: { id: number; fecha: string; tipo: string; importe: number; concepto: string }[]
+  porcentaje_propiedad: number; coste: number; deuda_compra: number | null; plusvalia_latente: number | null
+  valor: number; valor_detalle: string; deuda: number; equity: number
+  valoraciones: Valoracion[]
+  hipotecas: Deuda[]
+  contratos: Contrato[]
+  gastos: GastoInmueble[]
   pagos: { id: number; concepto: string; fecha: string; importe: number; pagado: boolean }[]
   rendimiento: Rendimiento | null
   rentabilidad: Rentabilidad | null; notas: string
 }
+export interface Inmuebles { anio: number; inmuebles: Inmueble[]; constantes: Constantes }
 export interface VenderOAlquilar {
-  precio_venta: number; valor_detalle: string; gastos_venta: number; amortizacion_acumulada: number
+  precio_venta: number; precio_entero: number; porcentaje_propiedad: number; valor_detalle: string
+  gastos_venta: number; gastos_venta_pct: number; amortizacion_acumulada: number
   valor_adquisicion: number; ganancia: number; irpf_ganancia: number; hipoteca_pendiente: number; en_mano: number
-  alquiler_flujo_anual: number; alquiler_irpf_anual: number; alquiler_flujo_tras_irpf: number
-  rentabilidad_sobre_en_mano: number | null; notas: string[]
+  alquiler_flujo_anual: number; alquiler_tributa: number; tipo_marginal: number; alquiler_irpf_anual: number; alquiler_flujo_tras_irpf: number
+  rentabilidad_sobre_en_mano: number | null; constantes: Constantes; notas: string[]
 }
 export interface Rentabilidad {
   renta_anual: number; gastos_anuales: number; intereses_anuales: number; cuotas_anuales: number
   coste: number; aportado: number; bruta: number | null; neta: number | null; neta_sobre_valor: number | null
   sobre_aportado: number | null; flujo_caja_anual: number
 }
+/** Si todo el ahorro medio de la previsión fuera a este objetivo: el mes en que lo tendrías (vacío si no ahorras),
+ *  si es antes de su fecha (vacío sin fecha) y lo que faltaría ese día si no llegas. */
+export interface LlegasEn { mes: string | null; a_tiempo: boolean | null; faltara: number }
+export interface CuadroHipoteca {
+  anios: { anio: number; cuotas: number; intereses: number; amortizado: number; pendiente_fin: number }[]
+  resumen: { cuotas_restantes: number; cuota: number; pendiente: number; intereses_restantes: number; fin: string; desde_saldo_real: boolean }
+}
+export interface SimulacionAmortizacion {
+  importe: number; modo: 'plazo' | 'cuota'; pendiente_hoy: number; cuota_actual: number; cuotas_restantes: number
+  intereses_restantes: number; intereses_con: number; ahorro_intereses: number; meses_menos: number; nueva_cuota: number
+  fin_actual: string; nuevo_fin: string
+  comparativa: { cuenta: string; rentabilidad_esperada: number; meses: number; rendiria: number; rendiria_neto: number; mejor: 'invertir' | 'amortizar' } | null
+  fiscal: { deducible: boolean; tipo_marginal: number | null; tipo_efectivo: number | null; ahorro_neto: number; nota: string }
+  notas: string[]
+}
 export interface Objetivo {
   id: number; nombre: string; tipo: string; fecha_objetivo: string | null; importe_objetivo: number
-  ahorrado: number; ahorro_mensual: number | null
+  ahorrado: number; ahorro_mensual: number | null; notas: string
+  // Ligado a una cuenta, lo ahorrado es su saldo (tu parte) y no se edita a mano
+  cuenta_id: number | null; cuenta: string | null; ahorrado_automatico: boolean; llegas_en: LlegasEn | null
 }
+export interface VistoEnBanco { movimiento_id: number; fecha: string; importe: number }
 export interface Pago {
   id: number; concepto: string; fecha: string; importe: number; pagado: boolean
+  objetivo_id: number | null; activo_id: number | null
   objetivo: string | null; inmueble: string | null; inversion: string | null
+  visto_en_banco: VistoEnBanco | null
 }
 export interface Planificacion {
-  liquidez: number; pendiente_12_meses: number; financiado_hipoteca: number; objetivos: Objetivo[]; pagos: Pago[]
+  // pendiente_12_meses: pagos previstos pendientes más los objetivos con fecha sin pagos (objetivos_12_meses),
+  // menos lo que pone una hipoteca prevista (financiado_hipoteca); lo mismo que resta la previsión
+  liquidez: number; pendiente_12_meses: number; financiado_hipoteca: number; objetivos_12_meses: number
+  objetivos: Objetivo[]; pagos: Pago[]
   inmuebles: { id: number; nombre: string }[]
+  // Lo que piden los objetivos al mes frente a lo que ahorra la previsión (vacío sin sueldo ni tarifas)
+  sintesis: { ahorro_objetivos_mes: number; ahorro_prevision_mes: number | null; meses: number }
 }
 export interface EstadoAuth { requerida: boolean; client_id: string | null; email: string | null }
 export interface Declaracion {
@@ -155,7 +243,8 @@ export interface Declaracion {
 }
 export interface Declaraciones {
   declaraciones: Declaracion[]
-  por_anio: { ejercicio: number; pagado: number; devuelto: number }[]
+  // por_modelo: neto de cada modelo (303, 130, 100…) en el ejercicio; negativo si te devolvieron
+  por_anio: { ejercicio: number; pagado: number; devuelto: number; neto: number; por_modelo: Record<string, number> }[]
 }
 export interface CalculoNomina {
   bruto_anual: number; pagas: number; tipo_irpf: number; ss_anual: number; irpf_anual: number
@@ -165,10 +254,16 @@ export interface CalculoNomina {
 export interface DocumentoDrive {
   id: number; nombre: string; enlace: string; tipo: 'emitida' | 'recibida' | 'aeat' | 'otro'
   estado: 'importado' | 'pendiente' | 'ignorado' | 'error'; mensaje: string; revisado: string
-  datos: { fecha?: string; contraparte?: string; concepto?: string; base?: number; tipo_iva?: number; total?: number; avisos?: string[] }
+  datos: { fecha?: string; contraparte?: string; concepto?: string; base?: number; tipo_iva?: number; total?: number
+    numero?: string; tipo_retencion?: number; categoria_gasto?: string; avisos?: string[] }
 }
-export interface DocumentosDrive { ia: boolean; google_client_id: string | null; documentos: DocumentoDrive[] }
-export interface MensajeChat { role: 'user' | 'assistant'; content: string }
+/** El client_id de Google para pedir permiso de Drive sale de EstadoAuth. */
+export interface DocumentosDrive { ia: boolean; documentos: DocumentoDrive[] }
+export interface ResultadoDrive { procesados: { nombre: string; estado: DocumentoDrive['estado']; mensaje: string }[]; quedan: number }
+/** `consultas`: herramientas que miró el asistente para esa respuesta (solo en las suyas). */
+export interface MensajeChat { role: 'user' | 'assistant'; content: string; consultas?: string[] }
+export interface RespuestaAsistente { respuesta: string; consultas: string[]; proveedor: string }
+export interface EstadoAsistente { disponible: boolean; proveedor: 'openai' | 'anthropic'; proveedor_nombre: string; modelo: string }
 
 export interface AjustesIA {
   proveedor: 'openai' | 'anthropic'
@@ -182,6 +277,29 @@ export interface AjustesIA {
     origen_clave: 'app' | 'entorno' | null
   }>
 }
+// --- Transversal: paleta, estado de la app, copias ---------------------------------------------
+export interface ResultadoBusqueda { texto: string; detalle: string; ir: string; importe: number | null }
+export interface GrupoBusqueda { nombre: string; resultados: ResultadoBusqueda[] }
+export interface Busqueda { q: string; grupos: GrupoBusqueda[] }
+export type HistorialSync = Record<'sabadell' | 'indexa', UltimaSync[]>
+export interface EstadoApp {
+  base_datos: { tipo: string; detalle: string }
+  ccaa: string
+  banco: { nombre: string; configurado: boolean; conectado: boolean }
+  indexa_configurado: boolean
+  ultima_copia: { fecha: string; destino: string; hace_dias: number } | null
+  sincronizacion: { modo: 'cron' | 'programada' | 'manual'; cada_horas: number; texto: string }
+  sesion: { requerida: boolean; email: string | null }
+  version: string | null
+  en_vercel: boolean
+}
+export interface VistaPreviaImportacion {
+  copia: boolean; fecha?: string | null; version?: number; tablas?: { tabla: string; filas: number }[]; filas?: number
+  activos?: number; inversiones?: number; prevision?: boolean
+}
+export interface ResultadoImportacion { mensajes: string[] }
+export interface UrlBanco { url: string }
+export interface ConexionSabadell { valida_hasta: string | null; sync: UltimaSync & { fuente: string } }
 
 export interface Llamada { id: number; fecha: string; importe: number; pagado: boolean }
 export interface InversionPrivada {
@@ -194,13 +312,20 @@ export interface Inversiones {
   inversiones: InversionPrivada[]
   totales: { compromiso: number; desembolsado: number; pendiente: number; nav: number; distribuido: number }
 }
+/** Valor de las inversiones en las fotos diarias del patrimonio (GET /inversiones/evolucion). */
+export interface EvolucionInversiones {
+  desde: string; hasta: string; puntos: { fecha: string; inversiones: number }[]; cambio: number | null
+}
+/** Lo mandado a Indexa desde el banco (categoría «Inversión (Indexa)», con tu parte). */
+export interface AportadoBanco { total: number; ultimos_12_meses: number; primera_fecha: string | null }
 
 export interface PosicionIndexa {
   nombre: string; codigo: string; clase: string; gestora: string; titulos: number | null; precio: number | null
   valor: number; coste: number | null; fecha: string | null; peso: number
 }
 export interface CarteraIndexa {
-  cuenta_id: number; nombre: string; numero: string; fecha: string | null
+  cuenta_id: number; nombre: string; numero: string; fecha: string | null; ultima_sincronizacion: string | null
+  aportado_banco: AportadoBanco | null
   tipo?: string | null; producto?: string | null; perfil_riesgo?: number | null
   total?: number; efectivo?: number | null; invertido?: number; coste?: number | null; plusvalia?: number | null
   rentabilidad_anual?: number | null; rentabilidad_total?: number | null; rentabilidad_dinero?: number | null
@@ -218,7 +343,7 @@ export interface ImpuestoPrevisto {
 }
 export interface MesPrevision {
   mes: string; nomina: number; facturado: number; cobros: number; iva: number; retenciones: number; alquiler: number
-  gastos: number; pagos_previstos: number; impuestos: ImpuestoPrevisto[]
+  gastos: number; pagos_previstos: number; financiado: number; impuestos: ImpuestoPrevisto[]
   total_impuestos: number; neto: number; liquidez: number
   objetivos: { concepto: string; importe: number }[]; total_objetivos: number
   ya_este_mes: { nomina: number; cobros: number; alquiler: number; gastos: number; impuestos: number } | null
@@ -226,18 +351,23 @@ export interface MesPrevision {
 }
 export interface RentaPrevista {
   anio: number; rendimiento_trabajo: number; rendimiento_actividad: number; rendimiento_alquiler: number; base: number
+  imputacion_inmuebles: number; reduccion_pensiones: number; base_liquidable: number; base_ahorro: number; cuota_ahorro: number
   cuota: number; retenciones_nomina: number; retenciones_facturas: number; pagos_130: number; resultado: number; tipo_medio: number
   ingresos: { fuentes: IngresoFuente[]; total: Omit<IngresoFuente, 'fuente'> }
 }
 export interface IngresoFuente {
   fuente: string; cliente: boolean; bruto_anual: number; neto_anual: number; gastos_anual: number; irpf_anual: number; bruto_mes: number; neto_mes: number
 }
+/** «¿Y si…?»: se manda como parámetros de /prevision y no se guarda. */
+export interface Escenario { tarifa_pct?: number; dias_mes?: number; gasto_habitual?: number; ahorro_extra_mes?: number }
 export interface Prevision {
   supuestos: SupuestosPrevision; gasto_habitual_banco: number | null; liquidez_hoy: number
   gastos_autonomo_mes: number; origen_gastos_autonomo: string
   renta_presentada: { anio: number; resultado: number; casillas: Record<string, number> } | null
   clientes: { nombre: string; tarifa_hora: number; horas_dia: number; dias_mes: number; origen_dias: string }[]
   meses: MesPrevision[]; anios: RentaPrevista[]; colchon: number
+  escenario: Escenario | null
+  dias_fuera: Record<string, number>  // días laborables de vacaciones por mes (YYYY-MM) que restan facturación
 }
 export interface Suscripcion {
   clave: string; nombre: string; icono: string | null; color: string | null; grupo: string; categoria: string | null
@@ -245,20 +375,27 @@ export interface Suscripcion {
   importe: number; mes: number; anual: number; ultimo_cargo: string; concepto: string; veces: number
   proximo: string | null; activa: boolean; cuentas: string[]; cobro_doble: boolean
   subida: { antes: number; ahora: number } | null
+  ignorada: boolean
 }
+/** Presupuesto al mes por categoría; las que no están no tienen. */
+export type Presupuestos = Record<string, number>
 export interface SitioGasto {
   nombre: string; total: number; veces: number; mes: number; categoria: string | null; icono: string | null; color: string | null
 }
+export type CompararGastos = 'anterior' | 'anio_pasado'
 export interface AnalisisGastos {
   desde: string; hasta: string; meses: number
+  /** Mes analizado (AAAA-MM) si se eligió uno; con qué se compara y el periodo de comparación (null si no hay datos) */
+  mes: string | null; comparar: CompararGastos; antes: { desde: string; hasta: string; meses: number } | null
   ingresos_mes: number; gastos_mes: number; ahorro_mes: number; tasa_ahorro: number | null; gastos_mes_antes: number | null
-  ultimo_mes: { mes: string | null; gastos: number }; este_mes: { gastos: number; dia: number }
+  ultimo_mes: { mes: string | null; gastos: number }
+  este_mes: { gastos: number; dia: number; por_categoria: Record<string, number> }
   fijo_mes: number; variable_mes: number
   por_mes: { mes: string; ingresos: number; gastos: number; aparte: number }[]
-  categorias: { categoria: string; total: number; mes: number; peso: number; mes_antes: number | null; cambio: number | null
+  categorias: { categoria: string; total: number; mes: number; veces: number; peso: number; mes_antes: number | null; cambio: number | null
     sitios: { nombre: string; total: number; veces: number }[] }[]
   sitios: SitioGasto[]
   mayores: { fecha: string; concepto: string; nombre: string; categoria: string | null; importe: number }[]
   aparte: { total: number; impuestos: number }
-  suscripciones: Suscripcion[]; recibos: Suscripcion[]; suscripciones_mes: number; recibos_mes: number
+  suscripciones: Suscripcion[]; recibos: Suscripcion[]; ignoradas: Suscripcion[]; suscripciones_mes: number; recibos_mes: number
 }
