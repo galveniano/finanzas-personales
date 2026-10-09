@@ -279,6 +279,9 @@ class Objetivo(Base):
     importe_objetivo: Mapped[Decimal] = mapped_column(Dinero, default=Decimal("0"))
     ahorrado: Mapped[Decimal] = mapped_column(Dinero, default=Decimal("0"))
     notas: Mapped[str] = mapped_column(Text, default="")
+    # Si el objetivo tiene su propia cuenta (la hucha de la boda), lo ahorrado es el saldo de esa cuenta
+    # (tu parte) y el campo manual no se usa
+    cuenta_id: Mapped[int | None] = mapped_column(ForeignKey("cuentas.id"), nullable=True)
 
 
 class InversionPrivada(Base):

@@ -48,7 +48,10 @@ def leer(s: Session) -> dict:
 
 
 def guardar(s: Session, datos: dict) -> None:
-    ajustes.guardar(s, CLAVE, json.dumps({k: datos.get(k, v) for k, v in VACIO.items()}))
+    """Guarda los supuestos. Las claves que no vengan conservan lo ya guardado (un `None` explícito sí borra),
+    así «Sueldo y tarifas» no pisa lo de la renta ni al revés."""
+    actual = leer(s)
+    ajustes.guardar(s, CLAVE, json.dumps({k: datos[k] if k in datos else actual[k] for k in VACIO}))
 
 
 def tiene_clientes(cfg: dict) -> bool:
@@ -71,7 +74,8 @@ class Mes:
     retenciones: float = 0.0
     alquiler: float = 0.0
     gastos: float = 0.0
-    pagos_previstos: float = 0.0
+    pagos_previstos: float = 0.0  # ya neto de lo que pone el banco (financiado)
+    financiado: float = 0.0  # lo que paga una hipoteca aún no firmada de los pagos de su bien ese mes
     impuestos: list[dict] = field(default_factory=list)
     objetivos: list[dict] = field(default_factory=list)
     ya: dict | None = None  # lo que ya ha pasado este mes (solo el mes en curso)
@@ -108,15 +112,19 @@ def _nomina_anual(cfg: dict | None) -> dict:
 
 def _por_cliente(cfg: dict, d: date) -> list[tuple[str, float, float, float]]:
     """Nombre, base, IVA y retención previstos de cada cliente en un mes. Los días planificados para ese
-    mes mandan; si no, los meses sin facturar dan 0 y el resto usa los días al mes del cliente."""
+    mes mandan; si no, los meses sin facturar dan 0 y el resto usa los días al mes del cliente, menos los
+    días laborables de ese mes marcados como vacaciones o no disponibles (`cfg["dias_fuera"]`)."""
     clave, planes = d.strftime("%Y-%m"), cfg.get("dias_planificados") or {}
+    fuera = (cfg.get("dias_fuera") or {}).get(clave, 0)
     filas = []
     for c in cfg.get("clientes", []):
         plan = (planes.get(c.get("nombre")) or {}).get(clave)
         if plan is None and d.month in cfg.get("meses_sin_facturar", []):
             dias = 0.0
+        elif plan is None:
+            dias = max(float(c.get("dias_mes", 20)) - fuera, 0.0)
         else:
-            dias = float(plan if plan is not None else c.get("dias_mes", 20))
+            dias = float(plan)
         b = float(c.get("tarifa_hora", 0)) * float(c.get("horas_dia", 8)) * dias
         filas.append((c.get("nombre", ""), b, b * float(c.get("iva", 0)) / 100, b * float(c.get("retencion", 0)) / 100))
     return filas
@@ -180,9 +188,58 @@ def cuota_autonomo_banco(s: Session) -> float | None:
     return round(sum(i for _, i in cargos) / meses, 2)
 
 
+def dias_fuera(s: Session, desde: date) -> dict[str, int]:
+    """Días laborables (lunes a viernes) marcados como vacaciones o no disponibles en el calendario de
+    facturación, por mes, desde `desde`. Los festivos no se restan: el backend no los conoce."""
+    from finanzas import facturacion  # perezoso: monta su router
+    fuera: dict[str, int] = {}
+    for clave in facturacion.dias_no_disponibles(s):
+        try:
+            d = date.fromisoformat(clave)
+        except ValueError:
+            continue
+        if d >= desde and d.weekday() < 5:
+            fuera[d.strftime("%Y-%m")] = fuera.get(d.strftime("%Y-%m"), 0) + 1
+    return fuera
+
+
+CLAVES_ESCENARIO = ("tarifa_pct", "dias_mes", "gasto_habitual", "ahorro_extra_mes")
+LIMITES_ESCENARIO = {"tarifa_pct": (-50.0, 100.0), "dias_mes": (0.0, 31.0), "gasto_habitual": (0.0, None),
+                     "ahorro_extra_mes": (0.0, None)}
+
+
+def aplicar_escenario(cfg: dict, escenario: dict | None) -> dict:
+    """«¿Y si…?»: sobre los supuestos ya resueltos y sin guardarlos, cambia la tarifa de todos los clientes
+    (`tarifa_pct`, en %), sus días al mes (`dias_mes`, sustituye lo resuelto; los días planificados a mano siguen
+    mandando), el gasto habitual (`gasto_habitual`, €/mes) o aparta un ahorro extra (`ahorro_extra_mes`, €/mes,
+    que se resta como gasto). Devuelve una copia; los valores se recortan a sus límites."""
+    if not escenario:
+        return cfg
+    cfg = {**cfg, "clientes": [dict(c) for c in cfg.get("clientes", [])]}
+    valores = {}
+    for clave in CLAVES_ESCENARIO:
+        if escenario.get(clave) is None:
+            continue
+        minimo, maximo = LIMITES_ESCENARIO[clave]
+        v = max(float(escenario[clave]), minimo)
+        valores[clave] = v if maximo is None else min(v, maximo)
+    if "tarifa_pct" in valores:
+        for c in cfg["clientes"]:
+            c["tarifa_hora"] = round(float(c.get("tarifa_hora", 0)) * (1 + valores["tarifa_pct"] / 100), 2)
+    if "dias_mes" in valores:
+        for c in cfg["clientes"]:
+            c["dias_mes"], c["origen_dias"] = valores["dias_mes"], "escenario"
+    if "gasto_habitual" in valores:
+        cfg["gasto_habitual_mes"] = valores["gasto_habitual"]
+    cfg["ahorro_extra_mes"] = valores.get("ahorro_extra_mes", 0.0)
+    cfg["escenario"] = valores
+    return cfg
+
+
 def resolver_clientes(s: Session, cfg: dict) -> dict:
-    """Si no pones días al mes, se usan los del último mes facturado (y si no hay facturas, 20).
-    Si no pones gastos de autónomo, se usa la cuota de autónomos que veas cargada en el banco."""
+    """Si no pones días al mes, se usan los del último mes facturado (y si no hay facturas, 20), y a los meses
+    que vienen se les quitan los días de vacaciones del calendario. Si no pones gastos de autónomo, se usa
+    la cuota de autónomos que veas cargada en el banco."""
     clientes = []
     for c in cfg.get("clientes", []):
         c = dict(c)
@@ -192,7 +249,8 @@ def resolver_clientes(s: Session, cfg: dict) -> dict:
         else:
             c["origen_dias"] = "a mano"
         clientes.append(c)
-    resuelto = {**cfg, "clientes": clientes, "origen_gastos_autonomo": "a mano", "factor_renta": factor_renta(s)}
+    resuelto = {**cfg, "clientes": clientes, "origen_gastos_autonomo": "a mano", "factor_renta": factor_renta(s),
+                "dias_fuera": dias_fuera(s, date.today().replace(day=1))}
     # Lo que la app no ve (las otras viviendas, intereses y ventas de fondos) sale de la última renta si no lo pones
     casillas = (ultima_renta(s) or {}).get("casillas", {})
     for clave, casilla in (("rentas_ahorro_anio", "base_ahorro"), ("imputacion_inmuebles_anio", "imputacion_inmuebles")):
@@ -354,16 +412,27 @@ def ids_traspaso(movs: list[MovTuyo], dias: int = 3) -> set[int]:
     return usados
 
 
+def emparejar_pagos(s: Session, movs: list[MovTuyo], dias: int = 20) -> dict[int, MovTuyo]:
+    """Qué cargo del banco es cada pago previsto (plazos de la casa, llamadas de capital...): el mismo importe
+    (con un 1 % o 1 € de margen) a menos de `dias` de la fecha prevista. Si hay varios, el más cercano en
+    fecha, y un cargo solo vale para un pago. Devuelve {id del pago: movimiento}."""
+    pareja: dict[int, MovTuyo] = {}
+    usados: set[int] = set()
+    for p in s.scalars(select(PagoPrevisto).order_by(PagoPrevisto.fecha, PagoPrevisto.id)):
+        imp = float(p.importe)
+        if imp <= 0:
+            continue
+        candidatos = [m for m in movs if m.id not in usados and m.importe < 0
+                      and abs(-m.importe - imp) <= max(imp * 0.01, 1) and abs((m.fecha - p.fecha).days) <= dias]
+        if candidatos:
+            mejor = min(candidatos, key=lambda m: (abs((m.fecha - p.fecha).days), m.id))
+            pareja[p.id], usados = mejor, usados | {mejor.id}
+    return pareja
+
+
 def ids_pagos_previstos(s: Session, movs: list[MovTuyo], dias: int = 20) -> set[int]:
-    """Cargos que son un pago previsto (plazos de la casa, llamadas de capital...): ya van aparte en la
-    previsión, así que no cuentan como gasto habitual."""
-    pagos = [(p.fecha, float(p.importe)) for p in s.scalars(select(PagoPrevisto)) if p.importe > 0]
-    ids = set()
-    for m in movs:
-        if m.importe < 0 and any(abs(-m.importe - imp) <= max(imp * 0.01, 1) and abs((m.fecha - f).days) <= dias
-                                 for f, imp in pagos):
-            ids.add(m.id)
-    return ids
+    """Cargos que son un pago previsto: ya van aparte en la previsión, así que no cuentan como gasto habitual."""
+    return {m.id for m in emparejar_pagos(s, movs, dias).values()}
 
 
 def es_gasto_corriente(m: MovTuyo, excluidos: set[int]) -> bool:
@@ -548,32 +617,9 @@ def _previo_de_casillas(rendimiento: float) -> float:
     return sin_tope if sin_tope * pct <= tope else rendimiento + tope
 
 
-def calcular(s: Session, meses: int = 12) -> dict:
-    supuestos = leer(s)
-    cfg = resolver_clientes(s, supuestos)
-    hoy = date.today()
-    inicio = hoy.replace(day=1)
-    ventana = _meses(inicio, meses)
-    anios = sorted({d.year for d in ventana})
-    # La renta del año pasado se paga en junio: mientras no esté presentada también se simula
-    if not _renta_presentada(s, hoy.year - 1) and hoy.month <= 7:
-        anios.insert(0, hoy.year - 1)
-    habitual = cfg.get("gasto_habitual_mes")
-    habitual = float(habitual) if habitual is not None else (gasto_habitual(s) or 0.0)
-    renta_mes, _ = _alquiler(s, hoy.year)
-    pagos = s.scalars(select(PagoPrevisto).where(~PagoPrevisto.pagado)).all()
-    gastos_act_mes = float(cfg.get("gastos_autonomo_mes", 0))
-
-    reales = _facturado_por_mes(s, cfg)
-    # Las hipotecas que aún no han empezado (la de la casa nueva) no están en el gasto del banco: sus cuotas se suman
-    cuotas_futuras: dict[str, float] = {}
-    for deuda in s.scalars(select(Deuda).where(Deuda.fecha_inicio > hoy)):
-        # El mes en que se firma, el banco pone el capital (paga la entrega); luego vienen las cuotas
-        firma = deuda.fecha_inicio.strftime("%Y-%m")
-        cuotas_futuras[firma] = cuotas_futuras.get(firma, 0.0) - float(deuda.capital_inicial)
-        for c in cuadro_amortizacion(deuda):
-            cuotas_futuras[c.fecha.strftime("%Y-%m")] = cuotas_futuras.get(c.fecha.strftime("%Y-%m"), 0.0) + float(c.cuota)
-    # Objetivos con fecha (boda, viajes...): el dinero sale ese mes, salvo que ya tengan sus pagos previstos
+def objetivos_por_mes(s: Session, inicio: date) -> tuple[dict[str, list[dict]], float]:
+    """Objetivos con fecha (boda, viajes...) que no tienen pagos previstos apuntados: su importe sale el mes de la
+    fecha. Devuelve ({mes: [{concepto, importe}]}, colchón), donde el colchón es la suma de los objetivos de ese tipo."""
     con_pagos = {p.objetivo_id for p in s.scalars(select(PagoPrevisto)) if p.objetivo_id}
     objetivos: dict[str, list[dict]] = {}
     colchon = 0.0
@@ -583,6 +629,71 @@ def calcular(s: Session, meses: int = 12) -> dict:
         elif o.fecha_objetivo and o.fecha_objetivo >= inicio and o.id not in con_pagos and o.importe_objetivo:
             objetivos.setdefault(o.fecha_objetivo.strftime("%Y-%m"), []).append(
                 {"concepto": o.nombre, "importe": float(o.importe_objetivo)})
+    return objetivos, colchon
+
+
+def mes_de_pago(p: PagoPrevisto, inicio: date) -> str:
+    """Mes en que cuenta un pago previsto: el suyo o, si ya venció y sigue sin marcar, el mes en curso
+    (sale del dinero de hoy, no de un mes que ya pasó)."""
+    return max(p.fecha, inicio).strftime("%Y-%m")
+
+
+def financiacion_prevista(s: Session, pagos: list[PagoPrevisto], hoy: date) -> tuple[dict[str, float], dict[str, float]]:
+    """Las hipotecas que aún no han empezado (la de la casa nueva) no están en el gasto del banco. Por mes
+    devuelve (cuotas, financiado): sus cuotas, y lo que pone el banco. El mes de la firma el banco paga la
+    entrega, así que su capital se neta contra los pagos previstos pendientes del mismo bien de ese mes o de los
+    dos siguientes, por orden y sin pasarse de lo que hay que pagar; lo que sobre no se resta de nada (si no hay
+    pagos del bien apuntados, no financia nada), para que ningún mes enseñe pagos negativos."""
+    inicio = hoy.replace(day=1)
+    cuotas: dict[str, float] = {}
+    financiado: dict[str, float] = {}
+    cubierto: dict[tuple[str, int], float] = {}  # (mes, bien): lo que ya pone otra hipoteca del mismo bien
+    for deuda in s.scalars(select(Deuda).where(Deuda.fecha_inicio > hoy)):
+        for c in cuadro_amortizacion(deuda):
+            clave = c.fecha.strftime("%Y-%m")
+            cuotas[clave] = cuotas.get(clave, 0.0) + float(c.cuota)
+        if deuda.activo_id is None:
+            continue
+        restante = float(deuda.capital_inicial)
+        for d in _meses(deuda.fecha_inicio.replace(day=1), 3):
+            clave = d.strftime("%Y-%m")
+            del_bien = sum(float(p.importe) for p in pagos
+                           if p.activo_id == deuda.activo_id and mes_de_pago(p, inicio) == clave)
+            usa = max(min(restante, del_bien - cubierto.get((clave, deuda.activo_id), 0.0)), 0.0)
+            if usa:
+                financiado[clave] = financiado.get(clave, 0.0) + usa
+                cubierto[(clave, deuda.activo_id)] = cubierto.get((clave, deuda.activo_id), 0.0) + usa
+                restante -= usa
+            if restante <= 0:
+                break
+    return cuotas, financiado
+
+
+def calcular(s: Session, meses: int = 12, escenario: dict | None = None) -> dict:
+    """Previsión mes a mes. `escenario` («¿y si…?») cambia tarifas, días, gasto o ahorro sin guardar nada."""
+    supuestos = leer(s)
+    cfg = aplicar_escenario(resolver_clientes(s, supuestos), escenario)
+    hoy = date.today()
+    inicio = hoy.replace(day=1)
+    ventana = _meses(inicio, meses)
+    anios = sorted({d.year for d in ventana})
+    # La renta del año pasado se paga en junio: mientras no esté presentada también se simula
+    if not _renta_presentada(s, hoy.year - 1) and hoy.month <= 7:
+        anios.insert(0, hoy.year - 1)
+    habitual = cfg.get("gasto_habitual_mes")
+    habitual = float(habitual) if habitual is not None else (gasto_habitual(s) or 0.0)
+    ahorro_extra = float(cfg.get("ahorro_extra_mes") or 0)  # del escenario: se aparta como un gasto más
+    renta_mes, _ = _alquiler(s, hoy.year)
+    pagos = s.scalars(select(PagoPrevisto).where(~PagoPrevisto.pagado)).all()
+    gastos_act_mes = float(cfg.get("gastos_autonomo_mes", 0))
+
+    reales = _facturado_por_mes(s, cfg)
+    # Pagos previstos por mes (los vencidos sin marcar, en el mes en curso) y lo que pone una hipoteca aún sin firmar
+    pagos_mes: dict[str, float] = {}
+    for p in pagos:
+        pagos_mes[mes_de_pago(p, inicio)] = pagos_mes.get(mes_de_pago(p, inicio), 0.0) + float(p.importe)
+    cuotas_futuras, financiado = financiacion_prevista(s, pagos, hoy)
+    objetivos, colchon = objetivos_por_mes(s, inicio)
     tabla: dict[str, Mes] = {}
     trimestres: dict[str, dict] = {}
     resumen_anios = []
@@ -605,9 +716,10 @@ def calcular(s: Session, meses: int = 12) -> dict:
                 por_cliente[nombre_cli] = por_cliente.get(nombre_cli, 0.0) + b
             m.nomina, m.facturado, m.iva, m.retenciones = round(nom["meses"][d.month], 2), base, iva, ret
             m.cobros, m.alquiler = round(base + iva - ret, 2), round(renta_mes, 2)
-            m.gastos = round(habitual, 2)
-            m.pagos_previstos = round(float(sum((p.importe for p in pagos if p.fecha.strftime("%Y-%m") == m.clave),
-                                                Decimal(0))) + cuotas_futuras.get(m.clave, 0.0), 2)
+            m.gastos = round(habitual + ahorro_extra, 2)
+            m.financiado = round(financiado.get(m.clave, 0.0), 2)
+            m.pagos_previstos = round(max(pagos_mes.get(m.clave, 0.0) + cuotas_futuras.get(m.clave, 0.0)
+                                          - m.financiado, 0.0), 2)
             m.objetivos = objetivos.get(m.clave, [])
             facturado_anio, ret_anio = facturado_anio + base, ret_anio + ret
             acumulado["previo"] += base - gastos_act_mes
@@ -678,7 +790,7 @@ def calcular(s: Session, meses: int = 12) -> dict:
     actual.nomina = round(max(actual.nomina - ya["nomina"], 0.0), 2)
     actual.cobros = round(max(actual.cobros - ya["cobros"], 0.0), 2)
     actual.alquiler = round(max(actual.alquiler - ya["alquiler"], 0.0), 2)
-    actual.gastos = round(max(actual.gastos - ya["gastos"], 0.0), 2)
+    actual.gastos = round(max(actual.gastos - ahorro_extra - ya["gastos"], 0.0) + ahorro_extra, 2)
     pendientes = sum(i["importe"] for i in actual.impuestos if i["importe"] > 0)
     if ya["impuestos"] and pendientes:
         actual.impuestos.append({"concepto": "Ya pagado este mes", "importe": -round(min(ya["impuestos"], pendientes), 2),
@@ -691,7 +803,7 @@ def calcular(s: Session, meses: int = 12) -> dict:
         saldo += m.neto
         filas.append({"mes": m.clave, "nomina": m.nomina, "facturado": m.facturado, "cobros": m.cobros, "iva": m.iva,
                       "retenciones": m.retenciones, "alquiler": m.alquiler, "gastos": m.gastos,
-                      "pagos_previstos": m.pagos_previstos, "impuestos": m.impuestos,
+                      "pagos_previstos": m.pagos_previstos, "financiado": m.financiado, "impuestos": m.impuestos,
                       "objetivos": m.objetivos, "total_objetivos": round(sum(o["importe"] for o in m.objetivos), 2),
                       "total_impuestos": round(sum(i["importe"] for i in m.impuestos), 2),
                       "neto": m.neto, "liquidez": round(saldo, 2), "ya_este_mes": m.ya,
@@ -703,7 +815,11 @@ def calcular(s: Session, meses: int = 12) -> dict:
             "origen_imputacion_inmuebles_anio": cfg["origen_imputacion_inmuebles_anio"],
             "renta_presentada": ultima_renta(s), "trimestres": trimestres, "gasto_habitual_banco": gasto_habitual(s),
             "liquidez_hoy": round(liquidez, 2), "colchon": round(colchon, 2),
-            "meses": filas, "anios": [a for a in resumen_anios if a["anio"] in {d.year for d in ventana}],
+            "escenario": cfg.get("escenario") or None, "dias_fuera": cfg["dias_fuera"],
+            "meses": filas,
+            # Los años de la ventana y, mientras no esté presentada, la renta del año pasado (la que toca presentar)
+            "anios": sorted((a for a in resumen_anios if a["anio"] in {d.year for d in ventana}
+                             or (a["anio"] == hoy.year - 1 and not _renta_presentada(s, a["anio"]))), key=lambda a: a["anio"]),
             "anios_todos": resumen_anios}
 
 

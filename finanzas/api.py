@@ -1,5 +1,6 @@
 """API JSON que consume el frontal (carpeta frontend/)."""
 import json
+import math
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
@@ -11,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from finanzas import auth, config, db, declaraciones, patrimonio, sync
-from finanzas.fechas import iso_utc
+from finanzas.fechas import iso_utc, sumar_meses
 from finanzas.fiscal import alquiler, autonomo, nomina as calc_nomina
 from finanzas.hipoteca import cuota_mensual, intereses_anio, saldo_pendiente
 from finanzas.importers import aeat, sabadell
@@ -864,10 +865,24 @@ def crear_gasto_inmueble(activo_id: int, datos: GastoInmuebleIn, s: Session = Se
     return {"ok": True}
 
 
+MENSAJES_ESCENARIO = {"tarifa_pct": "La tarifa solo puede cambiar entre −50 % y 100 %",
+                      "dias_mes": "Los días al mes tienen que estar entre 0 y 31",
+                      "gasto_habitual": "El gasto habitual no puede ser negativo",
+                      "ahorro_extra_mes": "El ahorro extra no puede ser negativo"}
+
+
 @router.get("/prevision")
-def ver_prevision(meses: int = 12, s: Session = SesionDB):
+def ver_prevision(meses: int = 12, tarifa_pct: float | None = None, dias_mes: float | None = None,
+                  gasto_habitual: float | None = None, ahorro_extra_mes: float | None = None, s: Session = SesionDB):
+    """Hasta 24 meses. Los demás parámetros son el escenario «¿y si…?»: se simulan sin guardar nada."""
     from finanzas import prevision
-    return prevision.calcular(s, max(1, min(meses, 24)))
+    escenario = {k: v for k, v in (("tarifa_pct", tarifa_pct), ("dias_mes", dias_mes), ("gasto_habitual", gasto_habitual),
+                                   ("ahorro_extra_mes", ahorro_extra_mes)) if v is not None}
+    for clave, valor in escenario.items():
+        minimo, maximo = prevision.LIMITES_ESCENARIO[clave]
+        if valor < minimo or (maximo is not None and valor > maximo):
+            raise HTTPException(400, MENSAJES_ESCENARIO[clave])
+    return prevision.calcular(s, max(1, min(meses, 24)), escenario or None)
 
 
 class ClientePrevision(BaseModel):
@@ -953,14 +968,19 @@ class ObjetivoIn(BaseModel):
     fecha_objetivo: date | None = None
     importe_objetivo: Decimal = CERO
     ahorrado: Decimal = CERO
+    notas: str = ""
+    cuenta_id: int | None = None  # con cuenta, lo ahorrado es su saldo (tu parte) y no el campo manual
 
 
 class ObjetivoPatch(BaseModel):
+    """Vacío = no tocar; fecha_objetivo y cuenta_id en null los quitan."""
     nombre: str | None = None
     tipo: str | None = None
     fecha_objetivo: date | None = None
     importe_objetivo: Decimal | None = None
     ahorrado: Decimal | None = None
+    notas: str | None = None
+    cuenta_id: int | None = None
 
 
 class PagoIn(BaseModel):
@@ -974,7 +994,13 @@ class PagoIn(BaseModel):
 
 
 class PagoPatch(BaseModel):
-    pagado: bool
+    """Vacío = no tocar; objetivo_id y activo_id en null quitan el enlace."""
+    concepto: str | None = None
+    fecha: date | None = None
+    importe: Decimal | None = None
+    objetivo_id: int | None = None
+    activo_id: int | None = None
+    pagado: bool | None = None
 
 
 def _meses_hasta(d: date) -> int:
@@ -982,31 +1008,88 @@ def _meses_hasta(d: date) -> int:
     return max(1, (d.year - hoy.year) * 12 + d.month - hoy.month)
 
 
+def _comprobar_pago(s: Session, datos: dict) -> None:
+    """Importe positivo y enlaces a cosas que existen."""
+    if datos.get("importe") is not None and datos["importe"] <= 0:
+        raise HTTPException(400, "El importe tiene que ser mayor que cero")
+    for campo, modelo in (("objetivo_id", Objetivo), ("activo_id", Activo), ("inversion_id", InversionPrivada)):
+        if datos.get(campo) is not None:
+            _obtener(s, modelo, datos[campo])
+
+
+def _ahorrado(o: Objetivo, cuentas: dict[int, Cuenta]) -> Decimal:
+    """Con cuenta ligada, el saldo de la cuenta (tu parte); si no, lo apuntado a mano."""
+    c = cuentas.get(o.cuenta_id) if o.cuenta_id else None
+    return (c.saldo * c.parte).quantize(Decimal("0.01")) if c else o.ahorrado
+
+
+def _llegas_en(falta: Decimal, ahorro_mes: float | None, fecha_objetivo: date | None, hoy: date) -> dict | None:
+    """Si todo el ahorro medio de la previsión fuera a este objetivo: en qué mes tendrías lo que falta, si es antes
+    de la fecha (`a_tiempo`, vacío sin fecha) y, si no, lo que faltaría ese día. Vacío sin previsión o ya conseguido."""
+    if ahorro_mes is None or falta <= 0:
+        return None
+    disponibles = _meses_hasta(fecha_objetivo) if fecha_objetivo else None
+    if ahorro_mes <= 0:
+        return {"mes": None, "a_tiempo": False if fecha_objetivo else None, "faltara": n(falta)}
+    necesarios = max(1, math.ceil(float(falta) / ahorro_mes))
+    a_tiempo = None if disponibles is None else necesarios <= disponibles
+    faltara = 0.0 if a_tiempo is not False else round(max(float(falta) - ahorro_mes * disponibles, 0.0), 2)
+    return {"mes": sumar_meses(hoy.replace(day=1), necesarios).strftime("%Y-%m"), "a_tiempo": a_tiempo, "faltara": faltara}
+
+
 @router.get("/planificacion")
 def ver_planificacion(s: Session = SesionDB):
+    from finanzas import plan, prevision
     hoy = date.today()
+    hasta = hoy + timedelta(days=365)
     objetivos = s.scalars(select(Objetivo).order_by(Objetivo.fecha_objetivo)).all()
     pagos = s.scalars(select(PagoPrevisto).order_by(PagoPrevisto.fecha)).all()
     activos = {a.id: a.nombre for a in s.scalars(select(Activo))}
     inversiones = {i.id: i.nombre for i in s.scalars(select(InversionPrivada))}
+    cuentas = {c.id: c for c in s.scalars(select(Cuenta))}
     nombres_obj = {o.id: o.nombre for o in objetivos}
-    pendiente_12m = sum((p.importe for p in pagos if not p.pagado and p.fecha <= hoy + timedelta(days=365)), CERO)
-    # Lo que pagará una hipoteca prevista no sale de tu bolsillo
-    financiado = sum((d.capital_inicial for d in s.scalars(select(Deuda).where(
-        Deuda.fecha_inicio > hoy, Deuda.fecha_inicio <= hoy + timedelta(days=365)))), CERO)
-    pendiente_12m = max(pendiente_12m - financiado, CERO)
-    liquidez = patrimonio.liquidez(s)
-    return {
-        "liquidez": n(liquidez), "pendiente_12_meses": n(pendiente_12m), "financiado_hipoteca": n(financiado),
-        "objetivos": [{
+    vistos = plan.vistos_en_banco(s)
+    pendientes = [p for p in pagos if not p.pagado]
+    pendiente_12m = float(sum((p.importe for p in pendientes if p.fecha <= hasta), CERO))
+    # Como en la previsión: los objetivos con fecha sin pagos apuntados salen ese mes, y lo que pagará una
+    # hipoteca prevista de los pagos de su bien no sale de tu bolsillo
+    por_mes, _ = prevision.objetivos_por_mes(s, hoy.replace(day=1))
+    objetivos_12m = round(sum(o["importe"] for k, lista in por_mes.items() if k <= hasta.strftime("%Y-%m") for o in lista), 2)
+    _, financiado = prevision.financiacion_prevista(s, pendientes, hoy)
+    financiado_12m = round(sum(v for k, v in financiado.items() if k <= hasta.strftime("%Y-%m")), 2)
+    pendiente_12m = max(pendiente_12m + objetivos_12m - financiado_12m, 0.0)
+    # Ahorro medio al mes según la previsión, para saber si llegas a los objetivos: lo que queda cada mes sin contar
+    # lo que gastarías en los propios objetivos con fecha (la previsión ya los resta el mes que tocan)
+    ahorro_mes, meses_prev = None, 0
+    if prevision.tiene_supuestos(prevision.leer(s)):
+        filas = prevision.calcular(s)["meses"]
+        if filas:
+            ahorro_mes = round(sum(m["neto"] + m["total_objetivos"] for m in filas) / len(filas), 2)
+        meses_prev = len(filas)
+    lista_objetivos = []
+    for o in objetivos:
+        ahorrado = _ahorrado(o, cuentas)
+        futuro = bool(o.fecha_objetivo and o.fecha_objetivo > hoy)
+        cuenta = cuentas.get(o.cuenta_id) if o.cuenta_id else None
+        lista_objetivos.append({
             "id": o.id, "nombre": o.nombre, "tipo": o.tipo, "fecha_objetivo": f(o.fecha_objetivo),
-            "importe_objetivo": n(o.importe_objetivo), "ahorrado": n(o.ahorrado),
-            "ahorro_mensual": n(max(CERO, (o.importe_objetivo - o.ahorrado) / _meses_hasta(o.fecha_objetivo)).quantize(
-                Decimal("0.01"))) if o.fecha_objetivo and o.fecha_objetivo > hoy else None,
-        } for o in objetivos],
+            "importe_objetivo": n(o.importe_objetivo), "ahorrado": n(ahorrado), "notas": o.notas or "",
+            "cuenta_id": cuenta.id if cuenta else None, "cuenta": cuenta.nombre if cuenta else None,
+            "ahorrado_automatico": cuenta is not None,
+            "ahorro_mensual": n(max(CERO, (o.importe_objetivo - ahorrado) / _meses_hasta(o.fecha_objetivo)).quantize(
+                Decimal("0.01"))) if futuro else None,
+            "llegas_en": _llegas_en(o.importe_objetivo - ahorrado, ahorro_mes, o.fecha_objetivo, hoy),
+        })
+    return {
+        "liquidez": n(patrimonio.liquidez(s)), "pendiente_12_meses": round(pendiente_12m, 2),
+        "financiado_hipoteca": financiado_12m, "objetivos_12_meses": objetivos_12m,
+        "sintesis": {"ahorro_objetivos_mes": round(sum(o["ahorro_mensual"] or 0 for o in lista_objetivos), 2),
+                     "ahorro_prevision_mes": ahorro_mes, "meses": meses_prev},
+        "objetivos": lista_objetivos,
         "pagos": [{"id": p.id, "concepto": p.concepto, "fecha": f(p.fecha), "importe": n(p.importe),
-                   "pagado": p.pagado, "objetivo": nombres_obj.get(p.objetivo_id), "inmueble": activos.get(p.activo_id),
-                   "inversion": inversiones.get(p.inversion_id)}
+                   "pagado": p.pagado, "objetivo_id": p.objetivo_id, "activo_id": p.activo_id,
+                   "objetivo": nombres_obj.get(p.objetivo_id), "inmueble": activos.get(p.activo_id),
+                   "inversion": inversiones.get(p.inversion_id), "visto_en_banco": vistos.get(p.id)}
                   for p in pagos],
         "inmuebles": [{"id": k, "nombre": v} for k, v in activos.items()],
     }
@@ -1014,6 +1097,8 @@ def ver_planificacion(s: Session = SesionDB):
 
 @router.post("/objetivos")
 def crear_objetivo(datos: ObjetivoIn, s: Session = SesionDB):
+    if datos.cuenta_id is not None:
+        _obtener(s, Cuenta, datos.cuenta_id)
     s.add(Objetivo(**datos.model_dump()))
     s.commit()
     return {"ok": True}
@@ -1022,8 +1107,11 @@ def crear_objetivo(datos: ObjetivoIn, s: Session = SesionDB):
 @router.patch("/objetivos/{objetivo_id}")
 def actualizar_objetivo(objetivo_id: int, datos: ObjetivoPatch, s: Session = SesionDB):
     o = _obtener(s, Objetivo, objetivo_id)
-    for campo, valor in datos.model_dump(exclude_unset=True).items():
-        if valor is not None or campo == "fecha_objetivo":
+    cambios = datos.model_dump(exclude_unset=True)
+    if cambios.get("cuenta_id") is not None:
+        _obtener(s, Cuenta, cambios["cuenta_id"])
+    for campo, valor in cambios.items():
+        if valor is not None or campo in ("fecha_objetivo", "cuenta_id"):
             setattr(o, campo, valor)
     s.commit()
     return {"ok": True}
@@ -1041,22 +1129,38 @@ def borrar_objetivo(objetivo_id: int, s: Session = SesionDB):
 
 @router.post("/pagos")
 def crear_pago(datos: PagoIn, s: Session = SesionDB):
-    s.add(PagoPrevisto(**datos.model_dump()))
+    _comprobar_pago(s, datos.model_dump())
+    p = PagoPrevisto(**datos.model_dump())
+    s.add(p)
     s.commit()
-    return {"ok": True}
+    if p.pagado:
+        sync.guardar_instantanea(s)  # lo pagado de la obra nueva cuenta en el patrimonio
+    return {"ok": True, "id": p.id}
 
 
 @router.patch("/pagos/{pago_id}")
 def actualizar_pago(pago_id: int, datos: PagoPatch, s: Session = SesionDB):
-    _obtener(s, PagoPrevisto, pago_id).pagado = datos.pagado
+    p = _obtener(s, PagoPrevisto, pago_id)
+    cambios = datos.model_dump(exclude_unset=True)
+    _comprobar_pago(s, cambios)
+    estaba_pagado = p.pagado
+    for campo, valor in cambios.items():
+        if valor is not None or campo in ("objetivo_id", "activo_id"):
+            setattr(p, campo, valor)
     s.commit()
+    if estaba_pagado or p.pagado:
+        sync.guardar_instantanea(s)
     return {"ok": True}
 
 
 @router.delete("/pagos/{pago_id}")
 def borrar_pago(pago_id: int, s: Session = SesionDB):
-    s.delete(_obtener(s, PagoPrevisto, pago_id))
+    p = _obtener(s, PagoPrevisto, pago_id)
+    estaba_pagado = p.pagado
+    s.delete(p)
     s.commit()
+    if estaba_pagado:
+        sync.guardar_instantanea(s)
     return {"ok": True}
 
 

@@ -132,17 +132,30 @@ export interface Rentabilidad {
   coste: number; aportado: number; bruta: number | null; neta: number | null; neta_sobre_valor: number | null
   sobre_aportado: number | null; flujo_caja_anual: number
 }
+/** Si todo el ahorro medio de la previsión fuera a este objetivo: el mes en que lo tendrías (vacío si no ahorras),
+ *  si es antes de su fecha (vacío sin fecha) y lo que faltaría ese día si no llegas. */
+export interface LlegasEn { mes: string | null; a_tiempo: boolean | null; faltara: number }
 export interface Objetivo {
   id: number; nombre: string; tipo: string; fecha_objetivo: string | null; importe_objetivo: number
-  ahorrado: number; ahorro_mensual: number | null
+  ahorrado: number; ahorro_mensual: number | null; notas: string
+  // Ligado a una cuenta, lo ahorrado es su saldo (tu parte) y no se edita a mano
+  cuenta_id: number | null; cuenta: string | null; ahorrado_automatico: boolean; llegas_en: LlegasEn | null
 }
+export interface VistoEnBanco { movimiento_id: number; fecha: string; importe: number }
 export interface Pago {
   id: number; concepto: string; fecha: string; importe: number; pagado: boolean
+  objetivo_id: number | null; activo_id: number | null
   objetivo: string | null; inmueble: string | null; inversion: string | null
+  visto_en_banco: VistoEnBanco | null
 }
 export interface Planificacion {
-  liquidez: number; pendiente_12_meses: number; financiado_hipoteca: number; objetivos: Objetivo[]; pagos: Pago[]
+  // pendiente_12_meses: pagos previstos pendientes más los objetivos con fecha sin pagos (objetivos_12_meses),
+  // menos lo que pone una hipoteca prevista (financiado_hipoteca); lo mismo que resta la previsión
+  liquidez: number; pendiente_12_meses: number; financiado_hipoteca: number; objetivos_12_meses: number
+  objetivos: Objetivo[]; pagos: Pago[]
   inmuebles: { id: number; nombre: string }[]
+  // Lo que piden los objetivos al mes frente a lo que ahorra la previsión (vacío sin sueldo ni tarifas)
+  sintesis: { ahorro_objetivos_mes: number; ahorro_prevision_mes: number | null; meses: number }
 }
 export interface EstadoAuth { requerida: boolean; client_id: string | null; email: string | null }
 export interface Declaracion {
@@ -216,7 +229,7 @@ export interface ImpuestoPrevisto {
 }
 export interface MesPrevision {
   mes: string; nomina: number; facturado: number; cobros: number; iva: number; retenciones: number; alquiler: number
-  gastos: number; pagos_previstos: number; impuestos: ImpuestoPrevisto[]
+  gastos: number; pagos_previstos: number; financiado: number; impuestos: ImpuestoPrevisto[]
   total_impuestos: number; neto: number; liquidez: number
   objetivos: { concepto: string; importe: number }[]; total_objetivos: number
   ya_este_mes: { nomina: number; cobros: number; alquiler: number; gastos: number; impuestos: number } | null
@@ -230,12 +243,16 @@ export interface RentaPrevista {
 export interface IngresoFuente {
   fuente: string; cliente: boolean; bruto_anual: number; neto_anual: number; gastos_anual: number; irpf_anual: number; bruto_mes: number; neto_mes: number
 }
+/** «¿Y si…?»: se manda como parámetros de /prevision y no se guarda. */
+export interface Escenario { tarifa_pct?: number; dias_mes?: number; gasto_habitual?: number; ahorro_extra_mes?: number }
 export interface Prevision {
   supuestos: SupuestosPrevision; gasto_habitual_banco: number | null; liquidez_hoy: number
   gastos_autonomo_mes: number; origen_gastos_autonomo: string
   renta_presentada: { anio: number; resultado: number; casillas: Record<string, number> } | null
   clientes: { nombre: string; tarifa_hora: number; horas_dia: number; dias_mes: number; origen_dias: string }[]
   meses: MesPrevision[]; anios: RentaPrevista[]; colchon: number
+  escenario: Escenario | null
+  dias_fuera: Record<string, number>  // días laborables de vacaciones por mes (YYYY-MM) que restan facturación
 }
 export interface Suscripcion {
   clave: string; nombre: string; icono: string | null; color: string | null; grupo: string; categoria: string | null
