@@ -1,12 +1,17 @@
-import { Suspense, useEffect, useState } from 'react'
+import { Suspense, useCallback, useEffect, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Briefcase, Building2, CalendarClock, Ellipsis, LayoutDashboard, LogOut, PieChart, RefreshCw, Scale, Settings, Sparkles, Wallet } from 'lucide-react'
+import { Briefcase, Building2, CalendarClock, Ellipsis, Keyboard, LayoutDashboard, LogOut, PieChart, RefreshCw, Scale, Search, Settings, Sparkles, TrendingUp, Wallet } from 'lucide-react'
 import { api, esDemo } from '../lib/api'
 import type { EstadoAuth, EstadoSync } from '../lib/tipos'
 import { fechaHora } from '../lib/format'
-import { useAccion, useAvisos } from '../lib/utilidades'
-import { Boton, Cargando } from './ui'
+import { useAvisos } from '../lib/utilidades'
+import { useSincronizar } from '../lib/sincronizar'
+import { AYUDA_ATAJOS, TECLA_MOD, useAtajos } from '../lib/atajos'
+import { aplicarTema, TEMAS, useTema } from '../lib/tema'
+import Logo from './Logo'
+import Paleta from './Paleta'
+import { Boton, Cargando, Dialogo, Segmentos } from './ui'
 
 const secciones: { a: string; texto: string; icono: typeof Wallet; movil?: boolean }[] = [
   { a: '/', texto: 'Inicio', icono: LayoutDashboard, movil: true },
@@ -16,24 +21,32 @@ const secciones: { a: string; texto: string; icono: typeof Wallet; movil?: boole
   { a: '/impuestos', texto: 'Impuestos', icono: Scale },
   { a: '/inmuebles', texto: 'Bienes', icono: Building2 },
   { a: '/plan', texto: 'Plan', icono: CalendarClock, movil: true },
+  { a: '/inversiones', texto: 'Inversiones', icono: TrendingUp },
 ]
 const ajustes = { a: '/ajustes', texto: 'Ajustes', icono: Settings }
 const asistente = { a: '/asistente', texto: 'Asistente', icono: Sparkles }
+const claseEnlace = (activo: boolean) =>
+  `flex items-center gap-3 rounded-xl px-3 py-2 text-sm transition ${activo ? 'bg-accent-soft font-semibold text-accent' : 'text-muted hover:bg-panel-2 hover:text-ink'}`
+
+function Tema({ pequeno }: { pequeno?: boolean }) {
+  const tema = useTema()
+  return <Segmentos pequeno={pequeno} etiqueta="Tema" opciones={TEMAS} valor={tema} onCambiar={aplicarTema} />
+}
 
 function EstadoConexiones() {
   const { data } = useQuery({ queryKey: ['sync'], queryFn: () => api.get<EstadoSync>('/sync') })
-  const sincronizar = useAccion(() => api.post('/sync'), 'Sincronización terminada')
+  const sincronizar = useSincronizar('/sync')
   const ultima = [data?.sabadell.ultima, data?.indexa.ultima].filter(Boolean).sort((a, b) => (a!.fecha < b!.fecha ? 1 : -1))[0]
   return (
     <div className="flex items-center gap-3">
       {ultima && (
-        <span className="hidden text-xs text-muted sm:inline">
+        <span className="hidden text-xs text-muted lg:inline">
           Última sincronización {fechaHora(ultima.fecha)}
         </span>
       )}
-      <Boton variante="secundario" onClick={() => sincronizar.mutate(undefined)} disabled={sincronizar.isPending}>
+      <Boton variante="secundario" onClick={() => sincronizar.mutate(undefined)} disabled={sincronizar.isPending} aria-label="Sincronizar">
         <RefreshCw size={15} className={sincronizar.isPending ? 'animate-spin' : ''} />
-        {sincronizar.isPending ? 'Sincronizando…' : 'Sincronizar'}
+        <span className="hidden sm:inline">{sincronizar.isPending ? 'Sincronizando…' : 'Sincronizar'}</span>
       </Boton>
     </div>
   )
@@ -56,7 +69,7 @@ function Sesion({ compacto }: { compacto?: boolean }) {
   return compacto
     ? <button onClick={salir} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-muted"><LogOut size={18} />Salir ({data.email})</button>
     : (
-      <div className="mt-4 flex items-center justify-between gap-2 border-t border-line px-2 pt-4 text-xs text-muted">
+      <div className="mt-3 flex items-center justify-between gap-2 px-2 text-xs text-muted">
         <span className="truncate" title={data.email}>{data.email}</span>
         <button onClick={salir} aria-label="Cerrar sesión" className="rounded-lg p-1.5 hover:bg-panel-2 hover:text-ink"><LogOut size={15} /></button>
       </div>
@@ -79,13 +92,17 @@ function NavMovil() {
     <>
       {mas && (
         <div className="fixed inset-0 z-30 bg-black/30 md:hidden" onClick={() => setMas(false)}>
-          <div className="absolute inset-x-3 rounded-2xl border border-line bg-panel p-2 shadow-xl" style={{ bottom: 'calc(72px + env(safe-area-inset-bottom, 0px))' }}>
+          <div className="absolute inset-x-3 rounded-2xl border border-line bg-panel p-2 shadow-xl" style={{ bottom: 'calc(72px + env(safe-area-inset-bottom, 0px))' }}
+            onClick={(e) => e.stopPropagation()}>
             {resto.map(({ a, texto, icono: Icono }) => (
               <NavLink key={a} to={a} onClick={() => setMas(false)}
                 className={({ isActive }) => `flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm ${isActive ? 'bg-accent-soft font-semibold text-accent' : ''}`}>
                 <Icono size={18} />{texto}
               </NavLink>
             ))}
+            <div className="flex items-center justify-between gap-3 px-3 py-2.5 text-sm">
+              <span>Tema</span><Tema pequeno />
+            </div>
             <Sesion compacto />
           </div>
         </div>
@@ -96,7 +113,7 @@ function NavMovil() {
             <Icono size={20} /><span className="max-w-full truncate">{texto}</span>
           </NavLink>
         ))}
-        <button className={clase(enResto || mas)} onClick={() => setMas(!mas)} aria-expanded={mas}>
+        <button className={clase(enResto || mas)} onClick={() => setMas(!mas)} aria-expanded={mas} aria-label="Más secciones">
           <Ellipsis size={20} /><span>Más</span>
         </button>
       </nav>
@@ -105,38 +122,49 @@ function NavMovil() {
 }
 
 export default function Layout() {
+  const [paleta, setPaleta] = useState(false)
+  const [ayuda, setAyuda] = useState(false)
+  const abrirPaleta = useCallback(() => { setAyuda(false); setPaleta((v) => !v) }, [])
+  const abrirAyuda = useCallback(() => setAyuda(true), [])
+  useAtajos({ onBuscar: abrirPaleta, onAyuda: abrirAyuda })
+
   return (
     <div className="min-h-full md:grid md:grid-cols-[232px_1fr]">
       <aside className="sticky top-0 hidden h-screen flex-col border-r border-line bg-panel px-4 py-6 md:flex">
         <div className="mb-8 flex items-center gap-2.5 px-2">
-          <div className="grid size-8 place-items-center rounded-lg bg-accent text-panel">
-            <svg viewBox="0 0 32 32" className="size-5" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round"><path d="M7 22l6-7 5 3.5 7-9" /></svg>
-          </div>
+          <Logo />
           <span className="font-semibold tracking-tight">Finanzas</span>
         </div>
         <nav className="flex flex-col gap-1">
           {secciones.map(({ a, texto, icono: Icono }) => (
-            <NavLink key={a} to={a} end={a === '/'}
-              className={({ isActive }) => `flex items-center gap-3 rounded-xl px-3 py-2 text-sm transition ${isActive ? 'bg-accent-soft font-semibold text-accent' : 'text-muted hover:bg-panel-2 hover:text-ink'}`}>
+            <NavLink key={a} to={a} end={a === '/'} className={({ isActive }) => claseEnlace(isActive)}>
               <Icono size={18} />{texto}
             </NavLink>
           ))}
         </nav>
         <nav className="mt-auto flex flex-col gap-1">
           {[asistente, ajustes].map(({ a, texto, icono: Icono }) => (
-            <NavLink key={a} to={a}
-              className={({ isActive }) => `flex items-center gap-3 rounded-xl px-3 py-2 text-sm transition ${isActive ? 'bg-accent-soft font-semibold text-accent' : 'text-muted hover:bg-panel-2 hover:text-ink'}`}>
+            <NavLink key={a} to={a} className={({ isActive }) => claseEnlace(isActive)}>
               <Icono size={18} />{texto}
             </NavLink>
           ))}
+          <button type="button" onClick={abrirAyuda} className={claseEnlace(false)} aria-label="Atajos de teclado">
+            <Keyboard size={18} />Atajos<kbd className="ml-auto">?</kbd>
+          </button>
         </nav>
-        <Sesion />
+        <div className="mt-4 border-t border-line pt-4">
+          <Tema pequeno />
+          <Sesion />
+        </div>
       </aside>
 
       <div className="min-w-0 pb-24 md:pb-0">
         <div className="sticky z-20 flex items-center justify-between gap-3 border-b border-line bg-bg/85 px-4 py-3 backdrop-blur sm:px-8" style={{ top: 'env(safe-area-inset-top, 0px)' }}>
           <span className="font-semibold md:invisible">Finanzas</span>
           <div className="flex items-center gap-2">
+            <Boton variante="secundario" onClick={abrirPaleta} aria-label="Buscar" aria-keyshortcuts="Control+K Meta+K">
+              <Search size={15} /><span className="hidden sm:inline">Buscar</span><kbd className="hidden sm:inline-block">{TECLA_MOD} K</kbd>
+            </Boton>
             <Link to="/asistente" aria-label="Asistente" className="rounded-xl border border-line bg-panel p-2 text-muted hover:text-ink md:hidden"><Sparkles size={16} /></Link>
             <EstadoConexiones />
           </div>
@@ -152,6 +180,18 @@ export default function Layout() {
       </div>
 
       <NavMovil />
+      <Paleta abierto={paleta} onCerrar={() => setPaleta(false)} />
+      <Dialogo abierto={ayuda} onCerrar={() => setAyuda(false)} titulo="Atajos de teclado">
+        <ul className="divide-y divide-line text-sm">
+          {AYUDA_ATAJOS.map((a) => (
+            <li key={a.texto} className="flex items-center justify-between gap-3 py-2">
+              <span>{a.texto}</span>
+              <span className="flex shrink-0 gap-1">{a.teclas.map((t, i) => <kbd key={i}>{t}</kbd>)}</span>
+            </li>
+          ))}
+        </ul>
+        <p className="mt-3 text-xs text-muted">Los atajos de una letra no funcionan mientras escribes en un campo ni con una ventana abierta.</p>
+      </Dialogo>
     </div>
   )
 }

@@ -8,7 +8,7 @@ from finanzas.main import app
 def test_flujo_completo_api():
     with TestClient(app) as c:
         for ruta in ("/resumen", "/cuentas", "/categorias", "/movimientos", "/autonomo", "/nominas",
-                     "/inmuebles", "/planificacion", "/sync", "/config"):
+                     "/inmuebles", "/planificacion", "/sync", "/app/estado", "/sync/historial", "/buscar?q=ab"):
             assert c.get(f"/api{ruta}").status_code == 200, ruta
 
         cuenta = c.post("/api/cuentas", json={"nombre": "Cuenta Sabadell", "entidad": "Banco Sabadell"}).json()

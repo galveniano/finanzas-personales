@@ -404,7 +404,12 @@ def borrar_cuenta(cuenta_id: int, s: Session = SesionDB):
 
 @router.get("/sync")
 def estado_sync(s: Session = SesionDB):
-    return sync.estado(s)
+    estado = sync.estado(s)
+    # Desde qué fecha hay movimientos del banco: la carga inicial va por tramos hacia atrás
+    con = enablebanking.conexion_activa(s)
+    desde = s.scalar(select(func.min(Cuenta.historico_desde)).where(Cuenta.conexion_id == con.id)) if con else None
+    estado["sabadell"]["historico_desde"] = f(desde)
+    return estado
 
 
 @router.post("/sync")
@@ -1184,11 +1189,14 @@ def planificar_dias(datos: DiasPlanificados, s: Session = SesionDB):
 
 
 @router.post("/importar/datos")
-async def importar_datos(fichero: UploadFile = File(...), s: Session = SesionDB):
-    """Fichero JSON con inmuebles, coches e inversiones privadas (ver importers/datos_json.py)."""
+async def importar_datos(previa: bool = False, fichero: UploadFile = File(...), s: Session = SesionDB):
+    """Fichero JSON con inmuebles, coches e inversiones privadas (ver importers/datos_json.py), o una copia de
+    seguridad completa de /exportar, que sustituye todos los datos. Con `previa` solo dice qué haría."""
     from finanzas.importers import datos_json
     try:
         datos = json.loads(await fichero.read())
+        if previa:
+            return datos_json.vista_previa(datos)
         return {"mensajes": datos_json.importar(s, datos)}
     except (ValueError, KeyError, TypeError, AttributeError) as e:
         raise HTTPException(400, f"No se ha podido importar: {e}")
@@ -1505,12 +1513,6 @@ def borrar_inversion(inversion_id: int, s: Session = SesionDB):
     return {"ok": True}
 
 
-@router.get("/config")
-def ver_config():
-    return {"ccaa": config.CCAA, "banco": config.BANCO,
-            "redirect_url": config.ENABLE_BANKING_REDIRECT_URL}
-
-
 # --- Hacienda: modelos presentados ------------------------------------------
 
 NOMBRE_MODELO = {"303": "IVA trimestral", "130": "IRPF pago fraccionado", "100": "Renta",
@@ -1689,10 +1691,26 @@ def listar_documentos_drive(s: Session = SesionDB):
     orden = {"pendiente": 0, "error": 1, "importado": 2, "ignorado": 3}
     docs = sorted(s.scalars(select(DocumentoDrive)), key=lambda d: (orden.get(d.estado, 9), d.nombre))
     from finanzas import ia
-    return {"ia": ia.disponible(s), "google_client_id": config.GOOGLE_CLIENT_ID or None,
+    return {"ia": ia.disponible(s),
             "documentos": [{"id": d.id, "nombre": d.nombre, "enlace": d.enlace, "tipo": d.tipo, "estado": d.estado,
                             "mensaje": d.mensaje, "datos": json.loads(d.datos or "{}"),
                             "revisado": iso_utc(d.revisado)} for d in docs]}
+
+
+class ReleerDriveIn(BaseModel):
+    access_token: str
+
+
+@router.post("/drive/documentos/{doc_id}/releer")
+def releer_documento_drive(doc_id: int, datos: ReleerDriveIn, s: Session = SesionDB):
+    """Vuelve a descargar y leer un documento (uno con error, o cuando ya tienes la clave de IA)."""
+    from finanzas.integrations import drive
+    doc = _obtener(s, DocumentoDrive, doc_id)
+    try:
+        drive.releer(s, doc, datos.access_token)
+    except drive.ErrorDrive as e:
+        raise HTTPException(400, str(e))
+    return {"id": doc.id, "estado": doc.estado, "mensaje": doc.mensaje, "datos": json.loads(doc.datos or "{}")}
 
 
 class GastoDriveIn(BaseModel):
@@ -1706,6 +1724,8 @@ def gasto_desde_drive(doc_id: int, datos: GastoDriveIn, s: Session = SesionDB):
     doc = _obtener(s, DocumentoDrive, doc_id)
     if doc.gasto_id:
         raise HTTPException(409, "Ya está apuntado como gasto")
+    if doc.datos in ("", "{}"):
+        raise HTTPException(400, "Este documento aún no se ha leído: pon la clave de IA en Ajustes y pulsa «Volver a leer»")
     drive.crear_gasto(s, doc, datos.deducible_pct, datos.categoria)
     return {"ok": True}
 
@@ -2049,8 +2069,9 @@ def simular_ahorro(pensiones: float = 0, ppes: float = 0, gastos: float = 0, s: 
 # --- Copia de seguridad y calendario ---------------------------------------------
 
 @router.get("/exportar")
-def exportar(pdfs: bool = False, s: Session = SesionDB):
-    """Todos tus datos en JSON. Las claves de API guardadas no salen; los PDF de Hacienda, solo si los pides."""
+def exportar(pdfs: bool = False, destino: str = "", s: Session = SesionDB):
+    """Todos tus datos en JSON. Las claves de API guardadas no salen; los PDF de Hacienda, solo si los pides.
+    Queda registrada como última copia (con `destino=drive` si el frontal la va a subir a tu Google Drive)."""
     import base64
     from finanzas import ajustes as aj, avisos
     from finanzas.models import Ajuste
@@ -2071,7 +2092,7 @@ def exportar(pdfs: bool = False, s: Session = SesionDB):
                 continue  # secretos cifrados
             filas.append(d)
         tablas[tabla.name] = filas
-    aj.guardar(s, avisos.CLAVE_ULTIMA_COPIA, date.today().isoformat())
+    aj.guardar(s, avisos.CLAVE_ULTIMA_COPIA, f"{date.today().isoformat()} {destino.strip()[:20]}".strip())
     nombre = f"finanzas-{date.today().isoformat()}.json"
     return Response(json.dumps({"version": 1, "fecha": date.today().isoformat(), "tablas": tablas}, ensure_ascii=False),
                     media_type="application/json", headers={"Content-Disposition": f'attachment; filename="{nombre}"'})
@@ -2104,14 +2125,6 @@ def exportar_movimientos(cuenta_id: int | None = None, categoria_id: int | None 
     libro.save(salida)
     return Response(salida.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": f'attachment; filename="movimientos-{date.today().isoformat()}.xlsx"'})
-
-
-@router.post("/exportar/hecha")
-def copia_hecha(s: Session = SesionDB):
-    """El frontal avisa de que ha guardado la copia en tu Google Drive."""
-    from finanzas import ajustes as aj, avisos
-    aj.guardar(s, avisos.CLAVE_ULTIMA_COPIA, date.today().isoformat())
-    return {"ok": True}
 
 
 @router.get("/calendario/enlace")

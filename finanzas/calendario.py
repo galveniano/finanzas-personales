@@ -18,9 +18,7 @@ router = APIRouter()
 
 
 def token() -> str:
-    if len(config.SESSION_SECRET) < 32 and config.AUTH_REQUERIDA:
-        raise HTTPException(503, "Falta SESSION_SECRET (al menos 32 caracteres)")
-    secreto = (config.SESSION_SECRET or "finanzas-local").encode()
+    secreto = config.secreto(obligatorio=config.AUTH_REQUERIDA).encode()
     return hmac.new(secreto, b"calendario-plazos", hashlib.sha256).hexdigest()[:32]
 
 
