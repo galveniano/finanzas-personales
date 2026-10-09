@@ -155,6 +155,10 @@ class ContratoAlquiler(Base):
         back_populates="contrato", order_by="CambioRenta.desde"
     )
 
+    def vigente(self, d: date) -> bool:
+        """Si el contrato está en vigor en una fecha."""
+        return self.fecha_inicio <= d and (self.fecha_fin is None or self.fecha_fin >= d)
+
     def renta_en(self, d: date) -> Decimal:
         """Renta vigente en una fecha: la inicial o la última actualización (IPC, acuerdo...)."""
         renta = self.renta_mensual
