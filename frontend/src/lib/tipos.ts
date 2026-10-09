@@ -33,10 +33,15 @@ export interface CuotaAutonomos {
   anio: number; rendimiento_neto: number; cuota_pagada: number; rendimiento_computable_mes: number; tramo: number
   base_minima: number; base_maxima: number; cuota_minima_anual: number; cuota_maxima_anual: number
   a_pagar: number; a_devolver: number; devolucion_pluriactividad: number; fuente: string; previsto: boolean
+  tipo: number; base_cotizada_mes: number; meses_hasta_regularizacion: number
+}
+export interface PlazoHacienda {
+  fecha: string; titulo: string; detalle: string; ver: 'trimestres' | 'renta'
+  presentado: boolean | null; vencido: boolean  // presentado: null si el plazo no exige ningún modelo
 }
 export interface Hacienda {
   pendiente: Pendiente
-  hucha: { cuenta_id: number | null; cuenta: string | null; apartado: number | null; debes_hoy: number
+  hucha: { cuenta_id: number | null; cuenta: string | null; apartado: number | null
     renta_prevista: number; falta: number; al_mes: number; meses_hasta_junio: number }
   cuota_autonomos: CuotaAutonomos[]
   renta: { anio: number; base: number; base_liquidable: number; base_ahorro: number; imputacion_inmuebles: number
@@ -44,11 +49,12 @@ export interface Hacienda {
   supuestos: { aportacion_pensiones_anio: number | null; aportacion_ppes_anio: number | null; fraccionar_renta: boolean | null
     rentas_ahorro_anio: number | null; imputacion_inmuebles_anio: number | null }
   origen: { rentas_ahorro_anio: string; imputacion_inmuebles_anio: string; valor_rentas_ahorro: number; valor_imputacion: number }
-  plazos: { fecha: string; titulo: string; detalle: string }[]
+  plazos: PlazoHacienda[]
   cuentas: { id: number; nombre: string }[]
 }
 export interface AhorroFiscal {
-  anio: number; cuota_sin: number; cuota_con: number; ahorro: number; tipo_marginal: number; reduccion_aplicada: number
+  anio: number; cuota_sin: number; cuota_con: number; ahorro: number; tipo_marginal: number
+  reduccion_aplicada: number; reduccion_guardada: number
   limites: { pensiones: number; ppes: number; pct_rendimientos: number }
 }
 export interface Cuenta {
@@ -153,7 +159,8 @@ export interface Declaracion {
 }
 export interface Declaraciones {
   declaraciones: Declaracion[]
-  por_anio: { ejercicio: number; pagado: number; devuelto: number }[]
+  // por_modelo: neto de cada modelo (303, 130, 100…) en el ejercicio; negativo si te devolvieron
+  por_anio: { ejercicio: number; pagado: number; devuelto: number; neto: number; por_modelo: Record<string, number> }[]
 }
 export interface CalculoNomina {
   bruto_anual: number; pagas: number; tipo_irpf: number; ss_anual: number; irpf_anual: number
@@ -224,6 +231,7 @@ export interface MesPrevision {
 }
 export interface RentaPrevista {
   anio: number; rendimiento_trabajo: number; rendimiento_actividad: number; rendimiento_alquiler: number; base: number
+  imputacion_inmuebles: number; reduccion_pensiones: number; base_liquidable: number; base_ahorro: number; cuota_ahorro: number
   cuota: number; retenciones_nomina: number; retenciones_facturas: number; pagos_130: number; resultado: number; tipo_medio: number
   ingresos: { fuentes: IngresoFuente[]; total: Omit<IngresoFuente, 'fuente'> }
 }

@@ -4,7 +4,7 @@ El IVA que cobras en las facturas no es tuyo: lo guardas hasta el 303. Igual pas
 trimestre en curso y con la renta, que se va generando mes a mes y se paga en junio del año siguiente.
 Todo son estimaciones a partir de la previsión.
 """
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from finanzas import ajustes, declaraciones, prevision
 from finanzas.fiscal import reta
-from finanzas.models import Cuenta, Declaracion, Factura, GastoAutonomo
+from finanzas.models import Cuenta, Declaracion, Factura, GastoAutonomo, Nomina
 
 CLAVE_HUCHA = "cuenta_hucha"
 
@@ -76,29 +76,50 @@ def cuota_reta_banco(s: Session, anio: int) -> tuple[float, int]:
     return round(sum(i for _, i in cargos), 2), len({f.month for f, _ in cargos})
 
 
+def bruto_nominas_12_meses(s: Session, pagas: int = 14, hoy: date | None = None) -> float:
+    """Bruto anual según las nóminas registradas en los últimos 12 meses (0 si no hay ninguna). Con menos de un
+    año subido, la media de las nóminas normales por las pagas del año."""
+    hoy = hoy or date.today()
+    ultimas = s.scalars(select(Nomina).where(Nomina.fecha > hoy - timedelta(days=365))).all()
+    if not ultimas:
+        return 0.0
+    normales = [x for x in ultimas if not x.paga_extra]
+    if normales and len({(x.fecha.year, x.fecha.month) for x in ultimas}) < 12:
+        return round(float(sum((x.bruto for x in normales), Decimal(0))) / len(normales) * pagas, 2)
+    return round(float(sum((x.bruto for x in ultimas), Decimal(0))), 2)
+
+
+def _meses_hasta_regularizacion(anio: int, hoy: date) -> int:
+    """Meses que quedan hasta que la Seguridad Social regularice ese año (hacia noviembre del siguiente)."""
+    return max((anio + 1 - hoy.year) * 12 + prevision.MES_REGULARIZACION_RETA - hoy.month, 1)
+
+
 def revision_reta(s: Session, prev: dict | None = None) -> list[dict]:
     """Por año: lo que cotizaste como autónomo frente a lo que te toca por tus rendimientos reales."""
     prev = prev or prevision.calcular(s)
+    hoy = date.today()
     nomina = (prev["supuestos"].get("nomina") or {})
     bruto = float(nomina.get("bruto_anual") or 0) * (1 + float(nomina.get("variable_pct") or 0) / 100)
+    if not bruto:  # sin sueldo en los supuestos: la pluriactividad sale de las nóminas que hayas subido
+        bruto = bruto_nominas_12_meses(s, int(nomina.get("pagas") or 14), hoy)
     filas = []
     rentas = s.scalars(select(Declaracion).where(Declaracion.modelo == "100").order_by(Declaracion.ejercicio)).all()
     vistos = set()
     for d in rentas:
         c = declaraciones.casillas(d)
-        if d.ejercicio not in reta.TABLAS or d.ejercicio in vistos or "ingresos_actividad" not in c:
+        if reta.anio_tabla(d.ejercicio) is None or d.ejercicio in vistos or "ingresos_actividad" not in c:
             continue
         vistos.add(d.ejercicio)
         cuota = c.get("ss_autonomo") or cuota_reta_banco(s, d.ejercicio)[0]
         rendimiento = c["ingresos_actividad"] - c.get("gastos_actividad", 0.0)
         r = reta.regularizar(d.ejercicio, rendimiento, cuota, bruto, f"renta {d.ejercicio}")
         if r:
-            filas.append({**r.a_dict(), "previsto": False})
+            filas.append({**r.a_dict(), "previsto": False,
+                          "meses_hasta_regularizacion": _meses_hasta_regularizacion(d.ejercicio, hoy)})
     # Este año y, mientras su renta no esté presentada, el pasado: con la previsión
-    hoy = date.today()
     for actual in prev.get("anios_todos", []):
         anio = actual["anio"]
-        if anio not in (hoy.year - 1, hoy.year) or anio in vistos or anio not in reta.TABLAS:
+        if anio not in (hoy.year - 1, hoy.year) or anio in vistos or reta.anio_tabla(anio) is None:
             continue
         pagado, meses = cuota_reta_banco(s, anio)
         cuota = pagado / meses * 12 if meses else float(prev.get("gastos_autonomo_mes") or 0) * 12
@@ -106,7 +127,8 @@ def revision_reta(s: Session, prev: dict | None = None) -> list[dict]:
         rendimiento = actual["entradas"]["facturado"] - gastos
         r = reta.regularizar(anio, rendimiento, cuota, bruto, "previsión del año")
         if r:
-            filas.append({**r.a_dict(), "previsto": True})
+            filas.append({**r.a_dict(), "previsto": True,
+                          "meses_hasta_regularizacion": _meses_hasta_regularizacion(anio, hoy)})
     return filas
 
 
@@ -128,6 +150,6 @@ def hucha(s: Session, pend: dict, prev: dict) -> dict:
     falta = max(pend["total"] + (renta_total - ya_generado) - (apartado or 0.0), 0.0)
     return {"cuenta_id": cuenta.id if cuenta else None, "cuenta": cuenta.nombre if cuenta else None,
             "apartado": round(apartado, 2) if apartado is not None else None,
-            "debes_hoy": pend["total"], "renta_prevista": round(renta_total, 2),
+            "renta_prevista": round(renta_total, 2),
             "falta": round(falta, 2), "al_mes": round(falta / max(meses_hasta_junio, 1), 2),
             "meses_hasta_junio": meses_hasta_junio}

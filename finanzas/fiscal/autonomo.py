@@ -31,6 +31,15 @@ def vencimiento(anio: int, trimestre: int) -> date:
     return date(anio + 1, 1, 30) if trimestre == 4 else date(anio, 3 * trimestre + 1, 20)
 
 
+def trimestre_a_pagar(hoy: date) -> tuple[int, int]:
+    """El trimestre que toca pagar: el anterior mientras dura su plazo (hasta el 20 de abril, julio y octubre, o el
+    30 de enero) y, pasado el plazo, el que está en curso. Inicio e Impuestos lo usan para resaltar el mismo."""
+    anio, t = hoy.year, trimestre_de(hoy)
+    if hoy.month in (1, 4, 7, 10) and hoy.day <= (30 if hoy.month == 1 else 20):
+        return (anio - 1, 4) if t == 1 else (anio, t - 1)
+    return anio, t
+
+
 def plazo_presentacion(anio: int, trimestre: int) -> str:
     v = vencimiento(anio, trimestre)
     return f"1-{v.day} {MESES[v.month - 1]} {v.year}"

@@ -1207,13 +1207,18 @@ def ver_declaraciones(s: Session = SesionDB):
                                                   Declaracion.modelo)).all()
     cache: dict = {}
     lista = [_declaracion(d, _estimado(s, d, cache)) for d in decl]
+    # Por ejercicio: lo pagado, lo devuelto y el neto de cada modelo (303, 130, 100...; negativo si te devolvieron)
     por_anio: dict[int, dict] = {}
     for d in decl:
-        a = por_anio.setdefault(d.ejercicio, {"ejercicio": d.ejercicio, "pagado": 0.0, "devuelto": 0.0})
-        if d.importe > 0:
-            a["pagado"] += float(d.importe)
-        elif d.resultado == "devolver":
-            a["devuelto"] -= float(d.importe)
+        a = por_anio.setdefault(d.ejercicio, {"ejercicio": d.ejercicio, "pagado": 0.0, "devuelto": 0.0, "por_modelo": {}})
+        pagado = float(d.importe) if d.importe > 0 else 0.0
+        devuelto = -float(d.importe) if d.importe < 0 and d.resultado == "devolver" else 0.0
+        a["pagado"] += pagado
+        a["devuelto"] += devuelto
+        a["por_modelo"][d.modelo] = round(a["por_modelo"].get(d.modelo, 0.0) + pagado - devuelto, 2)
+    for a in por_anio.values():
+        a["pagado"], a["devuelto"] = round(a["pagado"], 2), round(a["devuelto"], 2)
+        a["neto"] = round(a["pagado"] - a["devuelto"], 2)
     return {"declaraciones": lista, "por_anio": sorted(por_anio.values(), key=lambda x: -x["ejercicio"])}
 
 
@@ -1285,19 +1290,26 @@ class DeclaracionIn(BaseModel):
     importe: Decimal
     fecha_presentacion: date | None = None
     notas: str = ""
+    # Ya tienes ese modelo y periodo y esta lo completa: se suma a lo pagado en vez de rechazarse
+    complementaria: bool = False
 
 
 @router.post("/declaraciones")
 def crear_declaracion(datos: DeclaracionIn, s: Session = SesionDB):
-    v = datos.model_dump()
+    v = datos.model_dump(exclude={"complementaria"})
+    v["modelo"], v["notas"] = v["modelo"].strip(), v["notas"].strip()
     if v["resultado"] in ("devolver", "compensar"):
         v["importe"] = -abs(v["importe"])
+    if declaraciones.presentada(s, v["modelo"], v["ejercicio"], v["periodo"]):
+        if not datos.complementaria:
+            raise HTTPException(409, f"Ya tienes el modelo {v['modelo']} de ese periodo; si es una complementaria, márcalo")
+        v["notas"] = v["notas"] or "Complementaria"
     s.add(Declaracion(**v))
     try:
         s.commit()
     except IntegrityError:
         s.rollback()
-        raise HTTPException(409, "Ya tienes esa declaración apuntada")
+        raise HTTPException(409, "Ya tienes una declaración a mano de ese periodo: edita su importe en vez de añadir otra")
     return {"ok": True}
 
 
@@ -1635,8 +1647,10 @@ def ver_hacienda(s: Session = SesionDB):
                    "imputacion_inmuebles_anio": prev["origen_imputacion_inmuebles_anio"],
                    "valor_rentas_ahorro": prev["rentas_ahorro_anio"],
                    "valor_imputacion": prev["imputacion_inmuebles_anio"]},
-        "plazos": [{"fecha": f(p["fecha"]), "titulo": p["titulo"], "detalle": p["detalle"]}
-                   for p in avisos.plazos(hoy, hoy + timedelta(days=365))],
+        # Todos los plazos del año y los del año que viene: con lo ya presentado (contando la exención del 130)
+        "plazos": [{"fecha": f(p["fecha"]), "titulo": p["titulo"], "detalle": p["detalle"], "ver": p["ver"],
+                    "presentado": p["presentado"], "vencido": p["vencido"]}
+                   for p in avisos.plazos_con_estado(s, date(hoy.year, 1, 1), hoy + timedelta(days=365), prev, hoy)],
         "cuentas": [{"id": c.id, "nombre": c.nombre} for c in s.scalars(
             select(Cuenta).where(Cuenta.activa, Cuenta.tipo.in_(["corriente", "ahorro"])).order_by(Cuenta.nombre))],
     }
@@ -1682,13 +1696,13 @@ def simular_ahorro(pensiones: float = 0, ppes: float = 0, gastos: float = 0, s: 
         raise HTTPException(400, "Falta la previsión de este año")
     cfg = prevision.resolver_clientes(s, prevision.leer(s))
     e = r["entradas"]
-    base = {"pensiones": 0, "ppes": 0, "gastos_actividad": 0}
+    # La base es la renta tal y como se enseña: con las aportaciones ya guardadas en los supuestos (sin `extra`)
     con = {"pensiones": max(pensiones, 0), "ppes": max(ppes, 0), "gastos_actividad": max(gastos, 0)}
     args = (cfg, e["nomina"], e["facturado"], e["retenciones"], e["pagos_130"], e["alquiler"], e["imputacion_app"])
-    sin, simulada = prevision._renta(*args, extra=base), prevision._renta(*args, extra=con)
+    sin, simulada = prevision._renta(*args), prevision._renta(*args, extra=con)
     return {"anio": hoy.year, "cuota_sin": sin["cuota"], "cuota_con": simulada["cuota"],
             "ahorro": round(sin["cuota"] - simulada["cuota"], 2), "tipo_marginal": sin["tipo_marginal"],
-            "reduccion_aplicada": simulada["reduccion_pensiones"],
+            "reduccion_aplicada": simulada["reduccion_pensiones"], "reduccion_guardada": sin["reduccion_pensiones"],
             "limites": {"pensiones": prevision.LIMITE_PENSIONES, "ppes": prevision.LIMITE_PPES,
                         "pct_rendimientos": prevision.LIMITE_PENSIONES_PCT * 100}}
 
@@ -1758,6 +1772,7 @@ def copia_hecha(s: Session = SesionDB):
 
 @router.get("/calendario/enlace")
 def enlace_calendario():
-    """Dirección secreta para suscribirte desde Google Calendar a los plazos de Hacienda."""
+    """Dirección secreta para suscribirte desde Google Calendar a los plazos de Hacienda, tus pagos previstos,
+    las llamadas de capital, los objetivos con fecha y la caducidad del permiso del banco."""
     from finanzas import calendario
     return {"ruta": f"/calendario/{calendario.token()}.ics"}
