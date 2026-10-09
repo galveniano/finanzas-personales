@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import exc as sa_exc
 
-from finanzas import actividad, auth, calendario, config, db, facturacion, gastos, impuestos, presupuestos, sync
+from finanzas import actividad, auth, calendario, config, db, facturacion, gastos, impuestos, plan, presupuestos, sync
 from finanzas.api import COOKIE_ESTADO_BANCO, router
 from finanzas.categorizar import sembrar_categorias
 from finanzas.integrations import enablebanking
@@ -46,6 +46,7 @@ app.include_router(presupuestos.router)
 app.include_router(facturacion.router)
 app.include_router(impuestos.router)
 app.include_router(actividad.router)
+app.include_router(plan.router)
 app.include_router(router)
 
 

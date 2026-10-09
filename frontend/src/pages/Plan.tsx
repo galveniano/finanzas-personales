@@ -1,285 +1,112 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { Check, Pencil, Plus } from 'lucide-react'
-import { Link } from 'react-router-dom'
-import { Bar, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import { CheckCheck, Plus } from 'lucide-react'
 import { api } from '../lib/api'
-import { cuandoVence, diasHasta, eur, eurK, fecha, hoyISO } from '../lib/format'
-import { cursorBarra, eje, estiloTooltip } from '../lib/graficas'
-import type { Planificacion as Datos, Prevision } from '../lib/tipos'
-import { num, useAccion } from '../lib/utilidades'
-import { Barra, BorrarEnDosPasos, Boton, Cabecera, Campo, Cargando, Casilla, Dato, Dialogo, Etiqueta, ErrorCarga, Formulario, Importe, Selector, Tabla, Tarjeta, Vacio } from '../components/ui'
+import type { Cuenta, Escenario as ValoresEscenario, Objetivo, Pago, Planificacion, Prevision } from '../lib/tipos'
+import { num, useAccion, useAvisos } from '../lib/utilidades'
+import ListaPagos from '../components/ListaPagos'
+import Escenario from '../components/Plan/Escenario'
+import FormObjetivo from '../components/Plan/FormObjetivo'
+import FormPago from '../components/Plan/FormPago'
+import ImpuestosQueVienen from '../components/Plan/ImpuestosQueVienen'
+import MesAMes from '../components/Plan/MesAMes'
+import Objetivos from '../components/Plan/Objetivos'
+import Previsto from '../components/Plan/Previsto'
+import { rutaPrevision, tieneSupuestos } from '../components/Plan/comun'
+import { Boton, Cabecera, Cargando, Dialogo, EnDosPasos, ErrorCarga, Segmentos, Tarjeta } from '../components/ui'
 
-const nombreMes = (clave: string) => fecha(`${clave}-01`, { month: 'short', year: '2-digit' })
-const ahorroTexto = (v: number) => (v < 0 ? `Gastando unos ${eur(-v)} más de lo que entra al mes` : `Ahorrando unos ${eur(v)} al mes`)
-const TIPO: Record<string, string> = { boda: 'Boda', viaje: 'Viaje', casa: 'Casa', colchon: 'Colchón', otro: 'Objetivo' }
+const HORIZONTES = [{ valor: 12, texto: '12 meses' }, { valor: 24, texto: '24 meses' }]
 
 export default function Plan() {
+  const [meses, setMeses] = useState<number>(12)
+  const [escenario, setEscenario] = useState<ValoresEscenario | null>(null)
   const [dialogo, setDialogo] = useState<'objetivo' | 'pago' | null>(null)
-  const [editando, setEditando] = useState<Datos['objetivos'][number] | null>(null)
-  const { data: d, isLoading, error } = useQuery({ queryKey: ['planificacion'], queryFn: () => api.get<Datos>('/planificacion') })
-  const { data: prev } = useQuery({ queryKey: ['prevision'], queryFn: () => api.get<Prevision>('/prevision') })
+  const [objetivo, setObjetivo] = useState<Objetivo | null>(null)
+  const [pago, setPago] = useState<Pago | null>(null)
+  const avisar = useAvisos()
+
+  const { data: d, isLoading, error } = useQuery({ queryKey: ['planificacion'], queryFn: () => api.get<Planificacion>('/planificacion') })
+  const { data: prev } = useQuery({
+    queryKey: ['prevision', meses], queryFn: () => api.get<Prevision>(rutaPrevision(meses, null)), placeholderData: keepPreviousData,
+  })
+  const { data: simulada, isFetching: simulando } = useQuery({
+    queryKey: ['prevision', meses, escenario], queryFn: () => api.get<Prevision>(rutaPrevision(meses, escenario)), enabled: !!escenario,
+  })
+  const esc = escenario ? simulada : undefined
+  const { data: cuentas } = useQuery({ queryKey: ['cuentas'], queryFn: () => api.get<Cuenta[]>('/cuentas') })
+
+  const cerrar = () => { setDialogo(null); setObjetivo(null); setPago(null) }
   const guardarObjetivo = useAccion((v: Record<string, string>) => {
-    const datos = { nombre: v.nombre, tipo: v.tipo, fecha_objetivo: v.fecha_objetivo || null,
-      importe_objetivo: num(v.importe_objetivo) ?? 0, ahorrado: num(v.ahorrado) ?? 0 }
-    return (editando ? api.patch(`/objetivos/${editando.id}`, datos) : api.post('/objetivos', datos))
-      .then(() => { setDialogo(null); setEditando(null) })
+    const datos = {
+      nombre: v.nombre, tipo: v.tipo, fecha_objetivo: v.fecha_objetivo || null, importe_objetivo: num(v.importe_objetivo) ?? 0,
+      // Con cuenta ligada el campo va apagado y no viene: no se toca
+      ahorrado: v.ahorrado === undefined ? undefined : num(v.ahorrado) ?? 0,
+      notas: v.notas ?? '', cuenta_id: v.cuenta_id ? Number(v.cuenta_id) : null,
+    }
+    return (objetivo ? api.patch(`/objetivos/${objetivo.id}`, datos) : api.post('/objetivos', datos)).then(cerrar)
   }, 'Objetivo guardado')
-  const borrarObjetivo = useAccion((id: number) => api.del(`/objetivos/${id}`), 'Objetivo borrado')
-  const borrarPago = useAccion((id: number) => api.del(`/pagos/${id}`), 'Pago borrado')
-  const crearPago = useAccion((v: Record<string, string>) => api.post('/pagos', {
-    concepto: v.concepto, fecha: v.fecha, importe: num(v.importe),
-    objetivo_id: v.objetivo_id ? Number(v.objetivo_id) : null, activo_id: v.activo_id ? Number(v.activo_id) : null,
-    pagado: v.pagado === 'on',
-  }).then(() => setDialogo(null)), 'Pago previsto guardado')
+  const borrarObjetivo = useAccion((o: Objetivo) => api.del(`/objetivos/${o.id}`), 'Objetivo borrado')
+  const guardarPago = useAccion((v: Record<string, string>) => {
+    const datos = {
+      concepto: v.concepto, fecha: v.fecha, importe: num(v.importe),
+      objetivo_id: v.objetivo_id ? Number(v.objetivo_id) : null, activo_id: v.activo_id ? Number(v.activo_id) : null,
+      pagado: v.pagado === 'on',
+    }
+    return (pago ? api.patch(`/pagos/${pago.id}`, datos) : api.post('/pagos', datos)).then(cerrar)
+  }, 'Pago previsto guardado')
+  const borrarPago = useAccion((p: Pago) => api.del(`/pagos/${p.id}`), 'Pago borrado')
   const marcar = useAccion(({ id, pagado }: { id: number; pagado: boolean }) => api.patch(`/pagos/${id}`, { pagado }))
+  const conciliar = useAccion(async () => {
+    const r = await api.post<{ marcados: number }>('/pagos/conciliar')
+    avisar(r.marcados ? `${r.marcados === 1 ? 'Un pago marcado' : `${r.marcados} pagos marcados`} como pagados` : 'No había nada que marcar')
+  })
 
   if (isLoading) return <Cargando />
   if (error) return <ErrorCarga error={error} />
   if (!d) return null
-  const sinSupuestos = prev && !prev.supuestos.nomina && !prev.supuestos.clientes.length
-  const ultimo = prev?.meses[prev.meses.length - 1]
-  const impuestos = prev?.meses.reduce((s, m) => s + m.total_impuestos, 0) ?? 0
-  const bajoColchon = prev?.meses.find((m) => m.bajo_colchon)
-  const ya = prev?.meses[0]?.ya_este_mes
-  const proximosImpuestos = (prev?.meses ?? []).flatMap((m) => m.impuestos.filter((i) => i.tipo !== 'ajuste' && i.importe)
-    .map((i) => ({ ...i, mes: m.mes })))
+  const conSupuestos = !!prev && tieneSupuestos(prev)
+  const vistos = d.pagos.filter((p) => !p.pagado && p.visto_en_banco).length
+  const ocupado = marcar.isPending || borrarPago.isPending || conciliar.isPending
 
   return (
     <>
       <Cabecera titulo="Plan" subtitulo="El dinero que tendrás, tus objetivos y los pagos que vienen">
-        <Boton variante="secundario" onClick={() => setDialogo('pago')}><Plus size={16} />Pago previsto</Boton>
-        <Boton onClick={() => setDialogo('objetivo')}><Plus size={16} />Objetivo</Boton>
+        <Segmentos etiqueta="Horizonte de la previsión" opciones={HORIZONTES} valor={meses} onCambiar={setMeses} />
+        <Boton variante="secundario" onClick={() => { setPago(null); setDialogo('pago') }}><Plus size={16} />Pago previsto</Boton>
+        <Boton onClick={() => { setObjetivo(null); setDialogo('objetivo') }}><Plus size={16} />Objetivo</Boton>
       </Cabecera>
 
-      <Tarjeta>
-        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-          <Dato etiqueta="Tienes hoy" valor={eur(d.liquidez)} nota="Cuentas corrientes y de ahorro" />
-          <Dato etiqueta="Pagos en 12 meses" valor={eur(d.pendiente_12_meses)}
-            nota={d.financiado_hipoteca ? `Sin los ${eur(d.financiado_hipoteca)} que pone la hipoteca prevista` : 'Los de abajo'} />
-          <Dato etiqueta="Impuestos en 12 meses" valor={sinSupuestos || !prev ? '—' : eur(impuestos)} nota="IVA, 130, renta, autónomos e IBI" />
-          {ultimo && !sinSupuestos
-            ? <Dato etiqueta={`Tendrás en ${fecha(`${ultimo.mes}-01`, { month: 'long', year: 'numeric' })}`} valor={eur(ultimo.liquidez)}
-                tono={ultimo.liquidez < 0 ? 'neg' : 'pos'} nota={ahorroTexto((ultimo.liquidez - prev!.liquidez_hoy) / prev!.meses.length)} />
-            : <Dato etiqueta="Tendrás en un año" valor="—" nota={<Link to="/ingresos" className="text-accent">Pon tu sueldo y tarifas</Link>} />}
-        </div>
-        {prev && !sinSupuestos && (
-          <div className="mt-6 h-56">
-            <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={prev.meses} margin={{ top: 8, right: 4, left: 4, bottom: 0 }}>
-                <CartesianGrid vertical={false} stroke="var(--line)" />
-                <XAxis dataKey="mes" tickFormatter={nombreMes} {...eje} />
-                <YAxis yAxisId="l" tickFormatter={eurK} {...eje} width={68} />
-                <YAxis yAxisId="n" orientation="right" hide />
-                <Tooltip {...estiloTooltip} cursor={cursorBarra} labelFormatter={(v) => nombreMes(String(v))}
-                  formatter={(v, n) => [eur(Number(v)), n === 'neto' ? 'Ahorro del mes' : 'Dinero disponible']} />
-                <Bar yAxisId="n" dataKey="neto" fill="var(--chart-2)" radius={[4, 4, 0, 0]} maxBarSize={24} />
-                <Line yAxisId="l" dataKey="liquidez" stroke="var(--chart-1)" strokeWidth={2} dot={false} />
-                {prev.colchon > 0 && <ReferenceLine yAxisId="l" y={prev.colchon} stroke="var(--neg)" strokeDasharray="4 4"
-                  label={{ value: 'Colchón', fill: 'var(--muted)', fontSize: 11, position: 'insideTopLeft' }} />}
-              </ComposedChart>
-            </ResponsiveContainer>
-          </div>
-        )}
-        {bajoColchon && (
-          <p className="mt-4 rounded-xl bg-panel-2 px-4 py-3 text-sm">
-            En {fecha(`${bajoColchon.mes}-01`, { month: 'long', year: 'numeric' })} bajarías
-            a {eur(bajoColchon.liquidez)}, por debajo de tu colchón de {eur(prev!.colchon)}.
-          </p>
-        )}
-      </Tarjeta>
+      <Previsto d={d} prev={prev} esc={esc} meses={meses} />
+      {prev && conSupuestos && <Escenario valor={escenario} onCambiar={setEscenario} prev={prev} esc={esc} cargando={simulando} />}
 
-      <h2 className="mt-8 mb-3 text-lg font-semibold">Objetivos</h2>
-      {d.objetivos.length ? (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {d.objetivos.map((o) => {
-            const pct = o.importe_objetivo ? Math.round((o.ahorrado / o.importe_objetivo) * 100) : 0
-            return (
-              <Tarjeta key={o.id}>
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="truncate font-semibold">{o.nombre}</div>
-                    <div className="text-xs text-muted">{o.fecha_objetivo ? fecha(o.fecha_objetivo, { day: 'numeric', month: 'long', year: 'numeric' }) : 'Sin fecha'}</div>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-1">
-                    <Etiqueta tono="acento">{TIPO[o.tipo] ?? o.tipo}</Etiqueta>
-                    <Boton variante="fantasma" className="px-2 py-1" aria-label="Editar" onClick={() => { setEditando(o); setDialogo('objetivo') }}><Pencil size={14} /></Boton>
-                    <BorrarEnDosPasos etiqueta={`el objetivo ${o.nombre}`} disabled={borrarObjetivo.isPending} onBorrar={() => borrarObjetivo.mutate(o.id)} />
-                  </div>
-                </div>
-                <div className="mt-4 flex items-baseline justify-between gap-2">
-                  <span className="cifra text-xl font-medium">{eur(o.ahorrado)}</span>
-                  <span className="cifra text-xs text-muted">de {eur(o.importe_objetivo)} · {pct} %</span>
-                </div>
-                <div className="mt-2"><Barra valor={o.ahorrado} max={o.importe_objetivo} /></div>
-                {o.ahorro_mensual != null && (
-                  <p className="mt-3 text-sm">Aparta <strong className="cifra">{eur(o.ahorro_mensual)}</strong> al mes para llegar.</p>
-                )}
-              </Tarjeta>
-            )
-          })}
-        </div>
-      ) : <Vacio>Crea objetivos como la boda o un viaje y te digo cuánto apartar cada mes.</Vacio>}
+      <Objetivos d={d} borrando={borrarObjetivo.isPending} onNuevo={() => { setObjetivo(null); setDialogo('objetivo') }}
+        onEditar={(o) => { setObjetivo(o); setDialogo('objetivo') }} onBorrar={(o) => borrarObjetivo.mutate(o)} />
 
-      {prev && !sinSupuestos && (
-        <>
-          <div className="mt-8 mb-3 flex items-baseline justify-between gap-3">
-            <h2 className="text-lg font-semibold">Impuestos que vienen</h2>
-            <Link to="/impuestos" className="text-sm text-accent">Ver en Impuestos</Link>
-          </div>
-          <Tarjeta>
-            {proximosImpuestos.length ? (
-              <ol className="relative space-y-1 border-l border-line pl-5">
-                {proximosImpuestos.map((i, n) => {
-                  const dias = i.vence ? diasHasta(i.vence) : null
-                  return (
-                    <li key={`${i.mes}-${n}`} className="relative flex flex-wrap items-center justify-between gap-3 py-2">
-                      <span className={`absolute top-1/2 -left-[27px] size-3 -translate-y-1/2 rounded-full border-2 ${i.importe < 0 ? 'border-accent bg-accent' : 'border-line bg-panel'}`} />
-                      <div className="min-w-0">
-                        <div className="font-medium">{i.concepto}</div>
-                        <div className="text-xs text-muted">
-                          {i.vence ? `${i.presentado && i.tipo === 'renta' ? 'Se carga el' : 'Hasta el'} ${fecha(i.vence, { day: 'numeric', month: 'long', year: 'numeric' })}`
-                            : `Hacia ${fecha(`${i.mes}-01`, { month: 'long', year: 'numeric' })} (fecha aproximada)`}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {i.presentado ? <Etiqueta tono="bien">Presentado</Etiqueta> : <Etiqueta tono="neutro">Estimado</Etiqueta>}
-                        {dias != null && dias <= 30 && <Etiqueta tono={dias < 0 ? 'mal' : 'aviso'}>{cuandoVence(dias)}</Etiqueta>}
-                        <Importe valor={-i.importe} />
-                      </div>
-                    </li>
-                  )
-                })}
-              </ol>
-            ) : <Vacio>No hay impuestos previstos en los próximos 12 meses.</Vacio>}
-            <p className="mt-3 text-xs text-muted">El IVA (303) y el IRPF (130) de cada trimestre, la renta de junio, la regularización de la cuota de autónomos
-              (con la devolución por pluriactividad restada) y los tributos que pagaste el año pasado, como el IBI o el de circulación.
-              Lo no presentado sale de la previsión. La cuota mensual de autónomos va en los gastos.</p>
-          </Tarjeta>
-        </>
-      )}
+      {prev && conSupuestos && <ImpuestosQueVienen prev={prev} meses={meses} />}
 
       <h2 className="mt-8 mb-3 text-lg font-semibold">Pagos previstos</h2>
       <Tarjeta>
-        {d.pagos.length ? (
-          <ol className="relative space-y-1 border-l border-line pl-5">
-            {d.pagos.map((p) => {
-              const dias = diasHasta(p.fecha)
-              return (
-                <li key={p.id} className="relative flex flex-wrap items-center justify-between gap-3 py-2">
-                  <span className={`absolute top-1/2 -left-[27px] size-3 -translate-y-1/2 rounded-full border-2 ${p.pagado ? 'border-accent bg-accent' : 'border-line bg-panel'}`} />
-                  <div className="min-w-0">
-                    <div className={`font-medium ${p.pagado ? 'text-muted line-through' : ''}`}>{p.concepto}</div>
-                    <div className="text-xs text-muted">{fecha(p.fecha, { day: 'numeric', month: 'long', year: 'numeric' })}{(p.inmueble || p.objetivo || p.inversion) && ` · ${p.inmueble ?? p.objetivo ?? p.inversion}`}</div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {!p.pagado && <Etiqueta tono={dias < 0 ? 'mal' : dias <= 30 ? 'aviso' : 'neutro'}>{cuandoVence(dias)}</Etiqueta>}
-                    <Importe valor={p.importe} />
-                    <Boton variante={p.pagado ? 'secundario' : 'fantasma'} className="px-2 py-1 text-xs" disabled={marcar.isPending} onClick={() => marcar.mutate({ id: p.id, pagado: !p.pagado })}>
-                      <Check size={14} />{p.pagado ? 'Pagado' : 'Marcar'}
-                    </Boton>
-                    <BorrarEnDosPasos etiqueta={`el pago ${p.concepto}`} disabled={borrarPago.isPending} onBorrar={() => borrarPago.mutate(p.id)} />
-                  </div>
-                </li>
-              )
-            })}
-          </ol>
-        ) : <Vacio>Apunta aquí los plazos de la obra nueva, la señal de la boda o el viaje.</Vacio>}
+        <ListaPagos pagos={d.pagos} ocupado={ocupado}
+          onMarcar={(p, pagado) => marcar.mutate({ id: p.id, pagado })}
+          onBorrar={(p) => borrarPago.mutate(p)}
+          onEditar={(p) => { setPago(p); setDialogo('pago') }}
+          acciones={vistos > 0 && (
+            <EnDosPasos variante="secundario" className="px-2.5 py-1 text-xs" icono={<CheckCheck size={14} />} disabled={ocupado}
+              texto={vistos === 1 ? 'Marcar el pago visto en el banco' : `Marcar los ${vistos} vistos en el banco`}
+              textoConfirmar={`¿Seguro? Marcar ${vistos === 1 ? 'el pago' : `los ${vistos}`} como pagados`} onConfirmar={() => conciliar.mutate(undefined)} />
+          )}
+          vacio="Apunta aquí los plazos de la obra nueva, la señal de la boda o el viaje. Si el cargo aparece en el banco, te lo digo." />
+        <p className="mt-3 text-xs text-muted">Un pago se da por «visto en el banco» cuando hay un cargo del mismo importe a menos de 20 días de su fecha.
+          Los vencidos sin marcar se descuentan del mes en curso en la previsión.</p>
       </Tarjeta>
 
+      {prev && conSupuestos && <MesAMes prev={prev} />}
 
-      {prev && !sinSupuestos && (
-        <details className="mt-8 rounded-2xl border border-line bg-panel p-5">
-          <summary className="cursor-pointer text-[15px] font-semibold">Mes a mes</summary>
-          <ul className="mt-4 divide-y divide-line sm:hidden">
-            {prev.meses.map((m) => (
-              <li key={m.mes} className="py-3 text-sm first:pt-0">
-                <div className="mb-1.5 flex items-baseline justify-between gap-2">
-                  <span className="font-medium capitalize">{nombreMes(m.mes)}</span>
-                  <span className={`text-xs ${m.bajo_colchon ? 'text-neg' : 'text-muted'}`}>Liquidez <Importe valor={m.liquidez} /></span>
-                </div>
-                <dl className="space-y-1">
-                  {m.nomina ? <div className="flex justify-between gap-3"><dt className="text-muted">Nómina</dt><dd><Importe valor={m.nomina} /></dd></div> : null}
-                  {m.cobros ? <div className="flex justify-between gap-3"><dt className="text-muted">Clientes</dt><dd><Importe valor={m.cobros} /></dd></div> : null}
-                  {m.alquiler ? <div className="flex justify-between gap-3"><dt className="text-muted">Alquiler</dt><dd><Importe valor={m.alquiler} /></dd></div> : null}
-                  <div className="flex justify-between gap-3"><dt className="text-muted">Gastos</dt><dd><Importe valor={-m.gastos} /></dd></div>
-                  {m.pagos_previstos ? <div className="flex justify-between gap-3"><dt className="text-muted">Pagos</dt><dd><Importe valor={-m.pagos_previstos} /></dd></div> : null}
-                  {m.objetivos.map((o) => (
-                    <div key={o.concepto} className="flex justify-between gap-3"><dt className="text-muted">{o.concepto}</dt><dd><Importe valor={-o.importe} /></dd></div>
-                  ))}
-                  {m.impuestos.map((i) => (
-                    <div key={i.concepto} className="flex justify-between gap-3">
-                      <dt className="text-muted">{i.concepto}{i.presentado && <> <Etiqueta tono="bien">Presentado</Etiqueta></>}</dt>
-                      <dd><Importe valor={-i.importe} /></dd>
-                    </div>
-                  ))}
-                  <div className="flex justify-between gap-3 font-medium"><dt>Ahorro</dt><dd><Importe valor={m.neto} /></dd></div>
-                </dl>
-              </li>
-            ))}
-          </ul>
-          <div className="mt-4 hidden sm:block">
-            <Tabla>
-              <thead><tr><th>Mes</th><th className="num">Nómina</th><th className="num">Clientes</th><th className="num">Alquiler</th>
-                <th className="num">Gastos</th><th className="num">Pagos</th><th>Impuestos</th><th className="num">Ahorro</th><th className="num">Liquidez</th></tr></thead>
-              <tbody>
-                {prev.meses.map((m) => (
-                  <tr key={m.mes}>
-                    <td className="whitespace-nowrap capitalize">{nombreMes(m.mes)}</td>
-                    <td className="num"><Importe valor={m.nomina} /></td>
-                    <td className="num" title={`Facturado ${eur(m.facturado)} + IVA ${eur(m.iva)} − retención ${eur(m.retenciones)}`}><Importe valor={m.cobros} /></td>
-                    <td className="num"><Importe valor={m.alquiler} /></td>
-                    <td className="num"><Importe valor={-m.gastos} /></td>
-                    <td className="num" title={m.objetivos.map((o) => `${o.concepto}: ${eur(o.importe)}`).join('\n')}>
-                      {m.pagos_previstos + m.total_objetivos ? <Importe valor={-(m.pagos_previstos + m.total_objetivos)} /> : ''}</td>
-                    <td className="text-xs">{m.impuestos.map((i) => (
-                      <div key={i.concepto} className="flex justify-between gap-2 whitespace-nowrap">
-                        <span className="text-muted">{i.concepto}{i.presentado && <> <Etiqueta tono="bien">Presentado</Etiqueta></>}</span>
-                        <Importe valor={-i.importe} />
-                      </div>))}</td>
-                    <td className="num font-medium"><Importe valor={m.neto} /></td>
-                    <td className={`num ${m.bajo_colchon ? 'bg-panel-2' : ''}`} title={m.bajo_colchon ? 'Por debajo de tu colchón' : undefined}><Importe valor={m.liquidez} /></td>
-                  </tr>
-                ))}
-              </tbody>
-            </Tabla>
-          </div>
-          <div>
-            <p className="mt-3 text-xs text-muted">Clientes es lo que cobras: base más IVA menos retención. El IVA y el 130 de cada trimestre se pagan el mes siguiente; la renta, en junio; la regularización de autónomos, hacia noviembre del año siguiente.
-              «Pagos» son los pagos previstos de arriba y los objetivos con fecha que no tienen pagos apuntados.</p>
-            {ya && (
-              <p className="mt-2 text-xs text-muted">Este mes ya han pasado por tus cuentas {eur(ya.nomina + ya.cobros + ya.alquiler)} de ingresos,
-                {' '}{eur(ya.gastos)} de gastos y {eur(ya.impuestos)} de impuestos. Ya están en el saldo de hoy, así que el mes en curso solo cuenta lo que falta.</p>
-            )}
-          </div>
-        </details>
-      )}
-
-      <Dialogo abierto={dialogo === 'objetivo'} onCerrar={() => { setDialogo(null); setEditando(null) }} titulo={editando ? 'Editar objetivo' : 'Nuevo objetivo'}>
-        {dialogo === 'objetivo' && <Formulario key={editando?.id ?? 'nuevo'} onEnviar={(v) => guardarObjetivo.mutateAsync(v)}>
-          <Campo etiqueta="Nombre" name="nombre" required placeholder="Boda" defaultValue={editando?.nombre ?? ''} />
-          <Selector etiqueta="Tipo" name="tipo" defaultValue={editando?.tipo ?? 'boda'}>
-            <option value="boda">Boda</option><option value="viaje">Viaje</option><option value="casa">Casa</option>
-            <option value="colchon">Colchón de seguridad</option><option value="otro">Otro</option>
-          </Selector>
-          <Campo etiqueta="Fecha" name="fecha_objetivo" type="date" defaultValue={editando?.fecha_objetivo ?? ''} />
-          <Campo etiqueta="Presupuesto (€)" name="importe_objetivo" inputMode="decimal" required defaultValue={editando?.importe_objetivo ?? ''} />
-          <Campo etiqueta="Ya ahorrado (€)" name="ahorrado" inputMode="decimal" defaultValue={editando?.ahorrado ?? 0} />
-        </Formulario>}
+      <Dialogo abierto={dialogo === 'objetivo'} onCerrar={cerrar} titulo={objetivo ? 'Editar objetivo' : 'Nuevo objetivo'}>
+        <FormObjetivo key={objetivo?.id ?? 'nuevo'} editando={objetivo} cuentas={cuentas ?? []} onEnviar={(v) => guardarObjetivo.mutateAsync(v)} />
       </Dialogo>
-      <Dialogo abierto={dialogo === 'pago'} onCerrar={() => setDialogo(null)} titulo="Nuevo pago previsto">
-        <Formulario onEnviar={(v) => crearPago.mutateAsync(v)}>
-          <Campo etiqueta="Concepto" name="concepto" required className="sm:col-span-2" placeholder="Plazo promotora" />
-          <Campo etiqueta="Fecha" name="fecha" type="date" defaultValue={hoyISO()} required />
-          <Campo etiqueta="Importe (€)" name="importe" inputMode="decimal" required />
-          <Selector etiqueta="Inmueble" name="activo_id" defaultValue="">
-            <option value="">Ninguno</option>{d.inmuebles.map((i) => <option key={i.id} value={i.id}>{i.nombre}</option>)}
-          </Selector>
-          <Selector etiqueta="Objetivo" name="objetivo_id" defaultValue="">
-            <option value="">Ninguno</option>{d.objetivos.map((o) => <option key={o.id} value={o.id}>{o.nombre}</option>)}
-          </Selector>
-          <Casilla etiqueta="Ya está pagado" name="pagado" />
-        </Formulario>
+      <Dialogo abierto={dialogo === 'pago'} onCerrar={cerrar} titulo={pago ? 'Editar pago previsto' : 'Nuevo pago previsto'}>
+        <FormPago key={pago?.id ?? 'nuevo'} editando={pago} inmuebles={d.inmuebles} objetivos={d.objetivos} onEnviar={(v) => guardarPago.mutateAsync(v)} />
       </Dialogo>
     </>
   )
