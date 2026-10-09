@@ -5,6 +5,8 @@ import { ShieldCheck } from 'lucide-react'
 import { api, esDemo, SESION_CADUCADA } from '../lib/api'
 import type { EstadoAuth } from '../lib/tipos'
 import { cargarGsi } from '../lib/google'
+import Logo from './Logo'
+import { Cargando } from './ui'
 
 function Entrar({ clientId }: { clientId: string | null }) {
   const qc = useQueryClient()
@@ -31,19 +33,21 @@ function Entrar({ clientId }: { clientId: string | null }) {
   }, [clientId, qc])
 
   return (
-    <div className="grid min-h-screen place-items-center bg-bg px-4">
+    <Centrado>
       <div className="w-full max-w-sm rounded-2xl border border-line bg-panel p-8 text-center">
-        <div className="mx-auto mb-5 grid size-12 place-items-center rounded-xl bg-accent text-panel">
-          <svg viewBox="0 0 32 32" className="size-7" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round"><path d="M7 22l6-7 5 3.5 7-9" /></svg>
-        </div>
+        <div className="mx-auto mb-5 w-fit"><Logo grande /></div>
         <h1 className="text-xl font-semibold">Finanzas</h1>
         <p className="mt-2 text-sm text-muted">Entra con tu cuenta de Google. Solo las cuentas autorizadas pueden ver los datos.</p>
         <div ref={boton} className="mt-6 flex min-h-11 justify-center" />
-        {error && <p className="mt-4 text-sm text-neg">{error}</p>}
+        {error && <p className="mt-4 text-sm text-neg" role="alert">{error}</p>}
         <p className="mt-6 flex items-center justify-center gap-1.5 text-xs text-muted"><ShieldCheck size={14} />Conexión cifrada y sesión de 30 días</p>
       </div>
-    </div>
+    </Centrado>
   )
+}
+
+function Centrado({ children }: { children: ReactNode }) {
+  return <div className="grid min-h-screen place-items-center bg-bg px-4">{children}</div>
 }
 
 /** Si la app pide iniciar sesión (publicada en Vercel), enseña la pantalla de entrada hasta que lo hagas. */
@@ -59,8 +63,8 @@ export default function Acceso({ children }: { children: ReactNode }) {
   }, [qc])
 
   if (esDemo) return <>{children}</>
-  if (isLoading) return null
-  if (error) return <div className="p-8 text-sm text-muted">No se puede conectar con la app: {error.message}</div>
+  if (isLoading) return <Centrado><div className="w-full max-w-2xl"><Cargando /></div></Centrado>
+  if (error) return <Centrado><p className="text-sm text-muted">No se puede conectar con la app: {error.message}</p></Centrado>
   if (data?.requerida && !data.email) return <Entrar clientId={data.client_id} />
   return <>{children}</>
 }

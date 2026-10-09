@@ -7,6 +7,8 @@ import io
 import logging
 from dataclasses import dataclass, field
 
+from sqlalchemy.orm import Session
+
 from finanzas import config, ia
 from finanzas.importers import aeat
 
@@ -58,16 +60,28 @@ def texto_pdf(contenido: bytes, max_paginas: int = 4) -> list[str]:
     return [p.extract_text() or "" for p in lector.pages[:max_paginas]]
 
 
-def _prompt() -> str:
-    titular = ", ".join(x for x in (config.NOMBRE_TITULAR, config.NIF_TITULAR) if x)
-    quien = (f"El titular es {titular}." if titular else
-             "El titular es la persona física que usa la app: en sus facturas emitidas aparece como emisor.")
-    return ("Lees documentos de un autónomo español para su app de finanzas. " + quien +
+def titular(s: Session | None = None) -> str:
+    """Nombre y NIF con los que emites facturas (Ingresos → Datos de facturación); las variables de entorno
+    NOMBRE_TITULAR y NIF_TITULAR solo como respaldo si no están rellenos."""
+    nombre, nif = "", ""
+    if s is not None:
+        from finanzas import facturacion
+        e = facturacion.leer_emisor(s)
+        nombre, nif = e.nombre.strip(), e.nif.upper().replace(" ", "")
+    return ", ".join(x for x in (nombre or config.NOMBRE_TITULAR, nif or config.NIF_TITULAR) if x)
+
+
+def _prompt(quien: str) -> str:
+    titular_ = (f"El titular es {quien}." if quien else
+                "El titular es la persona física que usa la app: en sus facturas emitidas aparece como emisor.")
+    return ("Lees documentos de un autónomo español para su app de finanzas. " + titular_ +
             " Extrae los datos con la herramienta registrar_documento. Usa la base imponible que dice la "
             "factura aunque alguna línea no cuadre, y apunta la incoherencia en avisos. Importes en euros.")
 
 
-def interpretar(paginas: list[str], nombre: str, cfg: "ia.ConfigIA", transport=None) -> Documento:
+def interpretar(paginas: list[str], nombre: str, cfg: "ia.ConfigIA", transport=None,
+                s: Session | None = None) -> Documento:
+    """Los justificantes de la AEAT se reconocen sin IA; para el resto hace falta la clave (si no, `ia.SinClave`)."""
     texto = "\n".join(paginas)
     if "Agencia Tributaria" in texto or "Código Seguro de Verificación" in texto:
         try:
@@ -76,5 +90,5 @@ def interpretar(paginas: list[str], nombre: str, cfg: "ia.ConfigIA", transport=N
             pass
     if not texto.strip():
         return Documento("otro", {"avisos": ["El PDF no tiene texto (¿es una imagen escaneada?)"]})
-    datos = ia.extraer(cfg, _prompt(), f"Fichero: {nombre}\n\n{texto[:12000]}", HERRAMIENTA, transport)
+    datos = ia.extraer(cfg, _prompt(titular(s)), f"Fichero: {nombre}\n\n{texto[:12000]}", HERRAMIENTA, transport)
     return Documento(datos.get("tipo", "otro"), datos)

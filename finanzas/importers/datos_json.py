@@ -140,9 +140,12 @@ def _inversion(s: Session, x: dict) -> str:
 
 
 def importar(s: Session, datos: dict) -> list[str]:
-    """Todo o nada: si algo falla no se guarda nada."""
+    """Todo o nada: si algo falla no se guarda nada. Una copia de seguridad completa (lo que baja /exportar)
+    se reconoce por su formato y sustituye todos los datos (ver `restaurar`)."""
     if not isinstance(datos, dict):
-        raise ErrorDatos("El fichero debe ser un objeto JSON con 'activos' y/o 'inversiones'")
+        raise ErrorDatos("El fichero debe ser un objeto JSON con 'activos' y/o 'inversiones', o una copia de seguridad")
+    if es_copia(datos):
+        return restaurar(s, datos)
     try:
         mensajes = [_activo(s, x) for x in datos.get("activos", [])]
         mensajes += [_inversion(s, x) for x in datos.get("inversiones", [])]
@@ -155,3 +158,93 @@ def importar(s: Session, datos: dict) -> list[str]:
     except Exception:
         s.rollback()
         raise
+
+
+# --- Copia de seguridad completa (formato de /exportar) ------------------------------------------
+
+def es_copia(datos) -> bool:
+    """Lo que baja /exportar: {"version": 1, "fecha": "AAAA-MM-DD", "tablas": {nombre: [filas...]}}."""
+    return isinstance(datos, dict) and "version" in datos and isinstance(datos.get("tablas"), dict)
+
+
+def vista_previa(datos) -> dict:
+    """Qué haría el fichero, sin tocar nada: sirve para pedir confirmación antes de sustituirlo todo."""
+    if not isinstance(datos, dict):
+        raise ErrorDatos("El fichero debe ser un objeto JSON con 'activos' y/o 'inversiones', o una copia de seguridad")
+    if not es_copia(datos):
+        return {"copia": False, "activos": len(datos.get("activos") or []), "inversiones": len(datos.get("inversiones") or []),
+                "prevision": isinstance(datos.get("prevision"), dict)}
+    tablas = [{"tabla": nombre, "filas": len(filas)} for nombre, filas in datos["tablas"].items()
+              if isinstance(filas, list) and filas]
+    return {"copia": True, "fecha": datos.get("fecha"), "version": datos.get("version"), "tablas": tablas,
+            "filas": sum(t["filas"] for t in tablas)}
+
+
+def _valor(col, v):
+    """De lo que hay en el JSON (ISO, base64, float) al tipo de la columna."""
+    import base64
+    from datetime import datetime
+    from sqlalchemy import sql
+    if v is None:
+        return None
+    t = col.type
+    try:
+        if isinstance(t, sql.sqltypes.LargeBinary):
+            return base64.b64decode(v)
+        if isinstance(t, sql.sqltypes.DateTime):
+            return datetime.fromisoformat(str(v))
+        if isinstance(t, sql.sqltypes.Date):
+            return date.fromisoformat(str(v)[:10])
+        if isinstance(t, sql.sqltypes.Numeric):
+            return Decimal(str(v))
+        if isinstance(t, sql.sqltypes.Boolean):
+            return bool(v)
+    except (ValueError, TypeError, ArithmeticError):
+        raise ErrorDatos(f"{col.table.name}.{col.name}: valor no válido {v!r}")
+    return v
+
+
+def restaurar(s: Session, datos: dict) -> list[str]:
+    """Sustituye TODOS los datos por los de la copia: vacía las tablas (de las hijas a las madres) y vuelve a
+    insertar las filas con sus mismos ids, todo en una transacción. Las claves de API cifradas no viajan en la
+    copia, así que hay que volver a ponerlas."""
+    from sqlalchemy import text
+    from finanzas import db
+    tablas = datos["tablas"]
+    conocidas = {t.name: t for t in db.Base.metadata.sorted_tables}
+    for nombre, filas in tablas.items():
+        if not isinstance(filas, list):
+            raise ErrorDatos(f"La tabla {nombre} de la copia no es una lista de filas")
+    mensajes = []
+    try:
+        for tabla in reversed(db.Base.metadata.sorted_tables):
+            s.execute(tabla.delete())
+        for tabla in db.Base.metadata.sorted_tables:
+            filas = [f for f in tablas.get(tabla.name) or [] if isinstance(f, dict)]
+            columnas = {c.name: c for c in tabla.columns}
+            # Filas agrupadas por las columnas que traen (las de otra versión pueden traer más o menos)
+            grupos: dict[tuple, list[dict]] = {}
+            for fila in filas:
+                limpia = {k: _valor(columnas[k], v) for k, v in fila.items() if k in columnas}
+                grupos.setdefault(tuple(sorted(limpia)), []).append(limpia)
+            for grupo in grupos.values():
+                s.execute(tabla.insert(), grupo)
+            if filas:
+                mensajes.append(f"{tabla.name.replace('_', ' ')}: {len(filas)} filas")
+        if s.get_bind().dialect.name == "postgresql":
+            # En Postgres los ids salen de secuencias: hay que ponerlas detrás del mayor id restaurado
+            for tabla in db.Base.metadata.sorted_tables:
+                if "id" in tabla.c:
+                    s.execute(text(f"SELECT setval(pg_get_serial_sequence('{tabla.name}', 'id'), "
+                                   f"COALESCE((SELECT MAX(id) FROM {tabla.name}), 0) + 1, false)"))
+        s.commit()
+    except Exception:
+        s.rollback()
+        raise
+    desconocidas = sorted(set(tablas) - set(conocidas))
+    cuando = datos.get("fecha") or "sin fecha"
+    cabecera = f"Copia del {cuando} restaurada: {sum(len(v) for v in tablas.values() if isinstance(v, list))} filas"
+    if desconocidas:
+        cabecera += f" (sin usar: {', '.join(desconocidas)})"
+    return [cabecera, *mensajes,
+            "Las claves del asistente no viajan en la copia: vuelve a ponerla en Ajustes → Asistente (IA)."]

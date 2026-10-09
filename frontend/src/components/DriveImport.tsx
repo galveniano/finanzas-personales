@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, ExternalLink, FolderSync, X } from 'lucide-react'
-import { api } from '../lib/api'
+import { api, esDemo } from '../lib/api'
 import { eur, fecha } from '../lib/format'
 import { permisoDrive } from '../lib/google'
-import type { DocumentosDrive } from '../lib/tipos'
+import type { DocumentosDrive, EstadoAuth } from '../lib/tipos'
 import { useAccion, useAvisos } from '../lib/utilidades'
 import { Boton, ErrorCarga, Etiqueta, Tarjeta, Vacio } from './ui'
 
@@ -14,14 +14,15 @@ export default function DriveImport() {
   const avisar = useAvisos()
   const [progreso, setProgreso] = useState<string | null>(null)
   const { data: d, error } = useQuery({ queryKey: ['drive'], queryFn: () => api.get<DocumentosDrive>('/drive/documentos') })
+  const { data: auth } = useQuery({ queryKey: ['auth'], queryFn: () => api.get<EstadoAuth>('/auth/estado'), enabled: !esDemo, staleTime: Infinity })
   const gasto = useAccion((id: number) => api.post(`/drive/documentos/${id}/gasto`, { deducible_pct: 100 }), 'Apuntado como gasto')
   const ignorar = useAccion((id: number) => api.post(`/drive/documentos/${id}/ignorar`))
 
   const importar = async () => {
-    if (!d?.google_client_id) return
+    if (!auth?.client_id) return
     try {
       setProgreso('Pidiendo permiso a Google…')
-      const token = await permisoDrive(d.google_client_id)
+      const token = await permisoDrive(auth.client_id)
       let total = 0
       for (;;) {
         setProgreso(total ? `Leídos ${total} documentos…` : 'Buscando facturas en tu Drive…')
@@ -50,7 +51,7 @@ export default function DriveImport() {
         Busca en tu Drive facturas y justificantes de Hacienda. Tus facturas emitidas pasan a Autónomo y los justificantes a Hacienda;
         las facturas que recibes te las enseño aquí para que decidas si son gasto de la actividad. Solo lectura: no se toca nada de tu Drive.
       </p>
-      {!d ? (error ? <ErrorCarga error={error} /> : null) : !d.google_client_id ? (
+      {!d ? (error ? <ErrorCarga error={error} /> : null) : !auth?.client_id ? (
         <Vacio>Funciona con la app publicada y el inicio de sesión de Google configurado.</Vacio>
       ) : !d.ia ? (
         <Vacio>Para leer las facturas hace falta configurar el asistente: pon tu clave de OpenAI o de Claude en Ajustes, en la tarjeta Asistente (IA) de arriba.</Vacio>

@@ -3,10 +3,13 @@ import { createRoot } from 'react-dom/client'
 import { HashRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import './index.css'
+import { aplicarTema, leerTema } from './lib/tema'
 import Layout from './components/Layout'
 import { ProveedorAvisos } from './components/ui'
 import { Ajustes, Asistente, Cuentas, Gastos, Impuestos, Ingresos, Inicio, Inmuebles, Plan } from './paginas'
 import Acceso from './components/Acceso'
+
+aplicarTema(leerTema())  // antes de pintar nada, para que no parpadee
 
 const qc = new QueryClient({ defaultOptions: { queries: { staleTime: 30_000, retry: 1, refetchOnWindowFocus: false } } })
 

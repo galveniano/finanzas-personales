@@ -1,9 +1,11 @@
 export interface Linea { nombre: string; grupo: string; importe: number; detalle: string }
 export interface UltimaSync { fecha: string; ok: boolean; mensaje: string }
+export interface ResultadoSync { fuente: string; ok: boolean; mensaje: string }
+export interface RespuestaSync { resultados: ResultadoSync[]; estado: EstadoSync }
 export interface EstadoSync {
   sabadell: {
     configurado: boolean; conectado: boolean; valida_hasta: string | null; ultima: UltimaSync | null
-    url_vuelta?: string; vuelta_automatica?: boolean
+    url_vuelta?: string; vuelta_automatica?: boolean; historico_desde?: string | null
   }
   indexa: { configurado: boolean; ultima: UltimaSync | null }
   cada_horas: number
@@ -163,10 +165,16 @@ export interface CalculoNomina {
 export interface DocumentoDrive {
   id: number; nombre: string; enlace: string; tipo: 'emitida' | 'recibida' | 'aeat' | 'otro'
   estado: 'importado' | 'pendiente' | 'ignorado' | 'error'; mensaje: string; revisado: string
-  datos: { fecha?: string; contraparte?: string; concepto?: string; base?: number; tipo_iva?: number; total?: number; avisos?: string[] }
+  datos: { fecha?: string; contraparte?: string; concepto?: string; base?: number; tipo_iva?: number; total?: number
+    numero?: string; tipo_retencion?: number; categoria_gasto?: string; avisos?: string[] }
 }
-export interface DocumentosDrive { ia: boolean; google_client_id: string | null; documentos: DocumentoDrive[] }
-export interface MensajeChat { role: 'user' | 'assistant'; content: string }
+/** El client_id de Google para pedir permiso de Drive sale de EstadoAuth. */
+export interface DocumentosDrive { ia: boolean; documentos: DocumentoDrive[] }
+export interface ResultadoDrive { procesados: { nombre: string; estado: DocumentoDrive['estado']; mensaje: string }[]; quedan: number }
+/** `consultas`: herramientas que miró el asistente para esa respuesta (solo en las suyas). */
+export interface MensajeChat { role: 'user' | 'assistant'; content: string; consultas?: string[] }
+export interface RespuestaAsistente { respuesta: string; consultas: string[]; proveedor: string }
+export interface EstadoAsistente { disponible: boolean; proveedor: 'openai' | 'anthropic'; proveedor_nombre: string; modelo: string }
 
 export interface AjustesIA {
   proveedor: 'openai' | 'anthropic'
@@ -180,6 +188,29 @@ export interface AjustesIA {
     origen_clave: 'app' | 'entorno' | null
   }>
 }
+// --- Transversal: paleta, estado de la app, copias ---------------------------------------------
+export interface ResultadoBusqueda { texto: string; detalle: string; ir: string; importe: number | null }
+export interface GrupoBusqueda { nombre: string; resultados: ResultadoBusqueda[] }
+export interface Busqueda { q: string; grupos: GrupoBusqueda[] }
+export type HistorialSync = Record<'sabadell' | 'indexa', UltimaSync[]>
+export interface EstadoApp {
+  base_datos: { tipo: string; detalle: string }
+  ccaa: string
+  banco: { nombre: string; configurado: boolean; conectado: boolean }
+  indexa_configurado: boolean
+  ultima_copia: { fecha: string; destino: string; hace_dias: number } | null
+  sincronizacion: { modo: 'cron' | 'programada' | 'manual'; cada_horas: number; texto: string }
+  sesion: { requerida: boolean; email: string | null }
+  version: string | null
+  en_vercel: boolean
+}
+export interface VistaPreviaImportacion {
+  copia: boolean; fecha?: string | null; version?: number; tablas?: { tabla: string; filas: number }[]; filas?: number
+  activos?: number; inversiones?: number; prevision?: boolean
+}
+export interface ResultadoImportacion { mensajes: string[] }
+export interface UrlBanco { url: string }
+export interface ConexionSabadell { valida_hasta: string | null; sync: UltimaSync & { fuente: string } }
 
 export interface Llamada { id: number; fecha: string; importe: number; pagado: boolean }
 export interface InversionPrivada {
