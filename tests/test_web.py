@@ -8,16 +8,17 @@ from finanzas.main import app
 def test_flujo_completo_api():
     with TestClient(app) as c:
         for ruta in ("/resumen", "/cuentas", "/categorias", "/movimientos", "/autonomo", "/nominas",
-                     "/inmuebles", "/planificacion", "/sync", "/config"):
+                     "/inmuebles", "/planificacion", "/sync", "/app/estado", "/sync/historial", "/buscar?q=ab"):
             assert c.get(f"/api{ruta}").status_code == 200, ruta
 
         cuenta = c.post("/api/cuentas", json={"nombre": "Cuenta Sabadell", "entidad": "Banco Sabadell"}).json()
         r = c.post(f"/api/cuentas/{cuenta['id']}/importar", files={"fichero": ("e.csv", io.BytesIO(
             "Fecha;Concepto;Importe;Saldo\n01/10/2026;ALQUILER PISO;650,00;1800,50\n".encode()), "text/csv")})
         assert r.json()["nuevos"] == 1
-        assert c.get("/api/cuentas").json()[0]["saldo"] == 1800.5  # el extracto fija el saldo
+        cuentas = {x["id"]: x for x in c.get("/api/cuentas").json()}
+        assert cuentas[cuenta["id"]]["saldo"] == 1800.5  # el extracto fija el saldo
 
-        mov = c.get("/api/movimientos").json()[0]
+        mov = c.get("/api/movimientos?q=ALQUILER PISO").json()["movimientos"][0]
         assert c.patch(f"/api/movimientos/{mov['id']}", json={"categoria_id": 1}).status_code == 200
 
         c.post("/api/autonomo/facturas", json={"numero": "1", "cliente": "Aciturri", "fecha": "2026-08-01",

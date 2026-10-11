@@ -3,8 +3,17 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230e6b5c'/%3E%3Cpath d='M9 21l5-6 4 3 5-8' stroke='white' stroke-width='2.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+    <link rel="icon" href="./icono.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#0e6b5c" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#161e1c" media="(prefers-color-scheme: dark)" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Finanzas" />
     <title>Finanzas</title>
+    <!-- El tema guardado (lib/tema.ts) se aplica antes de cargar la app para que no parpadee -->
+    <script>try{var t=localStorage.getItem('finanzas:tema');if(t==='oscuro'||t==='claro')document.documentElement.setAttribute('data-theme',t==='oscuro'?'dark':'light')}catch(e){}</script>
   </head>
   <body>
     <div id="root"></div>

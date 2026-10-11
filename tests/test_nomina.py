@@ -7,7 +7,7 @@ from finanzas.main import app
 
 def test_seguridad_social_con_tope():
     assert seguridad_social_mes(2000) == 130.0  # 6,50 %
-    assert seguridad_social_mes(5101.20) == seguridad_social_mes(5101.20)
+    assert seguridad_social_mes(5101.20) == 331.58  # base máxima: 5.101,20 × 6,50 %
     # Por encima de la base máxima solo suma la cotización de solidaridad (céntimos)
     assert 331.58 < seguridad_social_mes(6000) < 334
 

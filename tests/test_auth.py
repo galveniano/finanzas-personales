@@ -88,3 +88,17 @@ def test_en_vercel_sin_configurar_no_abre(monkeypatch):
     monkeypatch.setattr(config, "GOOGLE_CLIENT_ID", "")
     with TestClient(app) as c:
         assert c.get("/api/resumen").status_code == 503
+
+
+def test_vuelta_del_banco_sin_sesion_redirige(con_login):
+    """La vuelta del banco la abre el navegador: sin sesión vuelve a Ajustes con el motivo, no un 401 en JSON."""
+    with TestClient(app) as c:
+        r = c.get("/sabadell/vuelta?code=abc&state=xyz", follow_redirects=False)
+        assert r.status_code in (302, 307) and r.headers["location"].startswith("/#/ajustes?sabadell_error=")
+        assert "Inicia" in r.headers["location"] or "sesi" in r.headers["location"]
+        c.post("/api/auth/google", json={"credential": token_google()})
+        r = c.get("/sabadell/vuelta", follow_redirects=False)  # con sesión y sin code: a Ajustes sin error
+        assert r.status_code in (302, 307) and r.headers["location"] == "/#/ajustes"
+        r = c.get("/sabadell/vuelta?code=abc&state=otra", follow_redirects=False)  # state que no es el nuestro
+        assert "sabadell_error" in r.headers["location"]
+        assert c.get("/api/app/estado").json()["sesion"] == {"requerida": True, "email": "yo@gmail.com"}

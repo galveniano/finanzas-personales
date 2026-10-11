@@ -4,8 +4,12 @@ El navegador pide a Google un permiso de solo lectura de Drive (dura una hora) y
 token en cada importación. El servidor no lo guarda.
 
 - Facturas emitidas: se crean solas en Autónomo.
-- Justificantes de la AEAT: se crean solos en Hacienda.
+- Justificantes de la AEAT: se crean solos en Hacienda (no hace falta clave de IA).
 - Facturas recibidas: quedan pendientes para que decidas si son gasto de la actividad.
+
+Un documento se lee una vez. Se vuelve a leer solo si cambia en Drive o si pulsas «Volver a leer»;
+los que dieron error no se reintentan en cada importación. Lo que ya has revisado (factura o gasto
+apuntados) no vuelve a «pendiente» aunque el fichero cambie.
 """
 import json
 from datetime import date, datetime
@@ -25,10 +29,17 @@ CONSULTA = ("mimeType = 'application/pdf' and trashed = false and modifiedTime >
             "name contains 'invoice' or name contains 'Invoice' or name contains 'MOD' or "
             "fullText contains 'Agencia Tributaria' or fullText contains 'factura' or fullText contains 'invoice')")
 POR_LLAMADA = 5  # ficheros por petición, para no pasar del tiempo máximo de Vercel
+DESDE_DEFECTO = "2024-01-01"
+# Mensaje de las facturas que esperan a que haya clave de IA (se releen solas cuando la pones)
+SIN_CLAVE = "Falta la clave de IA para leerla"
 
 
 class ErrorDrive(RuntimeError):
     pass
+
+
+class NumeroRepetido(ValueError):
+    """La factura leída lleva un número que ya tiene otra factura: no se crea, se deja para revisar."""
 
 
 class Drive:
@@ -84,6 +95,8 @@ def _crear_factura(s: Session, d: dict) -> Factura:
                                                Factura.fecha == fecha))
     if existente:
         return existente
+    if numero and s.scalar(select(Factura.id).where(Factura.numero == numero)):
+        raise NumeroRepetido(f"El número {numero} ya existe: revísala")
     f = Factura(numero=numero, cliente_id=cliente.id, fecha=fecha, concepto=d.get("concepto") or "",
                 base=_dec(d.get("base")), tipo_iva=_dec(d.get("tipo_iva")), tipo_retencion=_dec(d.get("tipo_retencion")))
     s.add(f)
@@ -105,7 +118,12 @@ def _crear_declaracion(s: Session, j, contenido: bytes, nombre: str) -> Declarac
 
 def procesar(s: Session, doc: DocumentoDrive, contenido: bytes, cfg: ia.ConfigIA, transport=None) -> None:
     try:
-        leido = documentos.interpretar(documentos.texto_pdf(contenido), doc.nombre, cfg, transport=transport)
+        leido = documentos.interpretar(documentos.texto_pdf(contenido), doc.nombre, cfg, transport=transport, s=s)
+    except ia.SinClave:
+        # Los justificantes de la AEAT ya se han reconocido sin IA; una factura espera a que pongas la clave
+        doc.tipo, doc.datos = "otro", "{}"
+        doc.estado, doc.mensaje = "pendiente", f"{SIN_CLAVE}: ponla en Ajustes → Asistente (IA)"
+        return
     except ia.ErrorIA as e:
         doc.estado, doc.mensaje = "error", str(e)
         return
@@ -121,36 +139,65 @@ def procesar(s: Session, doc: DocumentoDrive, contenido: bytes, cfg: ia.ConfigIA
         doc.estado, doc.mensaje = "importado", f"Modelo {j.modelo} {j.periodo} {j.ejercicio}"
         return
     doc.datos = json.dumps(leido.datos, ensure_ascii=False)
+    contraparte = leido.datos.get("contraparte")
     if leido.tipo == "emitida":
-        f = _crear_factura(s, leido.datos)
+        try:
+            f = _crear_factura(s, leido.datos)
+        except NumeroRepetido as e:
+            doc.estado, doc.mensaje = "pendiente", str(e)
+            return
         doc.factura_id, doc.estado = f.id, "importado"
-        doc.mensaje = f"Factura {f.numero} a {leido.datos.get('contraparte')}"
+        doc.mensaje = f"Factura {f.numero} a {contraparte}"
+    elif leido.tipo == "recibida" and doc.gasto_id:
+        doc.estado, doc.mensaje = "importado", f"Gasto de {contraparte} (ya apuntado)"
     elif leido.tipo == "recibida":
-        doc.estado, doc.mensaje = "pendiente", f"Factura de {leido.datos.get('contraparte')}: ¿es gasto de la actividad?"
+        doc.estado, doc.mensaje = "pendiente", f"Factura de {contraparte}: ¿es gasto de la actividad?"
     else:
         doc.estado, doc.mensaje = "ignorado", "No es una factura"
 
 
-def importar(s: Session, token: str, desde: str = "2024-01-01", transport=None) -> dict:
-    """Revisa como mucho POR_LLAMADA ficheros nuevos o cambiados. Devuelve cuántos quedan."""
+def _fecha_desde(desde: str) -> str:
+    try:
+        return date.fromisoformat(desde).isoformat()
+    except (TypeError, ValueError):
+        raise ErrorDrive(f"La fecha «desde» no es válida: {desde!r} (usa AAAA-MM-DD)")
+
+
+def importar(s: Session, token: str, desde: str = DESDE_DEFECTO, transport=None) -> dict:
+    """Revisa como mucho POR_LLAMADA ficheros nuevos o cambiados desde `desde`. Devuelve cuántos quedan."""
     cfg = ia.configuracion(s)
-    if not cfg.lista:
-        raise ErrorDrive("Para leer facturas hace falta configurar el asistente (OpenAI o Claude) en Ajustes")
     drive = Drive(token, transport)
     vistos = {d.drive_id: d for d in s.scalars(select(DocumentoDrive))}
-    nuevos = [f for f in drive.candidatos(f"{desde}T00:00:00")
-              if f["id"] not in vistos or vistos[f["id"]].modificado != f["modifiedTime"]
-              or vistos[f["id"]].estado == "error"]
+    nuevos = []
+    for f in drive.candidatos(f"{_fecha_desde(desde)}T00:00:00"):
+        d = vistos.get(f["id"])
+        if d is None or d.modificado != f["modifiedTime"]:
+            nuevos.append(f)
+        elif cfg.lista and d.mensaje.startswith(SIN_CLAVE):  # esperaba la clave de IA y ya la hay
+            nuevos.append(f)
     hechos = []
     for f in nuevos[:POR_LLAMADA]:
         doc = vistos.get(f["id"]) or DocumentoDrive(drive_id=f["id"])
+        ya_revisado = doc.modificado != f["modifiedTime"] and bool(doc.gasto_id or doc.factura_id)
         doc.nombre, doc.modificado, doc.enlace = f["name"][:250], f["modifiedTime"], f.get("webViewLink", "")[:300]
         doc.revisado = ahora_utc()
         s.add(doc)
-        procesar(s, doc, drive.descargar(f["id"]), cfg, transport)
+        if ya_revisado:  # ya lo apuntaste: un cambio en Drive no lo devuelve a «pendiente»
+            doc.estado = "importado"
+        else:
+            procesar(s, doc, drive.descargar(f["id"]), cfg, transport)
         s.commit()
         hechos.append({"nombre": doc.nombre, "estado": doc.estado, "mensaje": doc.mensaje})
     return {"procesados": hechos, "quedan": max(len(nuevos) - POR_LLAMADA, 0)}
+
+
+def releer(s: Session, doc: DocumentoDrive, token: str, transport=None) -> DocumentoDrive:
+    """«Volver a leer»: descarga el fichero otra vez y lo procesa, esté en error, pendiente o ya leído."""
+    cfg = ia.configuracion(s)
+    doc.revisado = ahora_utc()
+    procesar(s, doc, Drive(token, transport).descargar(doc.drive_id), cfg, transport)
+    s.commit()
+    return doc
 
 
 def crear_gasto(s: Session, doc: DocumentoDrive, deducible_pct: Decimal, categoria: str | None = None) -> GastoAutonomo:

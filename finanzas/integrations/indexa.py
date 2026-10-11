@@ -9,11 +9,15 @@ from datetime import date
 from decimal import Decimal
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from finanzas import config
-from finanzas.models import Cuenta
+from finanzas.fechas import ahora_utc, sumar_meses
+from finanzas.models import Categoria, Cuenta, Movimiento
+
+# Categoría de serie de los traspasos del banco a Indexa (finanzas/categorizar.py)
+CATEGORIA_APORTACION = "Inversión (Indexa)"
 
 
 class IndexaError(Exception):
@@ -156,8 +160,38 @@ def sincronizar(session: Session, cliente: IndexaClient | None = None) -> list[C
                             tipo="inversion", origen="indexa", id_externo=numero)
             session.add(cuenta)
         cuenta.saldo, cuenta.saldo_fecha = total, date.today()
+        cuenta.ultima_sincronizacion = ahora_utc()
         info = _opcional(cliente.cuenta, numero) or c
         cuenta.detalle = json.dumps(detalle(cartera, _opcional(cliente.rentabilidad, numero), info), ensure_ascii=False)
         actualizadas.append(cuenta)
     session.commit()
     return actualizadas
+
+
+def aportaciones_banco(session: Session, cuentas: list[Cuenta], hoy: date | None = None) -> dict[int, dict]:
+    """Lo que has mandado a Indexa desde tus cuentas del banco, por cuenta de Indexa (clave: id de la cuenta):
+    los cargos de la categoría «Inversión (Indexa)», con tu parte. Un cargo va a la cuenta cuyo número aparece
+    en el concepto; si no aparece ninguno, a la primera (con una sola cuenta de Indexa, todo va a ella)."""
+    if not cuentas:
+        return {}
+    hoy = hoy or date.today()
+    parte = func.coalesce(Cuenta.participacion, 100) / 100
+    filas = session.execute(
+        select(Movimiento.fecha, Movimiento.concepto, Movimiento.importe * parte)
+        .join(Cuenta, Movimiento.cuenta_id == Cuenta.id)
+        .join(Categoria, Movimiento.categoria_id == Categoria.id)
+        .where(Categoria.nombre == CATEGORIA_APORTACION, Movimiento.importe < 0, parte > 0, Cuenta.origen != "indexa")
+    ).all()
+    hace_un_anio = sumar_meses(hoy, -12)
+    suma = {c.id: {"total": 0.0, "ultimos_12_meses": 0.0, "primera_fecha": None} for c in cuentas}
+    for fecha, concepto, tuyo in filas:
+        destino = next((c for c in cuentas if c.id_externo and c.id_externo in (concepto or "")), cuentas[0])
+        d = suma[destino.id]
+        d["total"] -= float(tuyo)
+        if fecha >= hace_un_anio:
+            d["ultimos_12_meses"] -= float(tuyo)
+        if d["primera_fecha"] is None or fecha < d["primera_fecha"]:
+            d["primera_fecha"] = fecha
+    return {k: {"total": round(v["total"], 2), "ultimos_12_meses": round(v["ultimos_12_meses"], 2),
+                "primera_fecha": v["primera_fecha"].isoformat() if v["primera_fecha"] else None}
+            for k, v in suma.items()}

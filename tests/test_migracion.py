@@ -21,3 +21,4 @@ def test_base_de_datos_antigua_recibe_columnas_nuevas(tmp_path):
     assert {"conexion_id", "uid_externo", "ultima_sincronizacion"} <= columnas
     with eng.connect() as c:
         assert c.exec_driver_sql("SELECT nombre FROM cuentas").scalar() == "Sabadell"
+    eng.dispose()

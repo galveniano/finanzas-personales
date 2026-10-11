@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react'
+import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from 'react'
 import { Trash2, X } from 'lucide-react'
 import { eur } from '../lib/format'
 import { AvisosCtx } from '../lib/utilidades'
@@ -81,6 +81,17 @@ export function Importe({ valor, signo = false, className }: { valor: number | n
   )
 }
 
+/** Línea etiqueta–valor de un desglose; las `fuerte` (totales) llevan borde superior y negrita. Un `valor` numérico
+ *  se pinta como importe. `className` va al contenedor y, si se pasa (p. ej. text-warn), la etiqueta hereda ese color. */
+export function Fila({ etiqueta, valor, fuerte, className }: { etiqueta: ReactNode; valor: number | ReactNode; fuerte?: boolean; className?: string }) {
+  return (
+    <div className={cx('flex justify-between gap-3 py-1.5 text-sm', fuerte && 'border-t border-line pt-2.5 font-semibold', className)}>
+      <span className={fuerte || className ? undefined : 'text-muted'}>{etiqueta}</span>
+      {typeof valor === 'number' ? <Importe valor={valor} /> : valor}
+    </div>
+  )
+}
+
 export function Tabla({ children }: { children: ReactNode }) {
   return (
     <div className="-mx-5 overflow-x-auto px-5">
@@ -93,6 +104,64 @@ export function Tabla({ children }: { children: ReactNode }) {
 
 export function Vacio({ children }: { children: ReactNode }) {
   return <p className="rounded-xl border border-dashed border-line px-4 py-6 text-center text-sm text-muted">{children}</p>
+}
+
+export type Columna<T> = {
+  cabecera: ReactNode               // th
+  celda: (x: T) => ReactNode        // td y, en móvil, el valor de la fila del dl (o el título o subtítulo de la tarjeta)
+  celdaMovil?: (x: T) => ReactNode  // si en móvil se pinta distinto (p. ej. un subtítulo que junta dos columnas)
+  num?: boolean                     // alinea a la derecha (clase num)
+  papel?: 'titulo' | 'subtitulo' | 'oculta'  // en móvil: línea principal de la tarjeta, línea pequeña gris debajo, o no sale; sin papel = fila del dl
+  claseTd?: string                  // p. ej. 'whitespace-nowrap' o 'cifra text-muted'
+  fuerte?: boolean                  // la fila del dl en negrita (en escritorio ponlo en claseTd)
+}
+
+/** Lista de tarjetas en móvil y tabla en escritorio con las mismas celdas. `acciones` va a la derecha de la
+ *  cabecera de cada tarjeta y en la última columna de la tabla. */
+export function TablaResponsive<T>({ filas, columnas, clave, acciones, vacio }: {
+  filas: T[]; columnas: Columna<T>[]; clave: (x: T) => string | number; acciones?: (x: T) => ReactNode; vacio?: ReactNode
+}) {
+  if (!filas.length) return vacio ? <Vacio>{vacio}</Vacio> : null
+  const movil = (c: Columna<T>, x: T) => (c.celdaMovil ?? c.celda)(x)
+  const titulo = columnas.find((c) => c.papel === 'titulo'), subtitulo = columnas.find((c) => c.papel === 'subtitulo')
+  const detalle = columnas.filter((c) => !c.papel)
+  return (
+    <>
+      <ul className="divide-y divide-line sm:hidden">
+        {filas.map((x) => (
+          <li key={clave(x)} className="py-3 text-sm first:pt-0 last:pb-0">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                {titulo && <div className="truncate font-medium">{movil(titulo, x)}</div>}
+                {subtitulo && <div className="text-xs text-muted">{movil(subtitulo, x)}</div>}
+              </div>
+              {acciones && <span className="flex">{acciones(x)}</span>}
+            </div>
+            <dl className="mt-2 space-y-1">
+              {detalle.map((c, i) => (
+                <div key={i} className={cx('flex justify-between gap-3', c.fuerte && 'font-medium')}>
+                  <dt className={c.fuerte ? undefined : 'text-muted'}>{c.cabecera}</dt><dd>{movil(c, x)}</dd>
+                </div>
+              ))}
+            </dl>
+          </li>
+        ))}
+      </ul>
+      <div className="hidden sm:block">
+        <Tabla>
+          <thead><tr>{columnas.map((c, i) => <th key={i} className={c.num ? 'num' : undefined}>{c.cabecera}</th>)}{acciones && <th />}</tr></thead>
+          <tbody>
+            {filas.map((x) => (
+              <tr key={clave(x)}>
+                {columnas.map((c, i) => <td key={i} className={cx(c.num && 'num', c.claseTd) || undefined}>{c.celda(x)}</td>)}
+                {acciones && <td className="whitespace-nowrap text-right">{acciones(x)}</td>}
+              </tr>
+            ))}
+          </tbody>
+        </Tabla>
+      </div>
+    </>
+  )
 }
 
 export function Barra({ valor, max }: { valor: number; max: number }) {
@@ -108,11 +177,14 @@ export function Barra({ valor, max }: { valor: number; max: number }) {
 
 const claseCampo = 'w-full rounded-xl border border-line bg-panel px-3 py-2 text-sm text-ink placeholder:text-muted/70'
 
-export function Campo({ etiqueta, ayuda, className, ...p }: InputHTMLAttributes<HTMLInputElement> & { etiqueta: string; ayuda?: string }) {
+/** Sin `etiqueta` devuelve solo el <input> (y `className` va a él). */
+export function Campo({ etiqueta, ayuda, className, ...p }: InputHTMLAttributes<HTMLInputElement> & { etiqueta?: string; ayuda?: string }) {
+  const input = <input {...p} className={cx(claseCampo, !etiqueta && className)} />
+  if (!etiqueta) return input
   return (
     <label className={cx('flex flex-col gap-1.5 text-xs font-medium text-muted', className)}>
       {etiqueta}
-      <input {...p} className={claseCampo} />
+      {input}
       {ayuda && <span className="font-normal">{ayuda}</span>}
     </label>
   )
@@ -122,6 +194,65 @@ export function Selector({ etiqueta, children, className, ...p }: SelectHTMLAttr
   const sel = <select {...p} className={cx(claseCampo, !etiqueta && className)}>{children}</select>
   if (!etiqueta) return sel
   return <label className={cx('flex flex-col gap-1.5 text-xs font-medium text-muted', className)}>{etiqueta}{sel}</label>
+}
+
+export function Area({ etiqueta, ayuda, className, rows = 3, ...p }: TextareaHTMLAttributes<HTMLTextAreaElement> & { etiqueta: string; ayuda?: string }) {
+  return (
+    <label className={cx('flex flex-col gap-1.5 text-xs font-medium text-muted', className)}>
+      {etiqueta}
+      <textarea rows={rows} {...p} className={claseCampo} />
+      {ayuda && <span className="font-normal">{ayuda}</span>}
+    </label>
+  )
+}
+
+export function Casilla({ etiqueta, className, ...p }: InputHTMLAttributes<HTMLInputElement> & { etiqueta: ReactNode }) {
+  return <label className={cx('flex items-center gap-2 text-sm', className)}><input type="checkbox" {...p} className="size-4 accent-[var(--accent)]" />{etiqueta}</label>
+}
+
+/** Año a consultar, del más reciente al más antiguo: por defecto del que viene al de hace dos. */
+export function SelectorAnio({ valor, onCambiar, desde, hasta }: { valor: number; onCambiar: (anio: number) => void; desde?: number; hasta?: number }) {
+  const [actual] = useState(() => new Date().getFullYear())
+  const primero = hasta ?? actual + 1, ultimo = desde ?? actual - 2
+  return (
+    <Selector value={valor} onChange={(e) => onCambiar(Number(e.target.value))} aria-label="Año" className="!w-28">
+      {Array.from({ length: primero - ultimo + 1 }, (_, i) => primero - i).map((a) => <option key={a} value={a}>{a}</option>)}
+    </Selector>
+  )
+}
+
+// --- Navegación y selección --------------------------------------------------
+
+export function Pestanas<T extends string>({ pestanas, activa, onCambiar, className }: {
+  pestanas: readonly { id: T; texto: string }[]; activa: T; onCambiar: (id: T) => void; className?: string
+}) {
+  return (
+    <div className={cx('flex gap-1 border-b border-line', className)} role="tablist">
+      {pestanas.map((p) => (
+        <button key={p.id} role="tab" aria-selected={activa === p.id} onClick={() => onCambiar(p.id)}
+          className={`-mb-px border-b-2 px-4 py-2 text-sm font-medium ${activa === p.id ? 'border-accent text-accent' : 'border-transparent text-muted hover:text-ink'}`}>
+          {p.texto}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+/** Una opción entre pocas (periodo, modo…). `pequeno`: en texto pequeño y con el acento suave, para la cabecera de una tarjeta. */
+export function Segmentos<T extends string | number>({ opciones, valor, onCambiar, etiqueta, pequeno }: {
+  opciones: readonly { valor: T; texto: string }[]; valor: T; onCambiar: (v: T) => void; etiqueta: string; pequeno?: boolean
+}) {
+  return (
+    <div className={cx('flex rounded-xl border border-line bg-panel p-0.5', pequeno ? 'text-xs' : 'text-sm')} role="group" aria-label={etiqueta}>
+      {opciones.map((o) => (
+        <button key={o.valor} onClick={() => onCambiar(o.valor)} aria-pressed={valor === o.valor}
+          className={cx('cursor-pointer rounded-lg px-3 py-1.5 transition', !pequeno && 'font-medium',
+            valor === o.valor ? (pequeno ? 'bg-accent-soft font-semibold text-accent' : 'bg-accent text-panel') : cx('text-muted', !pequeno && 'hover:text-ink'))}>
+          {o.texto}
+        </button>
+      ))}
+    </div>
+  )
 }
 
 export function Dialogo({ abierto, onCerrar, titulo, children }: { abierto: boolean; onCerrar: () => void; titulo: string; children: ReactNode }) {
@@ -216,11 +347,33 @@ export function ErrorCarga({ error }: { error: Error }) {
   return <Vacio>No se han podido cargar los datos: {error.message}</Vacio>
 }
 
+/** Botón que pide confirmar: el primer clic lo arma, el segundo ejecuta; al perder el foco se desarma. */
+function useDosPasos(onConfirmar: () => void) {
+  const [seguro, setSeguro] = useState(false)
+  return {
+    seguro,
+    onClick: () => { if (!seguro) { setSeguro(true); return } setSeguro(false); onConfirmar() },
+    onBlur: () => setSeguro(false),
+  }
+}
+
+/** La primera vez pasa a `textoConfirmar` (en rojo) y la segunda ejecuta `onConfirmar`. */
+export function EnDosPasos({ texto, textoConfirmar, onConfirmar, disabled, variante = 'secundario', icono, className }: {
+  texto: ReactNode; textoConfirmar: ReactNode; onConfirmar: () => void; disabled?: boolean; variante?: Variante; icono?: ReactNode; className?: string
+}) {
+  const { seguro, onClick, onBlur } = useDosPasos(onConfirmar)
+  return (
+    <Boton variante={seguro ? 'peligro' : variante} className={className} onClick={onClick} onBlur={onBlur} disabled={disabled}>
+      {icono}{seguro ? textoConfirmar : texto}
+    </Boton>
+  )
+}
+
 /** Papelera que pide confirmar. `etiqueta` completa el aria-label («Borrar <etiqueta>»); `texto` se ve junto al icono. */
 export function BorrarEnDosPasos({ onBorrar, etiqueta, texto: visible, disabled }: { onBorrar: () => void; etiqueta?: string; texto?: string; disabled?: boolean }) {
-  const [seguro, setSeguro] = useState(false)
+  const { seguro, onClick, onBlur } = useDosPasos(onBorrar)
   const texto = etiqueta ? `Borrar ${etiqueta}` : 'Borrar'
   return seguro
-    ? <Boton variante="peligro" className="px-2 py-1 text-xs" onClick={() => { setSeguro(false); onBorrar() }} onBlur={() => setSeguro(false)} disabled={disabled} aria-label={`Confirmar: ${texto.toLowerCase()}`} autoFocus>Confirmar</Boton>
-    : <Boton variante="fantasma" className={cx('px-2 py-1', visible && 'text-xs')} onClick={() => setSeguro(true)} disabled={disabled} aria-label={texto} title={texto}><Trash2 size={14} />{visible}</Boton>
+    ? <Boton variante="peligro" className="px-2 py-1 text-xs" onClick={onClick} onBlur={onBlur} disabled={disabled} aria-label={`Confirmar: ${texto.toLowerCase()}`} autoFocus>Confirmar</Boton>
+    : <Boton variante="fantasma" className={cx('px-2 py-1', visible && 'text-xs')} onClick={onClick} disabled={disabled} aria-label={texto} title={texto}><Trash2 size={14} />{visible}</Boton>
 }

@@ -1,16 +1,31 @@
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { api } from '../lib/api'
-import { DIAS_SEMANA, ESTILO_DIA, MESES, diaISO, festivoDe, festivos, laborables, mesActual, moverMes } from '../lib/festivos'
+import { MESES } from '../lib/format'
+import { ESTILO_DIA, diaISO, laborables, mesActual, moverMes } from '../lib/festivos'
 import type { Facturacion, TipoDia } from '../lib/tipos'
 import { useAvisos } from '../lib/utilidades'
-import { Boton } from './ui'
+import RejillaMes from './RejillaMes'
+import { Boton, Campo } from './ui'
 
 type Pincel = TipoDia | 'quitar'
 const PINCELES: { valor: Pincel; texto: string }[] = [
   { valor: 'vacaciones', texto: 'Vacaciones' }, { valor: 'no_disponible', texto: 'No puedo' }, { valor: 'quitar', texto: 'Borrar' },
 ]
+const MAX_DIAS_RANGO = 370
+
+/** Días laborables (sin fines de semana ni festivos) entre dos fechas «AAAA-MM-DD», ambas incluidas. */
+function laborablesEntre(desde: string, hasta: string): string[] {
+  const dias: string[] = []
+  let d = new Date(`${desde}T00:00:00`)
+  const fin = new Date(`${hasta}T00:00:00`)
+  for (let i = 0; d <= fin && i <= MAX_DIAS_RANGO; d.setDate(d.getDate() + 1), i++) {
+    const mes = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+    if (laborables(mes).has(d.getDate())) dias.push(diaISO(mes, d.getDate()))
+  }
+  return dias
+}
 
 /** Calendario donde marcas tus vacaciones y los días que no puedes trabajar; el planificador de facturas ya no los cuenta. */
 export default function CalendarioDias() {
@@ -21,9 +36,6 @@ export default function CalendarioDias() {
   const [mes, setMes] = useState(mesActual())
   const [pincel, setPincel] = useState<Pincel>('vacaciones')
   const [anio, m] = mes.split('-').map(Number)
-  const fest = useMemo(() => festivos(anio), [anio])
-  const huecos = (new Date(anio, m - 1, 1).getDay() + 6) % 7
-  const total = new Date(anio, m, 0).getDate()
 
   const marcar = useMutation({
     mutationFn: ({ dias, tipo }: { dias: string[]; tipo: TipoDia | null }) => api.put<{ dias_no_disponibles: Record<string, TipoDia> }>('/facturacion/dias', { dias, tipo }),
@@ -43,6 +55,19 @@ export default function CalendarioDias() {
     const clave = diaISO(mes, d)
     const tipo = pincel === 'quitar' || marcados[clave] === pincel ? null : pincel
     marcar.mutate({ dias: [clave], tipo })
+  }
+  // Un tramo entero (las vacaciones de agosto) con el pincel elegido, solo los días laborables
+  const [desde, setDesde] = useState('')
+  const [hasta, setHasta] = useState('')
+  const rangoValido = !!desde && !!hasta && hasta >= desde
+  const marcarRango = () => {
+    const dias = laborablesEntre(desde, hasta)
+    if (!dias.length) return avisar('En ese tramo no hay días laborables', 'error')
+    if (dias.length > 260) return avisar('Marca como mucho un año de cada vez', 'error')
+    marcar.mutate({ dias, tipo: pincel === 'quitar' ? null : pincel })
+    setMes(desde.slice(0, 7))
+    setDesde('')
+    setHasta('')
   }
 
   const delMes = Object.entries(marcados).filter(([k]) => k.startsWith(mes))
@@ -68,22 +93,23 @@ export default function CalendarioDias() {
         ))}
       </div>
 
-      <div className="grid grid-cols-7 gap-1 text-center text-xs">
-        {DIAS_SEMANA.map((d) => <div key={d} className="py-1 font-medium text-muted">{d}</div>)}
-        {Array.from({ length: huecos }, (_, i) => <div key={`h${i}`} />)}
-        {Array.from({ length: total }, (_, i) => i + 1).map((d) => {
+      <form className="flex flex-wrap items-end gap-2" onSubmit={(e) => { e.preventDefault(); if (rangoValido) marcarRango() }} aria-label="Marcar un tramo de días">
+        <Campo etiqueta="Del día" type="date" value={desde} onChange={(e) => setDesde(e.target.value)} className="min-w-0 flex-1 basis-36" />
+        <Campo etiqueta="al" type="date" value={hasta} min={desde || undefined} onChange={(e) => setHasta(e.target.value)} className="min-w-0 flex-1 basis-36" />
+        <Boton type="submit" variante="secundario" disabled={!rangoValido || marcar.isPending}>
+          {pincel === 'quitar' ? 'Borrar el tramo' : `Marcar ${pincel === 'vacaciones' ? 'vacaciones' : 'que no puedo'}`}
+        </Boton>
+      </form>
+
+      <RejillaMes mes={mes} onDia={tocar}
+        claseDia={(d, { festivo, finde }) => {
           const tipo = marcados[diaISO(mes, d)]
-          const nombreFestivo = festivoDe(fest, mes, d)
-          const finde = [0, 6].includes(new Date(anio, m - 1, d).getDay())
-          const titulo = [nombreFestivo, tipo === 'vacaciones' ? 'Vacaciones' : tipo === 'no_disponible' ? 'No puedes' : ''].filter(Boolean).join(' · ')
-          return (
-            <button key={d} type="button" title={titulo || undefined} onClick={() => tocar(d)}
-              className={`rounded-lg py-2 font-medium transition ${tipo ? ESTILO_DIA[tipo] : finde || nombreFestivo ? 'text-muted/60' : 'bg-panel-2'} ${nombreFestivo ? 'ring-1 ring-[var(--chart-3)]' : ''}`}>
-              {d}
-            </button>
-          )
-        })}
-      </div>
+          return `rounded-lg py-2 font-medium transition ${tipo ? ESTILO_DIA[tipo] : finde || festivo ? 'text-muted/60' : 'bg-panel-2'} ${festivo ? 'ring-1 ring-[var(--chart-3)]' : ''}`
+        }}
+        tituloDia={(d, { festivo }) => {
+          const tipo = marcados[diaISO(mes, d)]
+          return [festivo, tipo === 'vacaciones' ? 'Vacaciones' : tipo === 'no_disponible' ? 'No puedes' : ''].filter(Boolean).join(' · ') || undefined
+        }} />
 
       <dl className="grid grid-cols-3 gap-3 rounded-xl bg-panel-2 p-4 text-sm">
         <div><dt className="text-xs text-muted">Puedes trabajar</dt><dd className="cifra text-lg font-semibold">{disponibles} días</dd></div>

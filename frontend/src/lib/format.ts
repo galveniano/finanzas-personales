@@ -37,3 +37,16 @@ export function diasHasta(iso: string) {
   const ms = new Date(`${iso}T00:00:00`).getTime() - new Date(new Date().toDateString()).getTime()
   return Math.round(ms / 86_400_000)
 }
+
+export const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
+export const MESES_EN = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+
+export const capitalizar = (t: string) => t.charAt(0).toUpperCase() + t.slice(1)
+
+/** «12,5 %»; «—» si no hay valor. */
+export function pct(v: number | null | undefined, decimales = 2): string {
+  return v == null ? '—' : `${v.toLocaleString('es-ES', { maximumFractionDigits: decimales })} %`
+}
+
+/** Cuándo vence algo según los días que faltan (negativos: ya ha pasado). */
+export const cuandoVence = (dias: number) => (dias < 0 ? 'Vencido' : dias === 0 ? 'Hoy' : dias === 1 ? 'Mañana' : `En ${dias} días`)

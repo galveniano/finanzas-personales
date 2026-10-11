@@ -1,11 +1,10 @@
 import { useState } from 'react'
 import { Plus } from 'lucide-react'
 import { api } from '../lib/api'
+import { MESES } from '../lib/format'
 import type { SupuestosPrevision } from '../lib/tipos'
 import { num, useAccion } from '../lib/utilidades'
 import { Boton, Campo, Formulario, Selector } from './ui'
-
-const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
 
 export default function FormSupuestos({ s, habitualBanco, cerrar }: { s: SupuestosPrevision; habitualBanco: number | null; cerrar: () => void }) {
   const [clientes, setClientes] = useState(Math.max(1, s.clientes.length))

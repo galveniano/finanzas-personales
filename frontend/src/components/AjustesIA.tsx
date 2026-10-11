@@ -4,7 +4,7 @@ import { PlugZap, Save } from 'lucide-react'
 import { api } from '../lib/api'
 import type { AjustesIA as Ajustes } from '../lib/tipos'
 import { useAccion, useAvisos } from '../lib/utilidades'
-import { Boton, Campo, ErrorCarga, Etiqueta, Selector, Tarjeta } from './ui'
+import { Boton, Campo, EnDosPasos, ErrorCarga, Etiqueta, Selector, Tarjeta } from './ui'
 
 type Proveedor = Ajustes['proveedor']
 
@@ -27,7 +27,6 @@ function Formulario({ d }: { d: Ajustes }) {
   const [proveedor, setProveedor] = useState<Proveedor>(d.proveedor)
   const [clave, setClave] = useState('')
   const [modelo, setModelo] = useState(d.proveedores[d.proveedor].modelo)
-  const [seguroBorrar, setSeguroBorrar] = useState(false)
 
   const guardar = useAccion(() => api.put('/ajustes/ia', { proveedor, modelo, clave: clave || undefined })
     .then(() => setClave('')), 'Asistente guardado')
@@ -72,10 +71,8 @@ function Formulario({ d }: { d: Ajustes }) {
           <PlugZap size={15} className={probar.isPending ? 'animate-pulse' : ''} />{probar.isPending ? 'Probando…' : 'Probar'}
         </Boton>
         {p.origen_clave === 'app' && proveedor === d.proveedor && (
-          <Boton variante={seguroBorrar ? 'peligro' : 'fantasma'} disabled={borrar.isPending} onBlur={() => setSeguroBorrar(false)}
-            onClick={() => { if (!seguroBorrar) { setSeguroBorrar(true); return } setSeguroBorrar(false); borrar.mutate(undefined) }}>
-            {seguroBorrar ? '¿Seguro? Borrar la clave' : 'Borrar clave'}
-          </Boton>
+          <EnDosPasos variante="fantasma" texto="Borrar clave" textoConfirmar="¿Seguro? Borrar la clave" disabled={borrar.isPending}
+            onConfirmar={() => borrar.mutate(undefined)} />
         )}
       </div>
     </Tarjeta>

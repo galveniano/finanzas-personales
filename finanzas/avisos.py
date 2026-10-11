@@ -4,9 +4,10 @@ from datetime import date, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from finanzas import ajustes, sync
+from finanzas import ajustes, declaraciones, sync
 from finanzas.fechas import ahora_utc
-from finanzas.models import Activo, Declaracion, RegistroSync, Valoracion
+from finanzas.fiscal import autonomo
+from finanzas.models import Activo, Factura, GastoAutonomo, RegistroSync, Valoracion
 
 CLAVE_ULTIMA_COPIA = "ultima_copia"
 
@@ -16,32 +17,59 @@ def _eur(x: float) -> str:
 
 
 def plazos(desde: date, hasta: date) -> list[dict]:
-    """Plazos de los modelos que presentas (303, 130, 390 y renta) entre dos fechas."""
+    """Plazos de los modelos que presentas (303, 130, 390 y renta) entre dos fechas. `ver` es la sección de
+    Impuestos a la que lleva cada uno (?ver=)."""
     lista = []
     for anio in range(desde.year - 1, hasta.year + 1):
-        for t, (mes, dia, anio_pago) in enumerate(((4, 20, anio), (7, 20, anio), (10, 20, anio), (1, 30, anio + 1)), 1):
-            lista.append({"fecha": date(anio_pago, mes, dia), "titulo": f"303 y 130 del {t}T {anio}",
+        for t in range(1, 5):
+            lista.append({"fecha": autonomo.vencimiento(anio, t), "titulo": f"303 y 130 del {t}T {anio}",
                           "detalle": "IVA y pago fraccionado del IRPF. Si domicilias el pago, cinco días antes.",
-                          "modelos": [("303", anio, f"{t}T"), ("130", anio, f"{t}T")]})
+                          "modelos": [("303", anio, f"{t}T"), ("130", anio, f"{t}T")], "ver": "trimestres"})
         lista.append({"fecha": date(anio + 1, 1, 30), "titulo": f"390 de {anio}", "detalle": "Resumen anual del IVA.",
-                      "modelos": [("390", anio, "0A")]})
+                      "modelos": [("390", anio, "0A")], "ver": "trimestres"})
         lista.append({"fecha": date(anio + 1, 4, 2), "titulo": f"Empieza la renta {anio}",
-                      "detalle": "Ya puedes revisar el borrador.", "modelos": []})
+                      "detalle": "Ya puedes revisar el borrador.", "modelos": [], "ver": "renta"})
         lista.append({"fecha": date(anio + 1, 6, 25), "titulo": f"Renta {anio} domiciliada",
                       "detalle": "Último día para presentar la renta a pagar con domiciliación.",
-                      "modelos": [("100", anio, "0A")]})
+                      "modelos": [("100", anio, "0A")], "ver": "renta"})
         lista.append({"fecha": date(anio + 1, 6, 30), "titulo": f"Fin de la renta {anio}", "detalle": "",
-                      "modelos": [("100", anio, "0A")]})
+                      "modelos": [("100", anio, "0A")], "ver": "renta"})
     return sorted((p for p in lista if desde <= p["fecha"] <= hasta), key=lambda p: p["fecha"])
 
 
-def _presentado(s: Session, modelo: str, anio: int, periodo: str) -> bool:
-    return s.scalar(select(Declaracion.id).where(Declaracion.modelo == modelo, Declaracion.ejercicio == anio,
-                                                 Declaracion.periodo == periodo).limit(1)) is not None
+def plazos_con_estado(s: Session, desde: date, hasta: date, prev: dict | None = None,
+                      hoy: date | None = None) -> list[dict]:
+    """Los plazos con `presentado` (todo lo que exige ese plazo está presentado; None si no exige nada, como el
+    inicio de la renta) y `vencido`. El 130 no se exige en los trimestres en que estás exento: por las facturas
+    del año anterior (más del 70 % con retención) o por la previsión (`prev`, que se calcula solo si hace falta)."""
+    from finanzas import prevision
+    hoy = hoy or date.today()
+    facturas = gastos = None
+    cache = {"prev": prev}
+
+    def exento_130(anio: int, t: int) -> bool:
+        nonlocal facturas, gastos
+        if facturas is None:
+            facturas = s.scalars(select(Factura)).all()
+            gastos = s.scalars(select(GastoAutonomo)).all()
+        if autonomo.calcular_130(anio, t, facturas, gastos).exento:
+            return True
+        if cache["prev"] is None:
+            cache["prev"] = prevision.calcular(s) if prevision.tiene_clientes(prevision.leer(s)) else {}
+        return bool((cache["prev"].get("trimestres") or {}).get(f"{anio}-{t}", {}).get("exento_130"))
+
+    lista = []
+    for p in plazos(desde, hasta):
+        exigidos = [m for m in p["modelos"] if not (m[0] == "130" and exento_130(m[1], int(m[2][0])))]
+        presentado = all(declaraciones.presentada(s, *m) for m in exigidos) if p["modelos"] else None
+        lista.append({**p, "exigidos": exigidos, "presentado": presentado,
+                      "vencido": p["fecha"] < hoy and presentado is False})
+    return lista
 
 
-def calcular(s: Session, regularizacion: list[dict] | None = None) -> list[dict]:
-    """Lista de avisos: nivel (error, aviso, info), texto y a dónde ir para arreglarlo."""
+def calcular(s: Session, regularizacion: list[dict] | None = None, prev: dict | None = None) -> list[dict]:
+    """Lista de avisos: nivel (error, aviso, info), texto y a dónde ir para arreglarlo. `prev` (la previsión,
+    si ya la tienes calculada) evita repetirla para saber si estás exento del 130."""
     hoy = date.today()
     avisos = []
     estado = sync.estado(s)
@@ -66,13 +94,13 @@ def calcular(s: Session, regularizacion: list[dict] | None = None) -> list[dict]
         if quedan <= 15:
             avisos.append({"nivel": "aviso", "texto": f"El permiso de Sabadell caduca en {quedan} días: renuévalo.",
                            "ir": "/ajustes"})
-    for p in plazos(hoy, hoy + timedelta(days=15)):
-        if p["modelos"] and all(_presentado(s, *m) for m in p["modelos"]):
+    for p in plazos_con_estado(s, hoy, hoy + timedelta(days=15), prev, hoy):
+        if p["presentado"]:
             continue
         dias = (p["fecha"] - hoy).days
         cuando = "hoy" if dias == 0 else "mañana" if dias == 1 else f"en {dias} días"
         avisos.append({"nivel": "aviso" if dias <= 5 else "info", "texto": f"{p['titulo']}: el plazo acaba {cuando}.",
-                       "ir": "/impuestos"})
+                       "ir": f"/impuestos?ver={p['ver']}"})
     ultima_copia = ajustes.leer(s, CLAVE_ULTIMA_COPIA)
     if not ultima_copia or (hoy - date.fromisoformat(ultima_copia[:10])).days > 31:
         avisos.append({"nivel": "info", "texto": "Haz una copia de tus datos: hace más de un mes de la última."
@@ -96,13 +124,19 @@ def calcular(s: Session, regularizacion: list[dict] | None = None) -> list[dict]
                 texto += f" (con la devolución por pluriactividad, unos {_eur(neto)} netos)."
             else:
                 texto += ", aunque la devolución por pluriactividad lo compensaría."
-            avisos.append({"nivel": "aviso", "texto": texto, "ir": "/impuestos"})
+            avisos.append({"nivel": "aviso", "texto": texto, "ir": "/impuestos?ver=hucha"})
     from finanzas import prevision
     for p in prevision.plazos_rentas(s, hoy):
         cuando = date.fromisoformat(p["fecha"])
         if (cuando - hoy).days <= 60:
             avisos.append({"nivel": "aviso" if (cuando - hoy).days <= 15 else "info",
                            "texto": f"El {cuando:%d/%m/%Y} Hacienda te carga {_eur(p['importe'])} de la {p['concepto'][0].lower()}"
-                                    f"{p['concepto'][1:]}: ten el dinero en la cuenta domiciliada.", "ir": "/impuestos"})
+                                    f"{p['concepto'][1:]}: ten el dinero en la cuenta domiciliada.", "ir": "/impuestos?ver=hucha"})
+    from finanzas import actividad, bienes, cuentas, plan, presupuestos
+    avisos += presupuestos.avisos(s)
+    avisos += actividad.avisos(s)
+    avisos += plan.avisos(s)
+    avisos += bienes.avisos(s)
+    avisos += cuentas.avisos(s)
     orden = {"error": 0, "aviso": 1, "info": 2}
     return sorted(avisos, key=lambda a: orden[a["nivel"]])

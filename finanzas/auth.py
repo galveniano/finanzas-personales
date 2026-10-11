@@ -44,12 +44,6 @@ def verificar_google(token: str, obtener_clave=None) -> str:
     return email
 
 
-def _secreto() -> str:
-    if len(config.SESSION_SECRET) < 32:
-        raise HTTPException(503, "Falta SESSION_SECRET (al menos 32 caracteres) en la configuración")
-    return config.SESSION_SECRET
-
-
 CLAVE_VERSION = "sesion_version"
 
 
@@ -65,7 +59,7 @@ def _version() -> str:
 
 def crear_sesion(email: str) -> str:
     ahora = int(time.time())
-    return jwt.encode({"sub": email, "iat": ahora, "exp": ahora + DURACION, "v": _version()}, _secreto(),
+    return jwt.encode({"sub": email, "iat": ahora, "exp": ahora + DURACION, "v": _version()}, config.secreto(),
                       algorithm="HS256")
 
 
@@ -74,7 +68,7 @@ def email_de_sesion(request: Request) -> str | None:
     if not token:
         return None
     try:
-        datos = jwt.decode(token, _secreto(), algorithms=["HS256"])
+        datos = jwt.decode(token, config.secreto(), algorithms=["HS256"])
     except jwt.PyJWTError:
         return None
     if datos.get("v", "") != _version():

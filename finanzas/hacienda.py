@@ -4,23 +4,17 @@ El IVA que cobras en las facturas no es tuyo: lo guardas hasta el 303. Igual pas
 trimestre en curso y con la renta, que se va generando mes a mes y se paga en junio del año siguiente.
 Todo son estimaciones a partir de la previsión.
 """
-import json
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from finanzas import ajustes, prevision
+from finanzas import ajustes, declaraciones, prevision
 from finanzas.fiscal import reta
-from finanzas.models import Categoria, Cuenta, Declaracion, Factura, GastoAutonomo, Movimiento
+from finanzas.models import Cuenta, Declaracion, Factura, GastoAutonomo, Nomina
 
 CLAVE_HUCHA = "cuenta_hucha"
-
-
-def _presentado(s: Session, modelo: str, anio: int, periodo: str) -> bool:
-    return s.scalar(select(Declaracion.id).where(Declaracion.modelo == modelo, Declaracion.ejercicio == anio,
-                                                 Declaracion.periodo == periodo).limit(1)) is not None
 
 
 def _iva_facturas(s: Session, desde: date, hasta: date) -> float | None:
@@ -47,21 +41,21 @@ def pendiente(s: Session, prev: dict | None = None, hoy: date | None = None) -> 
         inicio_t = date(anio, 3 * t - 2, 1)
         en_curso = (anio, t) == (hoy.year, trimestre_actual)
         fraccion = ((hoy.month - inicio_t.month) + hoy.day / 31) / 3 if en_curso else 1.0
-        if not _presentado(s, "303", anio, f"{t}T"):
+        if not declaraciones.presentada(s, "303", anio, f"{t}T"):
             iva = _iva_facturas(s, inicio_t, hoy) if en_curso else None
             if iva is None and datos:
                 iva = datos["iva"] * fraccion
             if iva and iva > 0:
                 lineas.append({"concepto": f"IVA {t}T {anio} (303)", "importe": round(iva, 2), "tipo": "iva",
                                "en_curso": en_curso})
-        if datos and not datos["exento_130"] and not _presentado(s, "130", anio, f"{t}T"):
+        if datos and not datos["exento_130"] and not declaraciones.presentada(s, "130", anio, f"{t}T"):
             irpf = datos["irpf"] * fraccion
             if irpf > 0:
                 lineas.append({"concepto": f"IRPF {t}T {anio} (130)", "importe": round(irpf, 2), "tipo": "130",
                                "en_curso": en_curso})
     # Renta: la del año pasado si aún no está presentada, y la parte que ya llevas de la de este año
     for r in prev.get("anios_todos", prev.get("anios", [])):
-        if r["anio"] == hoy.year - 1 and r["resultado"] > 0 and not _presentado(s, "100", r["anio"], "0A"):
+        if r["anio"] == hoy.year - 1 and r["resultado"] > 0 and not declaraciones.presentada(s, "100", r["anio"], "0A"):
             lineas.append({"concepto": f"Renta {r['anio']}", "importe": round(r["resultado"], 2), "tipo": "renta",
                            "en_curso": False})
         elif r["anio"] == hoy.year and r["resultado"] > 0:
@@ -78,41 +72,54 @@ def pendiente(s: Session, prev: dict | None = None, hoy: date | None = None) -> 
 
 def cuota_reta_banco(s: Session, anio: int) -> tuple[float, int]:
     """Cuota de autónomos cargada en el banco en un año y en cuántos meses."""
-    movs = s.execute(select(Movimiento.fecha, Movimiento.importe, Movimiento.concepto, Categoria.nombre)
-                     .join(Categoria, Movimiento.categoria_id == Categoria.id, isouter=True)
-                     .where(Movimiento.fecha >= date(anio, 1, 1), Movimiento.fecha <= date(anio, 12, 31),
-                            Movimiento.importe < 0)).all()
-    cargos = [(f, -float(i)) for f, i, c, cat in movs
-              if cat == "Cuota autónomos" or any(p in (c or "").lower() for p in prevision.PATRON_CUOTA_AUTONOMO)]
+    cargos = prevision.cargos_cuota_autonomos(s, date(anio, 1, 1), date(anio, 12, 31))
     return round(sum(i for _, i in cargos), 2), len({f.month for f, _ in cargos})
+
+
+def bruto_nominas_12_meses(s: Session, pagas: int = 14, hoy: date | None = None) -> float:
+    """Bruto anual según las nóminas registradas en los últimos 12 meses (0 si no hay ninguna). Con menos de un
+    año subido, la media de las nóminas normales por las pagas del año."""
+    hoy = hoy or date.today()
+    ultimas = s.scalars(select(Nomina).where(Nomina.fecha > hoy - timedelta(days=365))).all()
+    if not ultimas:
+        return 0.0
+    normales = [x for x in ultimas if not x.paga_extra]
+    if normales and len({(x.fecha.year, x.fecha.month) for x in ultimas}) < 12:
+        return round(float(sum((x.bruto for x in normales), Decimal(0))) / len(normales) * pagas, 2)
+    return round(float(sum((x.bruto for x in ultimas), Decimal(0))), 2)
+
+
+def _meses_hasta_regularizacion(anio: int, hoy: date) -> int:
+    """Meses que quedan hasta que la Seguridad Social regularice ese año (hacia noviembre del siguiente)."""
+    return max((anio + 1 - hoy.year) * 12 + prevision.MES_REGULARIZACION_RETA - hoy.month, 1)
 
 
 def revision_reta(s: Session, prev: dict | None = None) -> list[dict]:
     """Por año: lo que cotizaste como autónomo frente a lo que te toca por tus rendimientos reales."""
     prev = prev or prevision.calcular(s)
+    hoy = date.today()
     nomina = (prev["supuestos"].get("nomina") or {})
     bruto = float(nomina.get("bruto_anual") or 0) * (1 + float(nomina.get("variable_pct") or 0) / 100)
+    if not bruto:  # sin sueldo en los supuestos: la pluriactividad sale de las nóminas que hayas subido
+        bruto = bruto_nominas_12_meses(s, int(nomina.get("pagas") or 14), hoy)
     filas = []
     rentas = s.scalars(select(Declaracion).where(Declaracion.modelo == "100").order_by(Declaracion.ejercicio)).all()
     vistos = set()
     for d in rentas:
-        try:
-            c = json.loads(d.casillas) if d.casillas else {}
-        except ValueError:
-            c = {}
-        if d.ejercicio not in reta.TABLAS or d.ejercicio in vistos or "ingresos_actividad" not in c:
+        c = declaraciones.casillas(d)
+        if reta.anio_tabla(d.ejercicio) is None or d.ejercicio in vistos or "ingresos_actividad" not in c:
             continue
         vistos.add(d.ejercicio)
         cuota = c.get("ss_autonomo") or cuota_reta_banco(s, d.ejercicio)[0]
         rendimiento = c["ingresos_actividad"] - c.get("gastos_actividad", 0.0)
         r = reta.regularizar(d.ejercicio, rendimiento, cuota, bruto, f"renta {d.ejercicio}")
         if r:
-            filas.append({**r.a_dict(), "previsto": False})
+            filas.append({**r.a_dict(), "previsto": False,
+                          "meses_hasta_regularizacion": _meses_hasta_regularizacion(d.ejercicio, hoy)})
     # Este año y, mientras su renta no esté presentada, el pasado: con la previsión
-    hoy = date.today()
     for actual in prev.get("anios_todos", []):
         anio = actual["anio"]
-        if anio not in (hoy.year - 1, hoy.year) or anio in vistos or anio not in reta.TABLAS:
+        if anio not in (hoy.year - 1, hoy.year) or anio in vistos or reta.anio_tabla(anio) is None:
             continue
         pagado, meses = cuota_reta_banco(s, anio)
         cuota = pagado / meses * 12 if meses else float(prev.get("gastos_autonomo_mes") or 0) * 12
@@ -120,7 +127,8 @@ def revision_reta(s: Session, prev: dict | None = None) -> list[dict]:
         rendimiento = actual["entradas"]["facturado"] - gastos
         r = reta.regularizar(anio, rendimiento, cuota, bruto, "previsión del año")
         if r:
-            filas.append({**r.a_dict(), "previsto": True})
+            filas.append({**r.a_dict(), "previsto": True,
+                          "meses_hasta_regularizacion": _meses_hasta_regularizacion(anio, hoy)})
     return filas
 
 
@@ -142,6 +150,6 @@ def hucha(s: Session, pend: dict, prev: dict) -> dict:
     falta = max(pend["total"] + (renta_total - ya_generado) - (apartado or 0.0), 0.0)
     return {"cuenta_id": cuenta.id if cuenta else None, "cuenta": cuenta.nombre if cuenta else None,
             "apartado": round(apartado, 2) if apartado is not None else None,
-            "debes_hoy": pend["total"], "renta_prevista": round(renta_total, 2),
+            "renta_prevista": round(renta_total, 2),
             "falta": round(falta, 2), "al_mes": round(falta / max(meses_hasta_junio, 1), 2),
             "meses_hasta_junio": meses_hasta_junio}

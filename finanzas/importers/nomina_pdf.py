@@ -7,13 +7,13 @@ reglas fijas; si algo no cuadra, quien llama puede pedírselo al modelo de IA (`
 """
 import re
 import unicodedata
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 
-MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre",
-         "noviembre", "diciembre"]
-IMPORTE = r"-?\d{1,3}(?:\.\d{3})*,\d{2}|-?\d+,\d{2}"
+from finanzas.fechas import MESES
+
+IMPORTE =r"-?\d{1,3}(?:\.\d{3})*,\d{2}|-?\d+,\d{2}"
 # Conceptos de cotización del trabajador
 SS = ["CONTINGENCIAS COMUNES", "CONT. COMUNES", "CONT.COMUNES", "C.COMUNES", "DESEMPLEO", "FORMACION PROFESIONAL",
       "FORMACION PROF", "FORM. PROF", "FORMACION", "MEI", "MECANISMO DE EQUIDAD", "SOLIDARIDAD"]
@@ -41,11 +41,6 @@ class LecturaNomina:
     @property
     def cuadra(self) -> bool:
         return abs(self.bruto - self.seguridad_social - self.retencion_irpf - self.otras_deducciones - self.neto) <= 1
-
-    def a_dict(self) -> dict:
-        d = asdict(self)
-        return {k: (float(v) if isinstance(v, Decimal) else v.isoformat() if isinstance(v, date) else v)
-                for k, v in d.items()}
 
 
 def _sin_tildes(texto: str) -> str:

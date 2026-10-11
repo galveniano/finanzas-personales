@@ -29,6 +29,15 @@ def nueva_sesion():
     return s
 
 
+def test_parse_importe_con_puntos_de_miles():
+    assert sabadell.parse_importe("1.000") == D("1000.00")
+    assert sabadell.parse_importe("1.000,50") == D("1000.50")
+    assert sabadell.parse_importe("1234.56") == D("1234.56")
+    assert sabadell.parse_importe("-1.500") == D("-1500.00")
+    assert sabadell.parse_importe("1.5") == D("1.50")
+    assert sabadell.parse_importe(1000) == D("1000.00")
+
+
 def test_parsear_csv_sabadell():
     filas = sabadell.parsear("extracto.csv", CSV)
     assert len(filas) == 3

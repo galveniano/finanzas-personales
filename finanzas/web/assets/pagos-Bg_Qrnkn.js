@@ -1,0 +1,1 @@
+import{A as e,G as t}from"./index-D1eL0Wqk.js";function n(){return e(({id:e,pagado:n})=>t.patch(`/pagos/${e}`,{pagado:n}))}function r(){return e(e=>t.del(`/pagos/${e}`),`Pago borrado`)}export{n,r as t};

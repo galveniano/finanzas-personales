@@ -44,7 +44,8 @@ BANCO = os.environ.get("BANCO", "Banco Sabadell")
 
 # Cada cuántas horas sincroniza sola mientras la app está abierta (0 = nunca).
 # En Vercel no hay procesos permanentes: sincroniza una tarea programada (vercel.json).
-SYNC_HORAS = 0.0 if EN_VERCEL else float(os.environ.get("SYNC_HORAS", "6"))
+# SYNC_HORAS= vacío en el .env vale como «no dicho»: 6 horas.
+SYNC_HORAS = 0.0 if EN_VERCEL else float(os.environ.get("SYNC_HORAS") or "6")
 # Secreto con el que Vercel llama a la tarea programada (Authorization: Bearer ...)
 CRON_SECRET = os.environ.get("CRON_SECRET", "")
 
@@ -54,6 +55,18 @@ GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 EMAILS_PERMITIDOS = {e.strip().lower() for e in os.environ.get("EMAILS_PERMITIDOS", "").split(",") if e.strip()}
 SESSION_SECRET = os.environ.get("SESSION_SECRET", "")
 AUTH_REQUERIDA = bool(GOOGLE_CLIENT_ID) or EN_VERCEL
+
+
+def secreto(obligatorio: bool = True) -> str:
+    """SESSION_SECRET comprobado en un solo sitio: firma la sesión (auth), cifra las claves guardadas (ajustes)
+    y deriva el token del calendario. Si falta o es corto y es obligatorio, 503 con el motivo; si no es obligatorio
+    (en local, sin sesión) vale lo que haya o un secreto fijo: la base de datos está en tu ordenador."""
+    if len(SESSION_SECRET) >= 32:
+        return SESSION_SECRET
+    if obligatorio:
+        from fastapi import HTTPException
+        raise HTTPException(503, "Falta SESSION_SECRET (al menos 32 caracteres) en la configuración")
+    return SESSION_SECRET or "finanzas-local"
 
 # Asistente y lectura de documentos (OpenAI o Claude). Se puede configurar también desde la app.
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")

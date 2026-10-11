@@ -13,7 +13,7 @@ PREFIJO = "enc:"
 
 def _fernet() -> Fernet:
     # En local sin SESSION_SECRET la base de datos está en tu ordenador; el cifrado es un extra.
-    semilla = (config.SESSION_SECRET or "finanzas-local").encode()
+    semilla = config.secreto(obligatorio=False).encode()
     return Fernet(base64.urlsafe_b64encode(hashlib.sha256(b"ajustes:" + semilla).digest()))
 
 

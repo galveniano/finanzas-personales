@@ -9,7 +9,6 @@ export const ESTILO_DIA: Record<TipoDia, string> = {
 }
 
 export const DIAS_SEMANA = ['L', 'M', 'X', 'J', 'V', 'S', 'D']
-export const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
 
 const dos = (n: number) => String(n).padStart(2, '0')
 

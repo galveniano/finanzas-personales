@@ -44,9 +44,20 @@ class Regularizacion:
     a_devolver: float  # lo que devolvería por cotizar de más en tu tramo
     devolucion_pluriactividad: float
     fuente: str
+    tipo: float  # tipo total de cotización del año, en %
+    base_cotizada_mes: float  # la base mensual a la que equivale la cuota que pagas (cuota / 12 / tipo)
 
     def a_dict(self) -> dict:
         return asdict(self)
+
+
+def anio_tabla(anio: int) -> int | None:
+    """El año cuya tabla se usa: el suyo si la tiene; para los años posteriores a la última tabla, esa última
+    (hasta que se actualice); para los anteriores a 2025 ninguno (las bases eran otras: no se estima)."""
+    if anio in TABLAS:
+        return anio
+    ultimo = max(TABLAS)
+    return ultimo if anio > ultimo else None
 
 
 def tramo(rendimiento_mes: float, anio: int) -> tuple[int, float, float]:
@@ -59,7 +70,8 @@ def tramo(rendimiento_mes: float, anio: int) -> tuple[int, float, float]:
 def devolucion_pluriactividad(anio: int, cuota_reta: float, bruto_nomina: float) -> float:
     """La mitad de lo que las contingencias comunes de los dos regímenes superan el tope, como mucho la mitad
     de lo cotizado por contingencias comunes como autónomo."""
-    if anio not in TOPE_PLURIACTIVIDAD or not cuota_reta or not bruto_nomina:
+    anio = anio_tabla(anio)
+    if anio is None or not cuota_reta or not bruto_nomina:
         return 0.0
     base_general = min(bruto_nomina / 12, BASE_MAXIMA_GENERAL[anio]) * 12
     cc_general = base_general * TIPO_CC_GENERAL / 100
@@ -72,15 +84,19 @@ def regularizar(anio: int, rendimiento_neto: float, cuota_pagada: float, bruto_n
                 fuente: str = "") -> Regularizacion | None:
     """Compara lo cotizado con lo que toca. El rendimiento para cotizar es el neto de la actividad más la
     propia cuota (que en la renta resta como gasto), menos el 7 %."""
-    if anio not in TABLAS:
+    tabla = anio_tabla(anio)
+    if tabla is None:
         return None
+    if tabla != anio:
+        fuente = f"{fuente} (tramos de {tabla}, pendientes de actualizar)".strip()
     computable = (rendimiento_neto + cuota_pagada) * (1 - GASTOS_GENERICOS) / 12
-    t, minima, maxima = tramo(computable, anio)
-    tipo = TIPO[anio] / 100
+    t, minima, maxima = tramo(computable, tabla)
+    tipo = TIPO[tabla] / 100
     cuota_min, cuota_max = minima * 12 * tipo, maxima * 12 * tipo
     return Regularizacion(
         anio=anio, rendimiento_neto=round(rendimiento_neto, 2), cuota_pagada=round(cuota_pagada, 2),
         rendimiento_computable_mes=round(computable, 2), tramo=t, base_minima=minima, base_maxima=maxima,
         cuota_minima_anual=round(cuota_min, 2), cuota_maxima_anual=round(cuota_max, 2),
         a_pagar=round(max(cuota_min - cuota_pagada, 0.0), 2), a_devolver=round(max(cuota_pagada - cuota_max, 0.0), 2),
-        devolucion_pluriactividad=devolucion_pluriactividad(anio, cuota_pagada, bruto_nomina), fuente=fuente)
+        devolucion_pluriactividad=devolucion_pluriactividad(anio, cuota_pagada, bruto_nomina), fuente=fuente,
+        tipo=TIPO[tabla], base_cotizada_mes=round(cuota_pagada / 12 / tipo, 2))

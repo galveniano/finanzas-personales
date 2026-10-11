@@ -155,6 +155,10 @@ class ContratoAlquiler(Base):
         back_populates="contrato", order_by="CambioRenta.desde"
     )
 
+    def vigente(self, d: date) -> bool:
+        """Si el contrato está en vigor en una fecha."""
+        return self.fecha_inicio <= d and (self.fecha_fin is None or self.fecha_fin >= d)
+
     def renta_en(self, d: date) -> Decimal:
         """Renta vigente en una fecha: la inicial o la última actualización (IPC, acuerdo...)."""
         renta = self.renta_mensual
@@ -279,6 +283,9 @@ class Objetivo(Base):
     importe_objetivo: Mapped[Decimal] = mapped_column(Dinero, default=Decimal("0"))
     ahorrado: Mapped[Decimal] = mapped_column(Dinero, default=Decimal("0"))
     notas: Mapped[str] = mapped_column(Text, default="")
+    # Si el objetivo tiene su propia cuenta (la hucha de la boda), lo ahorrado es el saldo de esa cuenta
+    # (tu parte) y el campo manual no se usa
+    cuenta_id: Mapped[int | None] = mapped_column(ForeignKey("cuentas.id"), nullable=True)
 
 
 class InversionPrivada(Base):

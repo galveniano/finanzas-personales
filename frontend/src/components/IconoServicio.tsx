@@ -5,7 +5,7 @@ import {
   siOrange, siParamountplus, siPatreon, siPerplexity, siPlaystation, siSpotify, siStrava, siTidal, siTwitch,
   siUber, siVodafone, siYoutube, siZoom,
 } from 'simple-icons'
-import { Briefcase, Building2, Car, HeartPulse, Home, Plug, Repeat, ShoppingBag, Smartphone, Store, Tv, Utensils, Zap } from 'lucide-react'
+import { Briefcase, Car, Dumbbell, Home, Repeat, ShoppingBag, Store, Tv, Utensils, Zap } from 'lucide-react'
 
 // Logos de las marcas (simple-icons, CC0) que van dentro del frontal: no se pide nada a webs de fuera.
 // La clave es la que da el servidor (finanzas/gastos.py, SERVICIOS); las que no tienen logo salen con su inicial.
@@ -19,11 +19,11 @@ const LOGOS: Record<string, SimpleIcon> = {
   twitch: siTwitch, uber: siUber, vodafone: siVodafone, youtube: siYoutube, zoom: siZoom,
 }
 
-// Recibos que no son de una marca conocida: un icono según la categoría
+// Recibos que no son de una marca conocida: un icono según la categoría del movimiento (o el grupo, que para
+// los desconocidos es también una categoría). Las marcas conocidas llevan siempre su color, así que aquí no llegan.
 const POR_CATEGORIA: Record<string, typeof Repeat> = {
   'Cuota hipoteca': Home, 'Cuota autónomos': Briefcase, Suministros: Zap, 'Ocio y suscripciones': Tv,
-  Supermercado: ShoppingBag, Restaurantes: Utensils, Transporte: Car, Compras: ShoppingBag,
-  'Luz, gas y agua': Plug, 'Teléfono e internet': Smartphone, Seguros: HeartPulse, Comunidad: Building2,
+  Supermercado: ShoppingBag, Restaurantes: Utensils, Transporte: Car, Compras: ShoppingBag, Gimnasio: Dumbbell,
 }
 
 /** Texto blanco o negro según lo claro que sea el color de fondo. */
